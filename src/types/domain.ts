@@ -97,6 +97,7 @@ export interface RuleDocument {
   societyId: string;
   title: string;
   version: string;
+  summary?: string;
   publishedAt: string;
   acknowledgementRequired: boolean;
   acknowledgedByUserIds: string[];

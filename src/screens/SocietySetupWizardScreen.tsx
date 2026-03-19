@@ -29,10 +29,11 @@ function toggleAmenity(draft: SocietySetupDraft, amenityName: string): SocietySe
 }
 
 export function SocietySetupWizardScreen() {
-  const { actions } = useApp();
+  const { state, actions } = useApp();
   const [draft, setDraft] = useState(defaultSetupDraft);
 
-  const canCreate = draft.societyName.trim().length > 2 && draft.address.trim().length > 4;
+  const canCreate =
+    !state.isSyncing && draft.societyName.trim().length > 2 && draft.address.trim().length > 4;
 
   return (
     <Page>
@@ -154,7 +155,7 @@ export function SocietySetupWizardScreen() {
           Next production modules to add after this setup are resident invitations, ledger reconciliation, push notifications, payments, visitor management, and audit logging.
         </Caption>
         <ActionButton
-          label="Create society workspace"
+          label={state.isSyncing ? 'Creating workspace...' : 'Create society workspace'}
           onPress={() => actions.completeSetup(draft)}
           disabled={!canCreate}
         />

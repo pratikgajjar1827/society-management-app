@@ -158,6 +158,7 @@ function ResidentNotices({ societyId, userId }: { societyId: string; userId: str
           <Caption>
             {rule.version} · Published {formatLongDate(rule.publishedAt)}
           </Caption>
+          {rule.summary ? <Caption>{rule.summary}</Caption> : null}
           <Caption>
             {rule.acknowledgedByUserIds.includes(userId)
               ? 'Acknowledged by you'

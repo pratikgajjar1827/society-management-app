@@ -13,6 +13,8 @@ That model scales much better than separate chairman, tenant, and owner login sy
 ## What is implemented
 
 - Single entry auth screen with phone OTP or email path
+- Local Node + SQLite backend with REST endpoints
+- Database schema for societies, memberships, units, billing, amenities, rules, staff, security, and complaints
 - Multi-society workspace selection
 - Chairman-first society setup wizard
 - Profile selection inside a society
@@ -27,7 +29,12 @@ That model scales much better than separate chairman, tenant, and owner login sy
 ## Run locally
 
 ```bash
-npm install
+npm run server
+```
+
+In a second terminal:
+
+```bash
 npm run start
 ```
 
@@ -36,6 +43,44 @@ Type-checking:
 ```bash
 npm run typecheck
 ```
+
+Reset the local database back to the demo snapshot:
+
+```bash
+npm run db:reset
+```
+
+## Local backend
+
+The app now reads its working data from a local SQLite database stored at:
+
+- `backend-data/societyos.db`
+
+The backend starts on:
+
+- `http://localhost:4000` for web / iOS simulator
+- `http://10.0.2.2:4000` for Android emulator
+
+If you test on a physical phone, start Expo with your laptop IP:
+
+```bash
+set EXPO_PUBLIC_API_URL=http://YOUR-LAN-IP:4000
+npm run start
+```
+
+Example:
+
+```bash
+set EXPO_PUBLIC_API_URL=http://192.168.1.76:4000
+npm run start
+```
+
+Available local endpoints:
+
+- `GET /health`
+- `GET /api/bootstrap`
+- `POST /api/societies`
+- `POST /api/dev/reset`
 
 ## Product architecture recommendation
 
@@ -74,6 +119,7 @@ This supports real-world edge cases:
 ## Project structure
 
 - `App.tsx`
+- `server/`
 - `src/components/ui.tsx`
 - `src/data/`
 - `src/screens/`

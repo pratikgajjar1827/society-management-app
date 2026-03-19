@@ -292,6 +292,7 @@ function AdminAnnouncements({ societyId }: { societyId: string }) {
           <Caption>
             {rule.version} · Published {formatShortDate(rule.publishedAt)}
           </Caption>
+          {rule.summary ? <Caption>{rule.summary}</Caption> : null}
         </SurfaceCard>
       ))}
     </>

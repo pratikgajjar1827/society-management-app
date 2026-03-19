@@ -1,9 +1,8 @@
-import { createAmenitiesFromSelection, createUnitStructure } from './factories';
-import { SeedData, SocietySetupDraft } from '../types/domain';
+const { createAmenitiesFromSelection, createUnitStructure } = require('./factories');
 
-export const DEMO_USER_ID = 'user-aarav';
+const DEMO_USER_ID = 'user-aarav';
 
-export const amenityLibrary = [
+const amenityLibrary = [
   'Clubhouse Hall',
   'Gym',
   'Swimming Pool',
@@ -15,7 +14,7 @@ export const amenityLibrary = [
   'Community Hall',
 ];
 
-export const defaultSetupDraft: SocietySetupDraft = {
+const defaultSetupDraft = {
   societyName: '',
   address: '',
   structure: 'apartment',
@@ -49,11 +48,11 @@ const palmAmenitySetup = createAmenitiesFromSelection(palmSocietyId, [
 
 const allUnits = [...greenStructure.units, ...palmStructure.units];
 
-function findUnitId(societyId: string, code: string) {
+function findUnitId(societyId, code) {
   return allUnits.find((unit) => unit.societyId === societyId && unit.code === code)?.id ?? '';
 }
 
-export const seedData: SeedData = {
+const seedData = {
   users: [
     {
       id: DEMO_USER_ID,
@@ -525,4 +524,11 @@ export const seedData: SeedData = {
       status: 'exited',
     },
   ],
+};
+
+module.exports = {
+  DEMO_USER_ID,
+  amenityLibrary,
+  defaultSetupDraft,
+  seedData,
 };
