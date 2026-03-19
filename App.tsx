@@ -1,10 +1,12 @@
 import { StatusBar } from 'expo-status-bar';
 import { StyleSheet, Text, View } from 'react-native';
 
+import { AccountRoleSelectionScreen } from './src/screens/AccountRoleSelectionScreen';
 import { AdminShell } from './src/screens/admin/AdminShell';
 import { AuthScreen } from './src/screens/AuthScreen';
 import { ResidentShell } from './src/screens/resident/ResidentShell';
 import { RoleSelectionScreen } from './src/screens/RoleSelectionScreen';
+import { SocietyEnrollmentScreen } from './src/screens/SocietyEnrollmentScreen';
 import { SocietySetupWizardScreen } from './src/screens/SocietySetupWizardScreen';
 import { WorkspaceSelectionScreen } from './src/screens/WorkspaceSelectionScreen';
 import { AppProvider, useApp } from './src/state/AppContext';
@@ -28,6 +30,12 @@ function AppRoot() {
   let screen = <AuthScreen />;
 
   switch (state.screen) {
+    case 'accountRole':
+      screen = <AccountRoleSelectionScreen />;
+      break;
+    case 'societyEnrollment':
+      screen = <SocietyEnrollmentScreen />;
+      break;
     case 'workspace':
       screen = <WorkspaceSelectionScreen />;
       break;

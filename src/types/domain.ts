@@ -1,4 +1,11 @@
 export type SocietyStructure = 'apartment' | 'bungalow';
+export type AuthChannel = 'sms' | 'email';
+export type AccountRole = 'chairman' | 'owner' | 'tenant';
+export type OnboardingNextStep =
+  | 'chooseRole'
+  | 'chairmanSetup'
+  | 'societyEnrollment'
+  | 'workspaceSelection';
 
 export type MembershipRole =
   | 'chairman'
@@ -60,6 +67,21 @@ export interface UserProfile {
   phone: string;
   email: string;
   avatarInitials: string;
+}
+
+export interface AuthChallenge {
+  challengeId: string;
+  channel: AuthChannel;
+  destination: string;
+  provider: 'twilio' | 'development';
+  expiresAt: string;
+  developmentCode?: string;
+}
+
+export interface OnboardingState {
+  preferredRole: AccountRole | null;
+  membershipsCount: number;
+  nextStep: OnboardingNextStep;
 }
 
 export interface Membership {

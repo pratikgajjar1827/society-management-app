@@ -12,7 +12,6 @@ import {
   SectionHeader,
   SurfaceCard,
 } from '../components/ui';
-import { amenityLibrary, defaultSetupDraft } from '../data/seed';
 import { useApp } from '../state/AppContext';
 import { spacing } from '../theme/tokens';
 import { SocietySetupDraft } from '../types/domain';
@@ -30,7 +29,7 @@ function toggleAmenity(draft: SocietySetupDraft, amenityName: string): SocietySe
 
 export function SocietySetupWizardScreen() {
   const { state, actions } = useApp();
-  const [draft, setDraft] = useState(defaultSetupDraft);
+  const [draft, setDraft] = useState(state.defaultSetupDraft);
 
   const canCreate =
     !state.isSyncing && draft.societyName.trim().length > 2 && draft.address.trim().length > 4;
@@ -44,7 +43,11 @@ export function SocietySetupWizardScreen() {
         tone="accent"
       >
         <View style={styles.heroActions}>
-          <ActionButton label="Back to workspaces" onPress={actions.cancelSetup} variant="secondary" />
+          <ActionButton
+            label={state.onboarding?.membershipsCount ? 'Back to workspaces' : 'Back to role selection'}
+            onPress={actions.cancelSetup}
+            variant="secondary"
+          />
         </View>
       </HeroCard>
 
@@ -116,7 +119,7 @@ export function SocietySetupWizardScreen() {
           description="Pick the amenities you want the society to start with. Booking rules can be refined later."
         />
         <View style={styles.choiceWrap}>
-          {amenityLibrary.map((amenityName) => (
+          {state.amenityLibrary.map((amenityName) => (
             <ChoiceChip
               key={amenityName}
               label={amenityName}

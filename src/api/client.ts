@@ -1,19 +1,46 @@
 import { Platform } from 'react-native';
 
-import { DEMO_USER_ID, amenityLibrary, defaultSetupDraft, seedData } from '../data/seed';
-import { SeedData, SocietySetupDraft } from '../types/domain';
+import { amenityLibrary, defaultSetupDraft, seedData } from '../data/seed';
+import {
+  AccountRole,
+  AuthChallenge,
+  AuthChannel,
+  OnboardingState,
+  SeedData,
+  SocietySetupDraft,
+  UserProfile,
+} from '../types/domain';
 
 type BootstrapResponse = {
-  currentUserId: string;
+  currentUserId: string | null;
   amenityLibrary: string[];
   defaultSetupDraft: SocietySetupDraft;
   data: SeedData;
 };
 
-type CreateSocietyResponse = {
+type AuthenticatedResponse = BootstrapResponse & {
   currentUserId: string;
+  onboarding: OnboardingState;
+};
+
+type VerifyOtpResponse = AuthenticatedResponse & {
+  sessionToken: string;
+  user: UserProfile;
+  verifiedChannel: AuthChannel;
+  verifiedDestination: string;
+};
+
+type SaveRoleResponse = AuthenticatedResponse & {
+  preferredRole: AccountRole;
+};
+
+type SelectSocietyResponse = AuthenticatedResponse & {
+  preferredRole: AccountRole;
   societyId: string;
-  data: SeedData;
+};
+
+type CreateSocietyResponse = AuthenticatedResponse & {
+  societyId: string;
 };
 
 const DEFAULT_API_PORT = 4000;
@@ -45,22 +72,73 @@ async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
     ...options,
   });
 
-  if (!response.ok) {
-    const message = await response.text();
-    throw new Error(message || `Request failed with status ${response.status}`);
+  const rawText = await response.text();
+  let payload: unknown = null;
+
+  if (rawText) {
+    try {
+      payload = JSON.parse(rawText);
+    } catch (error) {
+      payload = rawText;
+    }
   }
 
-  return (await response.json()) as T;
+  if (!response.ok) {
+    const message =
+      payload && typeof payload === 'object' && 'error' in payload
+        ? String(payload.error)
+        : rawText || `Request failed with status ${response.status}`;
+    throw new Error(message);
+  }
+
+  return payload as T;
+}
+
+function createAuthHeaders(sessionToken: string) {
+  return {
+    Authorization: `Bearer ${sessionToken}`,
+  };
 }
 
 export async function fetchBootstrapData() {
   return requestJson<BootstrapResponse>('/api/bootstrap');
 }
 
-export async function createSocietyWorkspace(userId: string, draft: SocietySetupDraft) {
+export async function requestOtp(channel: AuthChannel, destination: string) {
+  return requestJson<AuthChallenge>('/api/auth/request-otp', {
+    method: 'POST',
+    body: JSON.stringify({ channel, destination }),
+  });
+}
+
+export async function verifyOtp(challengeId: string, code: string) {
+  return requestJson<VerifyOtpResponse>('/api/auth/verify-otp', {
+    method: 'POST',
+    body: JSON.stringify({ challengeId, code }),
+  });
+}
+
+export async function saveAccountRole(sessionToken: string, role: AccountRole) {
+  return requestJson<SaveRoleResponse>('/api/auth/role', {
+    method: 'POST',
+    headers: createAuthHeaders(sessionToken),
+    body: JSON.stringify({ role }),
+  });
+}
+
+export async function enrollIntoSociety(sessionToken: string, societyId: string) {
+  return requestJson<SelectSocietyResponse>('/api/auth/select-society', {
+    method: 'POST',
+    headers: createAuthHeaders(sessionToken),
+    body: JSON.stringify({ societyId }),
+  });
+}
+
+export async function createSocietyWorkspace(sessionToken: string, draft: SocietySetupDraft) {
   return requestJson<CreateSocietyResponse>('/api/societies', {
     method: 'POST',
-    body: JSON.stringify({ userId, draft }),
+    headers: createAuthHeaders(sessionToken),
+    body: JSON.stringify({ draft }),
   });
 }
 
@@ -71,7 +149,7 @@ export async function resetDatabase() {
 }
 
 export const localFallbackSnapshot: BootstrapResponse = {
-  currentUserId: DEMO_USER_ID,
+  currentUserId: null,
   amenityLibrary,
   defaultSetupDraft,
   data: seedData,

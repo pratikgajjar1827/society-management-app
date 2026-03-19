@@ -219,18 +219,21 @@ export function InputField({
   placeholder,
   multiline = false,
   keyboardType = 'default',
+  autoCapitalize = 'sentences',
 }: {
   label: string;
   value: string;
   onChangeText: (value: string) => void;
   placeholder?: string;
   multiline?: boolean;
-  keyboardType?: 'default' | 'numeric';
+  keyboardType?: 'default' | 'numeric' | 'phone-pad' | 'email-address';
+  autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
 }) {
   return (
     <View style={styles.fieldGroup}>
       <Text style={styles.fieldLabel}>{label}</Text>
       <TextInput
+        autoCapitalize={autoCapitalize}
         keyboardType={keyboardType}
         multiline={multiline}
         onChangeText={onChangeText}

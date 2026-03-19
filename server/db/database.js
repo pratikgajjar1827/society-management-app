@@ -33,6 +33,32 @@ const tableConfigs = [
   ['entryLogs'],
 ];
 
+const authTableNames = ['authSessions', 'authChallenges', 'authIdentities', 'userProfiles'];
+const seededRoleMap = {
+  'user-aarav': 'chairman',
+  'user-neha': 'tenant',
+  'user-rohan': 'owner',
+  'user-kavya': 'tenant',
+};
+
+function normalizeSeedPhone(value) {
+  const digits = String(value ?? '').replace(/\D/g, '');
+
+  if (digits.length === 10) {
+    return `+91${digits}`;
+  }
+
+  if (digits.length === 12 && digits.startsWith('91')) {
+    return `+${digits}`;
+  }
+
+  return digits ? `+${digits}` : '';
+}
+
+function normalizeSeedEmail(value) {
+  return String(value ?? '').trim().toLowerCase();
+}
+
 fs.mkdirSync(dbDirectory, { recursive: true });
 
 const db = new DatabaseSync(dbPath);
@@ -120,7 +146,7 @@ function insertMany(tableName, rows) {
 }
 
 function clearAllTables() {
-  const tableNames = tableConfigs.map(([tableName]) => tableName).reverse();
+  const tableNames = [...authTableNames, ...tableConfigs.map(([tableName]) => tableName)].reverse();
   for (const tableName of tableNames) {
     db.prepare(`DELETE FROM ${tableName}`).run();
   }
@@ -146,6 +172,42 @@ function seedDatabase(data = seedData) {
     for (const [tableName] of tableConfigs) {
       insertMany(tableName, data[tableName]);
     }
+
+    const seededAt = new Date().toISOString();
+
+    insertMany(
+      'userProfiles',
+      data.users.map((user) => ({
+        userId: user.id,
+        preferredRole: seededRoleMap[user.id] ?? null,
+        createdAt: seededAt,
+        updatedAt: seededAt,
+      })),
+    );
+
+    insertMany(
+      'authIdentities',
+      data.users.flatMap((user) => [
+        {
+          id: `identity-${user.id}-sms`,
+          userId: user.id,
+          channel: 'sms',
+          value: normalizeSeedPhone(user.phone),
+          isPrimary: 1,
+          verifiedAt: seededAt,
+          createdAt: seededAt,
+        },
+        {
+          id: `identity-${user.id}-email`,
+          userId: user.id,
+          channel: 'email',
+          value: normalizeSeedEmail(user.email),
+          isPrimary: 0,
+          verifiedAt: seededAt,
+          createdAt: seededAt,
+        },
+      ]),
+    );
   });
 }
 
@@ -291,6 +353,7 @@ function initializeDatabase() {
 module.exports = {
   DEMO_USER_ID,
   createSocietyWorkspace,
+  db,
   dbPath,
   getSnapshot,
   initializeDatabase,

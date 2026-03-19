@@ -1,10 +1,12 @@
+import { useEffect, useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import {
   ActionButton,
   Caption,
-  DetailRow,
+  ChoiceChip,
   HeroCard,
+  InputField,
   Page,
   Pill,
   SectionHeader,
@@ -12,74 +14,148 @@ import {
 } from '../components/ui';
 import { useApp } from '../state/AppContext';
 import { spacing } from '../theme/tokens';
+import { AuthChannel } from '../types/domain';
+
+const channelContent: Record<AuthChannel, { label: string; placeholder: string; keyboardType: 'phone-pad' | 'email-address' }> = {
+  sms: {
+    label: 'Mobile number',
+    placeholder: '+91 98765 43210',
+    keyboardType: 'phone-pad',
+  },
+  email: {
+    label: 'Email address',
+    placeholder: 'you@example.com',
+    keyboardType: 'email-address',
+  },
+};
 
 export function AuthScreen() {
-  const { actions } = useApp();
+  const { state, actions } = useApp();
+  const [channel, setChannel] = useState<AuthChannel>('sms');
+  const [destination, setDestination] = useState('');
+  const [code, setCode] = useState('');
+
+  const challenge = state.pendingChallenge;
+  const fieldConfig = channelContent[channel];
+  const hasActiveChallenge = Boolean(challenge);
+  const sendButtonLabel = state.isSyncing
+    ? hasActiveChallenge
+      ? 'Verifying...'
+      : 'Sending OTP...'
+    : hasActiveChallenge
+      ? `Resend ${channel === 'sms' ? 'mobile' : 'email'} OTP`
+      : `Send ${channel === 'sms' ? 'mobile' : 'email'} OTP`;
+
+  const onboardingSummary = useMemo(
+    () => [
+      'Chairman signs up first, verifies OTP, and creates the first society workspace.',
+      'Owner and tenant accounts verify OTP first, choose their role, and then pick a society to join.',
+      'After that, each user only sees the society workspaces attached to their login.',
+    ],
+    [],
+  );
+
+  useEffect(() => {
+    setCode('');
+  }, [challenge?.challengeId]);
 
   return (
     <Page>
       <HeroCard
         eyebrow="SocietyOS"
-        title="One app for every owner, tenant, committee and guard."
-        subtitle="Use a single login method first, then switch society workspace and role context. That keeps operations simple while still giving each person the right dashboard."
+        title="New user sign up starts with mobile OTP or email OTP."
+        subtitle="Authentication happens before any role or workspace choice. Once the OTP is verified, the app guides the user into chairman setup or society selection."
       >
-        <View style={styles.heroActions}>
-          <ActionButton label="Continue with phone OTP" onPress={() => actions.login('phoneOtp')} />
+        <View style={styles.choiceRow}>
+          <ChoiceChip label="Mobile OTP" selected={channel === 'sms'} onPress={() => setChannel('sms')} />
+          <ChoiceChip label="Email OTP" selected={channel === 'email'} onPress={() => setChannel('email')} />
+        </View>
+
+        <InputField
+          label={fieldConfig.label}
+          value={destination}
+          onChangeText={setDestination}
+          placeholder={fieldConfig.placeholder}
+          keyboardType={fieldConfig.keyboardType}
+          autoCapitalize="none"
+        />
+
+        <View style={styles.actionStack}>
           <ActionButton
-            label="Continue with email"
-            onPress={() => actions.login('email')}
-            variant="secondary"
+            label={sendButtonLabel}
+            onPress={() => actions.requestOtp(channel, destination)}
+            disabled={state.isSyncing || destination.trim().length === 0}
           />
         </View>
+
         <View style={styles.pillRow}>
-          <Pill label="Multi-society" tone="warning" />
-          <Pill label="Role-aware dashboards" tone="accent" />
-          <Pill label="Apartment and bungalow ready" tone="success" />
+          <Pill label="OTP-first onboarding" tone="warning" />
+          <Pill label="Chairman creates workspace" tone="accent" />
+          <Pill label="Resident joins society" tone="success" />
         </View>
       </HeroCard>
 
-      <SectionHeader
-        title="Recommended product layout"
-        description="Instead of separate auth systems for chairman, tenant, and owner, keep one identity and attach society memberships with roles. The app then changes navigation by context."
-      />
-
       <SurfaceCard>
-        <DetailRow
-          label="Login"
-          value="Phone OTP or email, whichever gives you the strongest adoption and support workflow."
+        <SectionHeader
+          title="Verify your code"
+          description="The role selector appears only after OTP verification succeeds."
         />
-        <DetailRow
-          label="Workspace selection"
-          value="If a user belongs to multiple societies, let them choose the society after login. If they belong to none, offer chairman setup."
+        <InputField
+          label="OTP code"
+          value={code}
+          onChangeText={(value) => setCode(value.replace(/[^0-9]/g, ''))}
+          placeholder="Enter the 6-digit OTP"
+          keyboardType="numeric"
         />
-        <DetailRow
-          label="Profile selection"
-          value="Inside a society, let the user choose Resident view or Admin view based on their assigned roles."
+        <ActionButton
+          label={state.isSyncing ? 'Verifying OTP...' : 'Verify OTP'}
+          onPress={() => actions.verifyOtp(code)}
+          disabled={state.isSyncing || !challenge || code.trim().length < 4}
         />
+        {challenge ? (
+          <Caption>
+            Code sent to {challenge.destination}. It remains active until {new Date(challenge.expiresAt).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' })}.
+          </Caption>
+        ) : (
+          <Caption>Request the OTP first, then enter it here.</Caption>
+        )}
+        {challenge?.provider === 'development' && challenge.developmentCode ? (
+          <Caption style={styles.devHint}>
+            Local development OTP: {challenge.developmentCode}
+          </Caption>
+        ) : null}
       </SurfaceCard>
 
       <SurfaceCard>
-        <SectionHeader title="Why this is stronger than 3 login types" />
-        <Caption>
-          A single person may become owner, tenant, committee member, or member in two societies over time. One identity avoids duplicated accounts and messy migrations.
-        </Caption>
-        <Caption>
-          The app can still feel specialized because the resident and chairman experiences use different home screens, alerts, and actions.
-        </Caption>
+        <SectionHeader title="Workflow after OTP" />
+        <View style={styles.summaryList}>
+          {onboardingSummary.map((item) => (
+            <Caption key={item}>{item}</Caption>
+          ))}
+        </View>
       </SurfaceCard>
     </Page>
   );
 }
 
 const styles = StyleSheet.create({
-  heroActions: {
+  choiceRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: spacing.sm,
-    marginTop: spacing.sm,
+  },
+  actionStack: {
+    gap: spacing.sm,
   },
   pillRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.sm,
-    marginTop: spacing.xs,
+  },
+  summaryList: {
+    gap: spacing.sm,
+  },
+  devHint: {
+    fontWeight: '700',
   },
 });

@@ -248,3 +248,42 @@ CREATE TABLE IF NOT EXISTS entryLogs (
   FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE,
   FOREIGN KEY (unitId) REFERENCES units(id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS userProfiles (
+  userId TEXT PRIMARY KEY,
+  preferredRole TEXT,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL,
+  FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS authIdentities (
+  id TEXT PRIMARY KEY,
+  userId TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  value TEXT NOT NULL UNIQUE,
+  isPrimary INTEGER NOT NULL,
+  verifiedAt TEXT,
+  createdAt TEXT NOT NULL,
+  FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS authChallenges (
+  id TEXT PRIMARY KEY,
+  channel TEXT NOT NULL,
+  destination TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  providerReference TEXT,
+  code TEXT,
+  status TEXT NOT NULL,
+  expiresAt TEXT NOT NULL,
+  createdAt TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS authSessions (
+  token TEXT PRIMARY KEY,
+  userId TEXT NOT NULL,
+  expiresAt TEXT NOT NULL,
+  createdAt TEXT NOT NULL,
+  FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
+);

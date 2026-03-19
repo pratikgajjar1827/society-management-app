@@ -17,16 +17,23 @@ export function WorkspaceSelectionScreen() {
   const { state, actions } = useApp();
   const user = getCurrentUser(state.data, state.session.userId);
   const options = state.session.userId ? getSocietyOptions(state.data, state.session.userId) : [];
+  const canCreateWorkspace = state.session.accountRole === 'chairman';
+  const canJoinSociety = state.session.accountRole === 'owner' || state.session.accountRole === 'tenant';
 
   return (
     <Page>
       <HeroCard
         eyebrow={user ? `Welcome back, ${user.name}` : 'Select workspace'}
         title="Choose a society workspace first."
-        subtitle="This is the tenancy boundary of the product. Billing, announcements, units, amenities, staff, and permissions all stay inside one society workspace."
+        subtitle="Only the society memberships attached to this login are shown here. Billing, announcements, units, amenities, staff, and permissions all stay inside one society workspace."
       >
         <View style={styles.heroActions}>
-          <ActionButton label="Set up a new society" onPress={actions.startSetup} />
+          {canCreateWorkspace ? (
+            <ActionButton label="Create new society" onPress={actions.startSetup} />
+          ) : null}
+          {canJoinSociety ? (
+            <ActionButton label="Join another society" onPress={actions.startSocietyEnrollment} variant="secondary" />
+          ) : null}
           <ActionButton label="Sign out" onPress={actions.logout} variant="ghost" />
         </View>
       </HeroCard>
@@ -35,6 +42,22 @@ export function WorkspaceSelectionScreen() {
         title="Your societies"
         description="Each card below represents one society workspace tied to your login. The same person can safely move across communities without new accounts."
       />
+
+      {options.length === 0 ? (
+        <SurfaceCard>
+          <Text style={styles.societyName}>No society workspace linked yet</Text>
+          <Caption>
+            {canCreateWorkspace
+              ? 'Create the first society workspace to begin chairman operations.'
+              : 'Join a society first. After that, only your linked workspaces will appear here.'}
+          </Caption>
+          {canCreateWorkspace ? (
+            <ActionButton label="Create first workspace" onPress={actions.startSetup} />
+          ) : canJoinSociety ? (
+            <ActionButton label="Choose society" onPress={actions.startSocietyEnrollment} />
+          ) : null}
+        </SurfaceCard>
+      ) : null}
 
       {options.map((option) => (
         <SurfaceCard key={option.society.id}>
