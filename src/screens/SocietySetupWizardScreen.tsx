@@ -32,19 +32,25 @@ export function SocietySetupWizardScreen() {
   const [draft, setDraft] = useState(state.defaultSetupDraft);
 
   const canCreate =
-    !state.isSyncing && draft.societyName.trim().length > 2 && draft.address.trim().length > 4;
+    !state.isSyncing &&
+    draft.societyName.trim().length > 2 &&
+    draft.country.trim().length > 1 &&
+    draft.state.trim().length > 1 &&
+    draft.city.trim().length > 1 &&
+    draft.area.trim().length > 1 &&
+    draft.address.trim().length > 4;
 
   return (
     <Page>
       <HeroCard
-        eyebrow="Chairman Setup Wizard"
-        title="Launch a working society workspace in under 30 minutes."
-        subtitle="This onboarding focuses on the minimum operational setup: society identity, unit structure, amenities, maintenance cycle, and baseline rules."
+        eyebrow="Create Society Portal"
+        title="Create the society workspace from one structured setup flow."
+        subtitle="This portal captures the society identity, country, state, city, area, address, unit structure, amenities, maintenance cycle, and starter operating rules."
         tone="accent"
       >
         <View style={styles.heroActions}>
           <ActionButton
-            label={state.onboarding?.membershipsCount ? 'Back to workspaces' : 'Back to role selection'}
+            label={state.onboarding?.membershipsCount ? 'Back to workspaces' : 'Back to portal selection'}
             onPress={actions.cancelSetup}
             variant="secondary"
           />
@@ -52,20 +58,63 @@ export function SocietySetupWizardScreen() {
       </HeroCard>
 
       <SurfaceCard>
-        <SectionHeader title="1. Society identity and structure" />
+        <SectionHeader title="1. Society identity and location" />
         <InputField
           label="Society name"
           value={draft.societyName}
           onChangeText={(value) => setDraft({ ...draft, societyName: value })}
           placeholder="Green Valley Residency"
         />
+        <View style={styles.twoColumn}>
+          <View style={styles.column}>
+            <InputField
+              label="Country"
+              value={draft.country}
+              onChangeText={(value) => setDraft({ ...draft, country: value })}
+              placeholder="India"
+              autoCapitalize="words"
+            />
+          </View>
+          <View style={styles.column}>
+            <InputField
+              label="State"
+              value={draft.state}
+              onChangeText={(value) => setDraft({ ...draft, state: value })}
+              placeholder="Gujarat"
+              autoCapitalize="words"
+            />
+          </View>
+        </View>
+        <View style={styles.twoColumn}>
+          <View style={styles.column}>
+            <InputField
+              label="City"
+              value={draft.city}
+              onChangeText={(value) => setDraft({ ...draft, city: value })}
+              placeholder="Ahmedabad"
+              autoCapitalize="words"
+            />
+          </View>
+          <View style={styles.column}>
+            <InputField
+              label="Area"
+              value={draft.area}
+              onChangeText={(value) => setDraft({ ...draft, area: value })}
+              placeholder="Prahladnagar"
+              autoCapitalize="words"
+            />
+          </View>
+        </View>
         <InputField
           label="Address"
           value={draft.address}
           onChangeText={(value) => setDraft({ ...draft, address: value })}
-          placeholder="Area, city, state"
+          placeholder="Street, landmark, pin code"
         />
+      </SurfaceCard>
 
+      <SurfaceCard>
+        <SectionHeader title="2. Society structure" />
         <View style={styles.choiceWrap}>
           <ChoiceChip
             label="Apartment / tower model"
@@ -81,7 +130,7 @@ export function SocietySetupWizardScreen() {
       </SurfaceCard>
 
       <SurfaceCard>
-        <SectionHeader title="2. Units and maintenance" />
+        <SectionHeader title="3. Units and maintenance" />
         <View style={styles.twoColumn}>
           <View style={styles.column}>
             <InputField
@@ -115,7 +164,7 @@ export function SocietySetupWizardScreen() {
 
       <SurfaceCard>
         <SectionHeader
-          title="3. Common amenities"
+          title="4. Common amenities"
           description="Pick the amenities you want the society to start with. Booking rules can be refined later."
         />
         <View style={styles.choiceWrap}>
@@ -131,7 +180,7 @@ export function SocietySetupWizardScreen() {
       </SurfaceCard>
 
       <SurfaceCard>
-        <SectionHeader title="4. Rules and operations" />
+        <SectionHeader title="5. Rules and operations" />
         <InputField
           label="Starter rules summary"
           value={draft.rulesSummary}
@@ -144,7 +193,7 @@ export function SocietySetupWizardScreen() {
       <SurfaceCard>
         <SectionHeader
           title="Workspace preview"
-          description="This starter setup will generate a chairman-owned society workspace with resident and admin views."
+          description="This starter setup will generate a chairman-managed society workspace and make it discoverable in the join portal through the location filters."
         />
         <View style={styles.previewRow}>
           <Pill label={`${draft.totalUnits || '0'} units`} tone="primary" />
@@ -152,10 +201,11 @@ export function SocietySetupWizardScreen() {
             label={draft.structure === 'apartment' ? 'Tower hierarchy enabled' : 'Plot hierarchy enabled'}
             tone="accent"
           />
+          <Pill label={`${draft.city || 'City'} / ${draft.area || 'Area'}`} tone="warning" />
           <Pill label={`${draft.selectedAmenities.length} amenities`} tone="warning" />
         </View>
         <Caption>
-          Next production modules to add after this setup are resident invitations, ledger reconciliation, push notifications, payments, visitor management, and audit logging.
+          After creation, new residents will be able to find this society by country, state, city, and area before selecting their home number.
         </Caption>
         <ActionButton
           label={state.isSyncing ? 'Creating workspace...' : 'Create society workspace'}

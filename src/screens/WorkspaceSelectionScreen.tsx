@@ -17,23 +17,17 @@ export function WorkspaceSelectionScreen() {
   const { state, actions } = useApp();
   const user = getCurrentUser(state.data, state.session.userId);
   const options = state.session.userId ? getSocietyOptions(state.data, state.session.userId) : [];
-  const canCreateWorkspace = state.session.accountRole === 'chairman';
-  const canJoinSociety = state.session.accountRole === 'owner' || state.session.accountRole === 'tenant';
 
   return (
     <Page>
       <HeroCard
         eyebrow={user ? `Welcome back, ${user.name}` : 'Select workspace'}
         title="Choose a society workspace first."
-        subtitle="Only the society memberships attached to this login are shown here. Billing, announcements, units, amenities, staff, and permissions all stay inside one society workspace."
+        subtitle="The same mobile login can create societies, join societies, and move across every workspace already linked to it."
       >
         <View style={styles.heroActions}>
-          {canCreateWorkspace ? (
-            <ActionButton label="Create new society" onPress={actions.startSetup} />
-          ) : null}
-          {canJoinSociety ? (
-            <ActionButton label="Join another society" onPress={actions.startSocietyEnrollment} variant="secondary" />
-          ) : null}
+          <ActionButton label="Create new society" onPress={actions.startSetup} />
+          <ActionButton label="Join another society" onPress={actions.startSocietyEnrollment} variant="secondary" />
           <ActionButton label="Sign out" onPress={actions.logout} variant="ghost" />
         </View>
       </HeroCard>
@@ -46,16 +40,11 @@ export function WorkspaceSelectionScreen() {
       {options.length === 0 ? (
         <SurfaceCard>
           <Text style={styles.societyName}>No society workspace linked yet</Text>
-          <Caption>
-            {canCreateWorkspace
-              ? 'Create the first society workspace to begin chairman operations.'
-              : 'Join a society first. After that, only your linked workspaces will appear here.'}
-          </Caption>
-          {canCreateWorkspace ? (
+          <Caption>Create a new society or join an existing one to populate this list.</Caption>
+          <View style={styles.heroActions}>
             <ActionButton label="Create first workspace" onPress={actions.startSetup} />
-          ) : canJoinSociety ? (
-            <ActionButton label="Choose society" onPress={actions.startSocietyEnrollment} />
-          ) : null}
+            <ActionButton label="Join a society" onPress={actions.startSocietyEnrollment} variant="secondary" />
+          </View>
         </SurfaceCard>
       ) : null}
 

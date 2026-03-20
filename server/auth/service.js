@@ -5,6 +5,8 @@ const { db, getSnapshot } = require('../db/database');
 const OTP_TTL_MINUTES = 10;
 const SESSION_TTL_DAYS = 30;
 const ACCOUNT_ROLES = new Set(['chairman', 'owner', 'tenant']);
+const RESIDENT_JOIN_ROLES = new Set(['owner', 'tenant']);
+const AUTH_INTENTS = new Set(['signUp', 'signIn', 'auto']);
 
 class HttpError extends Error {
   constructor(statusCode, message) {
@@ -59,6 +61,18 @@ function normalizeAuthChannel(channel) {
   }
 
   throw new HttpError(400, 'Unsupported authentication channel. Use sms or email.');
+}
+
+function normalizeAuthIntent(intent) {
+  if (!intent) {
+    return 'auto';
+  }
+
+  if (AUTH_INTENTS.has(intent)) {
+    return intent;
+  }
+
+  throw new HttpError(400, 'Unsupported authentication intent. Use signUp, signIn, or auto.');
 }
 
 function normalizePhoneNumber(value) {
@@ -240,9 +254,61 @@ function getIdentity(channel, destination) {
   return db.prepare('SELECT * FROM authIdentities WHERE channel = ? AND value = ?').get(channel, destination);
 }
 
+function getRegisteredSocietyNames(userId) {
+  return db
+    .prepare(
+      `SELECT DISTINCT societies.name AS name
+       FROM memberships
+       INNER JOIN societies ON societies.id = memberships.societyId
+       WHERE memberships.userId = ?
+       ORDER BY societies.name COLLATE NOCASE ASC`,
+    )
+    .all(userId)
+    .map((row) => row.name);
+}
+
+function formatNaturalList(items) {
+  if (items.length <= 1) {
+    return items[0] ?? '';
+  }
+
+  if (items.length === 2) {
+    return `${items[0]} and ${items[1]}`;
+  }
+
+  return `${items.slice(0, -1).join(', ')}, and ${items[items.length - 1]}`;
+}
+
+function buildExistingAccountMessage(channel, userId) {
+  const identityLabel = channel === 'sms' ? 'mobile number' : 'email address';
+  const societyNames = getRegisteredSocietyNames(userId);
+
+  if (societyNames.length === 0) {
+    return `This ${identityLabel} is already registered. Use sign in instead.`;
+  }
+
+  const workspaceLabel = societyNames.length === 1 ? 'society' : 'societies';
+
+  return `This ${identityLabel} is already registered with the ${workspaceLabel} ${formatNaturalList(
+    societyNames,
+  )}. Use sign in instead.`;
+}
+
+function hasAssignedChairman(excludedUserId = null) {
+  const statement = excludedUserId
+    ? db.prepare("SELECT COUNT(*) AS count FROM userProfiles WHERE preferredRole = 'chairman' AND userId != ?")
+    : db.prepare("SELECT COUNT(*) AS count FROM userProfiles WHERE preferredRole = 'chairman'");
+  const row = excludedUserId ? statement.get(excludedUserId) : statement.get();
+  return Number(row?.count ?? 0) > 0;
+}
+
 function getMembershipCount(userId) {
   const row = db.prepare('SELECT COUNT(*) AS count FROM memberships WHERE userId = ?').get(userId);
   return Number(row?.count ?? 0);
+}
+
+function getUnit(unitId) {
+  return db.prepare('SELECT * FROM units WHERE id = ?').get(unitId);
 }
 
 function syncUserContact(userId, channel, destination) {
@@ -324,14 +390,6 @@ function getOnboardingState(userId) {
   const preferredRole = getUserProfile(userId)?.preferredRole ?? null;
   const membershipsCount = getMembershipCount(userId);
 
-  if (!preferredRole) {
-    return {
-      preferredRole: null,
-      membershipsCount,
-      nextStep: 'chooseRole',
-    };
-  }
-
   if (membershipsCount > 0) {
     return {
       preferredRole,
@@ -343,7 +401,12 @@ function getOnboardingState(userId) {
   return {
     preferredRole,
     membershipsCount,
-    nextStep: preferredRole === 'chairman' ? 'chairmanSetup' : 'societyEnrollment',
+    nextStep:
+      preferredRole === 'chairman'
+        ? 'createSociety'
+        : preferredRole === 'owner' || preferredRole === 'tenant'
+          ? 'joinSociety'
+          : 'choosePortal',
   };
 }
 
@@ -358,15 +421,27 @@ function buildAuthPayload(userId, sessionToken) {
     currentUserId: userId,
     sessionToken,
     user,
+    chairmanAssigned: hasAssignedChairman(),
     onboarding: getOnboardingState(userId),
     data: getSnapshot(),
   };
 }
 
-async function requestOtp(channelInput, destinationInput) {
+async function requestOtp(intentInput, channelInput, destinationInput) {
   cleanupExpiredRecords();
+  const intent = normalizeAuthIntent(intentInput);
   const channel = normalizeAuthChannel(channelInput);
   const destination = normalizeDestination(channel, destinationInput);
+  const existingIdentity = getIdentity(channel, destination);
+
+  if (intent === 'signIn' && !existingIdentity) {
+    throw new HttpError(404, 'No account found for this mobile number or email. Use sign up first.');
+  }
+
+  if (intent === 'signUp' && existingIdentity) {
+    throw new HttpError(409, buildExistingAccountMessage(channel, existingIdentity.userId));
+  }
+
   const providerResponse = await dispatchOtp(channel, destination);
   const challengeId = nextId('challenge');
   const createdAt = nowIso();
@@ -402,8 +477,9 @@ async function requestOtp(channelInput, destinationInput) {
   };
 }
 
-async function verifyOtp(challengeId, codeInput) {
+async function verifyOtp(intentInput, challengeId, codeInput) {
   cleanupExpiredRecords();
+  const intent = normalizeAuthIntent(intentInput);
   const code = String(codeInput ?? '').trim();
 
   if (!code) {
@@ -431,7 +507,20 @@ async function verifyOtp(challengeId, codeInput) {
     throw new HttpError(400, 'OTP is incorrect. Check the code and try again.');
   }
 
-  const userId = ensureUserForIdentity(challenge.channel, challenge.destination);
+  const existingIdentity = getIdentity(challenge.channel, challenge.destination);
+
+  if (intent === 'signIn' && !existingIdentity) {
+    throw new HttpError(404, 'No account found for this mobile number or email. Use sign up first.');
+  }
+
+  if (intent === 'signUp' && existingIdentity) {
+    throw new HttpError(409, buildExistingAccountMessage(challenge.channel, existingIdentity.userId));
+  }
+
+  const userId =
+    (intent === 'signIn' || intent === 'auto') && existingIdentity
+      ? ensureUserForIdentity(existingIdentity.channel, existingIdentity.value)
+      : ensureUserForIdentity(challenge.channel, challenge.destination);
   const sessionToken = createSession(userId);
 
   db.prepare("UPDATE authChallenges SET status = 'approved' WHERE id = ?").run(challengeId);
@@ -492,50 +581,82 @@ function setPreferredRole(userId, role) {
 
   return {
     currentUserId: userId,
+    chairmanAssigned: hasAssignedChairman(),
     preferredRole: role,
     onboarding: getOnboardingState(userId),
     data: getSnapshot(),
   };
 }
 
-function selectSocietyForResident(userId, societyId) {
+function selectSocietyForResident(userId, societyId, unitId, residentType) {
   const society = db.prepare('SELECT id, name FROM societies WHERE id = ?').get(societyId);
 
   if (!society) {
     throw new HttpError(404, 'Selected society was not found.');
   }
 
-  const preferredRole = getUserProfile(userId)?.preferredRole ?? null;
+  if (!unitId) {
+    throw new HttpError(400, 'Select the resident number or home before continuing.');
+  }
 
-  if (preferredRole !== 'owner' && preferredRole !== 'tenant') {
-    throw new HttpError(400, 'Only owner and tenant accounts can join an existing society workspace.');
+  if (!RESIDENT_JOIN_ROLES.has(residentType)) {
+    throw new HttpError(400, 'Choose whether you are joining as an owner or tenant.');
+  }
+
+  const unit = getUnit(unitId);
+
+  if (!unit || unit.societyId !== societyId) {
+    throw new HttpError(404, 'Selected resident number or home was not found in this society.');
   }
 
   runTransaction(() => {
+    const now = nowIso();
+    db.prepare(
+      `INSERT INTO userProfiles (userId, preferredRole, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(userId) DO UPDATE SET preferredRole = excluded.preferredRole, updatedAt = excluded.updatedAt`,
+    ).run(userId, residentType, now, now);
+
     const existingMembership = db
-      .prepare('SELECT id, roles FROM memberships WHERE userId = ? AND societyId = ?')
+      .prepare('SELECT id, roles, unitIds FROM memberships WHERE userId = ? AND societyId = ?')
       .get(userId, societyId);
 
     if (existingMembership) {
       const roles = new Set(parseStoredJson(existingMembership.roles));
-      roles.add(preferredRole);
+      const unitIds = new Set(parseStoredJson(existingMembership.unitIds));
+      roles.add(residentType);
+      unitIds.add(unitId);
       db.prepare('UPDATE memberships SET roles = ? WHERE id = ?').run(
         JSON.stringify([...roles]),
         existingMembership.id,
       );
-      return;
+      db.prepare('UPDATE memberships SET unitIds = ? WHERE id = ?').run(
+        JSON.stringify([...unitIds]),
+        existingMembership.id,
+      );
+    } else {
+      const isPrimary = getMembershipCount(userId) === 0 ? 1 : 0;
+
+      db.prepare(
+        'INSERT INTO memberships (id, userId, societyId, roles, unitIds, isPrimary) VALUES (?, ?, ?, ?, ?, ?)',
+      ).run(nextId('membership'), userId, societyId, JSON.stringify([residentType]), JSON.stringify([unitId]), isPrimary);
     }
 
-    const isPrimary = getMembershipCount(userId) === 0 ? 1 : 0;
+    const existingOccupancy = db
+      .prepare('SELECT id FROM occupancy WHERE societyId = ? AND unitId = ? AND userId = ? AND category = ?')
+      .get(societyId, unitId, userId, residentType);
 
-    db.prepare(
-      'INSERT INTO memberships (id, userId, societyId, roles, unitIds, isPrimary) VALUES (?, ?, ?, ?, ?, ?)',
-    ).run(nextId('membership'), userId, societyId, JSON.stringify([preferredRole]), JSON.stringify([]), isPrimary);
+    if (!existingOccupancy) {
+      db.prepare(
+        'INSERT INTO occupancy (id, societyId, unitId, userId, category, startDate, endDate) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      ).run(nextId('occupancy'), societyId, unitId, userId, residentType, now.slice(0, 10), null);
+    }
   });
 
   return {
     currentUserId: userId,
-    preferredRole,
+    chairmanAssigned: hasAssignedChairman(),
+    preferredRole: residentType,
     societyId,
     onboarding: getOnboardingState(userId),
     data: getSnapshot(),
@@ -556,7 +677,9 @@ module.exports = {
   HttpError,
   buildAuthPayload,
   getOnboardingState,
+  hasAssignedChairman,
   normalizeAuthChannel,
+  normalizeAuthIntent,
   requestOtp,
   requireChairmanRole,
   requireSession,

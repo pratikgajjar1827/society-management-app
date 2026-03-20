@@ -11,9 +11,8 @@ import {
   verifyOtp as verifyOtpRequest,
 } from '../api/client';
 import {
-  AccountRole,
-  AuthChallenge,
   AuthChannel,
+  AuthChallenge,
   OnboardingState,
   RoleProfile,
   SeedData,
@@ -22,7 +21,7 @@ import {
 
 type Screen =
   | 'auth'
-  | 'accountRole'
+  | 'portalChoice'
   | 'societyEnrollment'
   | 'workspace'
   | 'setup'
@@ -35,7 +34,7 @@ interface SessionState {
   sessionToken?: string;
   authChannel?: AuthChannel;
   verifiedDestination?: string;
-  accountRole?: AccountRole;
+  accountRole?: 'chairman' | 'owner' | 'tenant';
   selectedSocietyId?: string;
   selectedProfile?: RoleProfile;
 }
@@ -44,6 +43,7 @@ interface AppState {
   screen: Screen;
   session: SessionState;
   data: SeedData;
+  chairmanAssigned: boolean;
   amenityLibrary: string[];
   defaultSetupDraft: SocietySetupDraft;
   pendingChallenge?: AuthChallenge;
@@ -57,15 +57,19 @@ interface AppState {
 interface AppContextValue {
   state: AppState;
   actions: {
-    requestOtp: (channel: AuthChannel, destination: string) => Promise<void>;
+    requestOtp: (destination: string) => Promise<void>;
     verifyOtp: (code: string) => Promise<void>;
+    resetAuthFlow: () => void;
     logout: () => void;
-    selectAccountRole: (role: AccountRole) => Promise<void>;
-    goToAccountRoleSelection: () => void;
-    enrollIntoSociety: (societyId: string) => Promise<void>;
+    goToPortalSelection: () => void;
+    enrollIntoSociety: (
+      societyId: string,
+      unitId: string,
+      residentType: 'owner' | 'tenant',
+    ) => Promise<void>;
     startSocietyEnrollment: () => void;
     selectSociety: (societyId: string) => void;
-    startSetup: () => void;
+    startSetup: () => Promise<void>;
     cancelSetup: () => void;
     selectProfile: (profile: RoleProfile) => void;
     goToWorkspaces: () => void;
@@ -78,6 +82,7 @@ const initialState: AppState = {
   screen: 'auth',
   session: {},
   data: localFallbackSnapshot.data,
+  chairmanAssigned: localFallbackSnapshot.chairmanAssigned,
   amenityLibrary: localFallbackSnapshot.amenityLibrary,
   defaultSetupDraft: localFallbackSnapshot.defaultSetupDraft,
   pendingChallenge: undefined,
@@ -100,15 +105,15 @@ function getErrorMessage(error: unknown) {
 
 function resolveScreen(onboarding?: OnboardingState): Screen {
   switch (onboarding?.nextStep) {
-    case 'chairmanSetup':
+    case 'createSociety':
       return 'setup';
-    case 'societyEnrollment':
+    case 'joinSociety':
       return 'societyEnrollment';
     case 'workspaceSelection':
       return 'workspace';
-    case 'chooseRole':
+    case 'choosePortal':
     default:
-      return 'accountRole';
+      return 'portalChoice';
   }
 }
 
@@ -129,6 +134,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setState((currentState) => ({
           ...currentState,
           data: response.data,
+          chairmanAssigned: response.chairmanAssigned,
           amenityLibrary: response.amenityLibrary,
           defaultSetupDraft: response.defaultSetupDraft,
           isHydrating: false,
@@ -157,7 +163,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const actions: AppContextValue['actions'] = {
-    requestOtp: async (channel, destination) => {
+    requestOtp: async (destination) => {
       setState((currentState) => ({
         ...currentState,
         isSyncing: true,
@@ -166,7 +172,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }));
 
       try {
-        const challenge = await requestOtpRequest(channel, destination);
+        const challenge = await requestOtpRequest('auto', 'sms', destination);
 
         setState((currentState) => ({
           ...currentState,
@@ -193,7 +199,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (!challengeId) {
         setState((currentState) => ({
           ...currentState,
-          apiError: 'Request an OTP first.',
+          apiError: 'Request an OTP first, then enter the verification code.',
         }));
         return;
       }
@@ -205,11 +211,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }));
 
       try {
-        const response = await verifyOtpRequest(challengeId, code);
+        const response = await verifyOtpRequest('auto', challengeId, code);
 
         setState((currentState) => ({
           ...currentState,
           data: response.data,
+          chairmanAssigned: response.chairmanAssigned,
           amenityLibrary: response.amenityLibrary,
           defaultSetupDraft: response.defaultSetupDraft,
           pendingChallenge: undefined,
@@ -236,6 +243,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }));
       }
     },
+    resetAuthFlow: () =>
+      setState((currentState) => ({
+        ...currentState,
+        screen: 'auth',
+        pendingChallenge: undefined,
+        apiError: undefined,
+        isSyncing: false,
+        onboarding: undefined,
+        session: {},
+      })),
     logout: () =>
       setState((currentState) => ({
         ...currentState,
@@ -246,58 +263,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
         isSyncing: false,
         apiError: undefined,
       })),
-    selectAccountRole: async (role) => {
-      const sessionToken = state.session.sessionToken;
-
-      if (!sessionToken) {
-        setState((currentState) => ({
-          ...currentState,
-          apiError: 'Your session expired. Sign in again.',
-          screen: 'auth',
-        }));
-        return;
-      }
-
+    goToPortalSelection: () =>
       setState((currentState) => ({
         ...currentState,
-        isSyncing: true,
+        screen: 'portalChoice',
         apiError: undefined,
-      }));
-
-      try {
-        const response = await saveAccountRole(sessionToken, role);
-
-        setState((currentState) => ({
-          ...currentState,
-          data: response.data,
-          amenityLibrary: response.amenityLibrary,
-          defaultSetupDraft: response.defaultSetupDraft,
-          onboarding: response.onboarding,
-          screen: resolveScreen(response.onboarding),
-          isSyncing: false,
-          apiError: undefined,
-          session: {
-            ...currentState.session,
-            accountRole: response.preferredRole,
-            selectedSocietyId: undefined,
-            selectedProfile: undefined,
-          },
-        }));
-      } catch (error) {
-        setState((currentState) => ({
-          ...currentState,
-          isSyncing: false,
-          apiError: getErrorMessage(error),
-        }));
-      }
-    },
-    goToAccountRoleSelection: () =>
-      setState((currentState) => ({
-        ...currentState,
-        screen: 'accountRole',
-        apiError: undefined,
+        session: {
+          ...currentState.session,
+          selectedSocietyId: undefined,
+          selectedProfile: undefined,
+        },
       })),
-    enrollIntoSociety: async (societyId) => {
+    enrollIntoSociety: async (societyId, unitId, residentType) => {
       const sessionToken = state.session.sessionToken;
 
       if (!sessionToken) {
@@ -309,6 +286,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return;
       }
 
+      if (!societyId) {
+        setState((currentState) => ({
+          ...currentState,
+          apiError: 'Select the society workspace before continuing.',
+        }));
+        return;
+      }
+
+      if (!unitId) {
+        setState((currentState) => ({
+          ...currentState,
+          apiError: 'Select your resident number or home before continuing.',
+        }));
+        return;
+      }
+
+      if (!residentType) {
+        setState((currentState) => ({
+          ...currentState,
+          apiError: 'Choose whether you are joining as an owner or tenant.',
+        }));
+        return;
+      }
+
       setState((currentState) => ({
         ...currentState,
         isSyncing: true,
@@ -316,22 +317,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }));
 
       try {
-        const response = await enrollIntoSocietyRequest(sessionToken, societyId);
+        const response = await enrollIntoSocietyRequest(sessionToken, societyId, unitId, residentType);
 
         setState((currentState) => ({
           ...currentState,
           data: response.data,
+          chairmanAssigned: response.chairmanAssigned,
           amenityLibrary: response.amenityLibrary,
           defaultSetupDraft: response.defaultSetupDraft,
           onboarding: response.onboarding,
-          screen: 'workspace',
+          screen: 'dashboard',
           isSyncing: false,
           apiError: undefined,
           session: {
             ...currentState.session,
             accountRole: response.preferredRole,
-            selectedSocietyId: undefined,
-            selectedProfile: undefined,
+            selectedSocietyId: response.societyId,
+            selectedProfile: 'resident',
           },
         }));
       } catch (error) {
@@ -347,6 +349,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ...currentState,
         screen: 'societyEnrollment',
         apiError: undefined,
+        session: {
+          ...currentState.session,
+          selectedSocietyId: undefined,
+          selectedProfile: undefined,
+        },
       })),
     selectSociety: (societyId) =>
       setState((currentState) => ({
@@ -358,16 +365,56 @@ export function AppProvider({ children }: { children: ReactNode }) {
           selectedProfile: undefined,
         },
       })),
-    startSetup: () =>
+    startSetup: async () => {
+      const sessionToken = state.session.sessionToken;
+
+      if (!sessionToken) {
+        setState((currentState) => ({
+          ...currentState,
+          apiError: 'Your session expired. Sign in again.',
+          screen: 'auth',
+        }));
+        return;
+      }
+
       setState((currentState) => ({
         ...currentState,
-        screen: 'setup',
+        isSyncing: true,
         apiError: undefined,
-      })),
+      }));
+
+      try {
+        const response = await saveAccountRole(sessionToken, 'chairman');
+
+        setState((currentState) => ({
+          ...currentState,
+          data: response.data,
+          chairmanAssigned: response.chairmanAssigned,
+          amenityLibrary: response.amenityLibrary,
+          defaultSetupDraft: response.defaultSetupDraft,
+          onboarding: response.onboarding,
+          screen: 'setup',
+          isSyncing: false,
+          apiError: undefined,
+          session: {
+            ...currentState.session,
+            accountRole: 'chairman',
+            selectedSocietyId: undefined,
+            selectedProfile: undefined,
+          },
+        }));
+      } catch (error) {
+        setState((currentState) => ({
+          ...currentState,
+          isSyncing: false,
+          apiError: getErrorMessage(error),
+        }));
+      }
+    },
     cancelSetup: () =>
       setState((currentState) => ({
         ...currentState,
-        screen: currentState.onboarding?.membershipsCount ? 'workspace' : 'accountRole',
+        screen: currentState.onboarding?.membershipsCount ? 'workspace' : 'portalChoice',
         apiError: undefined,
       })),
     selectProfile: (profile) =>
@@ -382,7 +429,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     goToWorkspaces: () =>
       setState((currentState) => ({
         ...currentState,
-        screen: currentState.onboarding?.membershipsCount ? 'workspace' : resolveScreen(currentState.onboarding),
+        screen: currentState.onboarding?.membershipsCount
+          ? 'workspace'
+          : currentState.session.sessionToken
+            ? resolveScreen(currentState.onboarding)
+            : 'auth',
         session: {
           ...currentState.session,
           selectedSocietyId: undefined,
@@ -422,17 +473,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setState((currentState) => ({
           ...currentState,
           data: response.data,
+          chairmanAssigned: response.chairmanAssigned,
           amenityLibrary: response.amenityLibrary,
           defaultSetupDraft: response.defaultSetupDraft,
           onboarding: response.onboarding,
-          screen: 'workspace',
+          screen: 'role',
           isSyncing: false,
           dataSource: 'remote',
           session: {
             ...currentState.session,
             userId: response.currentUserId,
-            accountRole: currentState.session.accountRole ?? 'chairman',
-            selectedSocietyId: undefined,
+            accountRole: 'chairman',
+            selectedSocietyId: response.societyId,
             selectedProfile: undefined,
           },
         }));

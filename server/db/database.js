@@ -35,7 +35,7 @@ const tableConfigs = [
 
 const authTableNames = ['authSessions', 'authChallenges', 'authIdentities', 'userProfiles'];
 const seededRoleMap = {
-  'user-aarav': 'chairman',
+  'user-aarav': 'owner',
   'user-neha': 'tenant',
   'user-rohan': 'owner',
   'user-kavya': 'tenant',
@@ -67,6 +67,20 @@ db.exec('PRAGMA foreign_keys = ON;');
 function ensureSchema() {
   const sql = fs.readFileSync(schemaPath, 'utf8');
   db.exec(sql);
+
+  const societyColumns = new Set(
+    db.prepare("PRAGMA table_info('societies')").all().map((column) => column.name),
+  );
+  const missingLocationColumns = [
+    ['country', "TEXT NOT NULL DEFAULT 'India'"],
+    ['state', "TEXT NOT NULL DEFAULT 'Gujarat'"],
+    ['city', "TEXT NOT NULL DEFAULT 'Ahmedabad'"],
+    ['area', "TEXT NOT NULL DEFAULT ''"],
+  ].filter(([columnName]) => !societyColumns.has(columnName));
+
+  for (const [columnName, definition] of missingLocationColumns) {
+    db.exec(`ALTER TABLE societies ADD COLUMN ${columnName} ${definition}`);
+  }
 }
 
 function listAll(tableName) {
@@ -243,10 +257,18 @@ function createSocietyWorkspace(userId, draft) {
   const primaryUnitId = structure.units[0]?.id ?? null;
 
   runTransaction(() => {
+    const existingMembershipCount = Number(
+      db.prepare('SELECT COUNT(*) AS count FROM memberships WHERE userId = ?').get(userId)?.count ?? 0,
+    );
+
     insertMany('societies', [
       {
         id: societyId,
         name: draft.societyName.trim(),
+        country: draft.country.trim(),
+        state: draft.state.trim(),
+        city: draft.city.trim(),
+        area: draft.area.trim(),
         address: draft.address.trim(),
         structure: draft.structure,
         timezone: 'Asia/Kolkata',
@@ -263,6 +285,11 @@ function createSocietyWorkspace(userId, draft) {
 
     insertMany('buildings', structure.buildings);
     insertMany('units', structure.units);
+    db.prepare(
+      `INSERT INTO userProfiles (userId, preferredRole, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(userId) DO UPDATE SET preferredRole = excluded.preferredRole, updatedAt = excluded.updatedAt`,
+    ).run(userId, 'chairman', now, now);
     insertMany('memberships', [
       {
         id: nextId('membership'),
@@ -270,7 +297,7 @@ function createSocietyWorkspace(userId, draft) {
         societyId,
         roles: ['chairman', 'owner'],
         unitIds: primaryUnitId ? [primaryUnitId] : [],
-        isPrimary: false,
+        isPrimary: existingMembershipCount === 0,
       },
     ]);
 
@@ -338,6 +365,18 @@ function createSocietyWorkspace(userId, draft) {
 }
 
 function resetDatabase() {
+  db.exec('PRAGMA foreign_keys = OFF;');
+  const existingTables = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+    .all()
+    .map((row) => row.name)
+    .reverse();
+
+  for (const tableName of existingTables) {
+    db.exec(`DROP TABLE IF EXISTS ${tableName}`);
+  }
+
+  db.exec('PRAGMA foreign_keys = ON;');
   ensureSchema();
   seedDatabase(seedData);
   return getSnapshot();

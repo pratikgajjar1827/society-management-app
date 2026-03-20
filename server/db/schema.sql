@@ -11,6 +11,10 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE TABLE IF NOT EXISTS societies (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
+  country TEXT NOT NULL,
+  state TEXT NOT NULL,
+  city TEXT NOT NULL,
+  area TEXT NOT NULL,
   address TEXT NOT NULL,
   structure TEXT NOT NULL,
   timezone TEXT NOT NULL,

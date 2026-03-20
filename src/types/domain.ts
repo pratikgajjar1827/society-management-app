@@ -1,10 +1,11 @@
 export type SocietyStructure = 'apartment' | 'bungalow';
 export type AuthChannel = 'sms' | 'email';
+export type AuthIntent = 'signUp' | 'signIn' | 'auto';
 export type AccountRole = 'chairman' | 'owner' | 'tenant';
 export type OnboardingNextStep =
-  | 'chooseRole'
-  | 'chairmanSetup'
-  | 'societyEnrollment'
+  | 'choosePortal'
+  | 'createSociety'
+  | 'joinSociety'
   | 'workspaceSelection';
 
 export type MembershipRole =
@@ -34,6 +35,10 @@ export type EntryStatus = 'inside' | 'exited';
 export interface SocietyWorkspace {
   id: string;
   name: string;
+  country: string;
+  state: string;
+  city: string;
+  area: string;
   address: string;
   structure: SocietyStructure;
   timezone: string;
@@ -261,6 +266,10 @@ export interface EntryLog {
 
 export interface SocietySetupDraft {
   societyName: string;
+  country: string;
+  state: string;
+  city: string;
+  area: string;
   address: string;
   structure: SocietyStructure;
   totalUnits: string;

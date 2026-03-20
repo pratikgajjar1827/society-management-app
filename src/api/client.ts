@@ -5,6 +5,7 @@ import {
   AccountRole,
   AuthChallenge,
   AuthChannel,
+  AuthIntent,
   OnboardingState,
   SeedData,
   SocietySetupDraft,
@@ -13,6 +14,7 @@ import {
 
 type BootstrapResponse = {
   currentUserId: string | null;
+  chairmanAssigned: boolean;
   amenityLibrary: string[];
   defaultSetupDraft: SocietySetupDraft;
   data: SeedData;
@@ -104,17 +106,17 @@ export async function fetchBootstrapData() {
   return requestJson<BootstrapResponse>('/api/bootstrap');
 }
 
-export async function requestOtp(channel: AuthChannel, destination: string) {
+export async function requestOtp(intent: AuthIntent, channel: AuthChannel, destination: string) {
   return requestJson<AuthChallenge>('/api/auth/request-otp', {
     method: 'POST',
-    body: JSON.stringify({ channel, destination }),
+    body: JSON.stringify({ intent, channel, destination }),
   });
 }
 
-export async function verifyOtp(challengeId: string, code: string) {
+export async function verifyOtp(intent: AuthIntent, challengeId: string, code: string) {
   return requestJson<VerifyOtpResponse>('/api/auth/verify-otp', {
     method: 'POST',
-    body: JSON.stringify({ challengeId, code }),
+    body: JSON.stringify({ intent, challengeId, code }),
   });
 }
 
@@ -126,11 +128,16 @@ export async function saveAccountRole(sessionToken: string, role: AccountRole) {
   });
 }
 
-export async function enrollIntoSociety(sessionToken: string, societyId: string) {
+export async function enrollIntoSociety(
+  sessionToken: string,
+  societyId: string,
+  unitId?: string,
+  residentType?: 'owner' | 'tenant',
+) {
   return requestJson<SelectSocietyResponse>('/api/auth/select-society', {
     method: 'POST',
     headers: createAuthHeaders(sessionToken),
-    body: JSON.stringify({ societyId }),
+    body: JSON.stringify({ societyId, unitId, residentType }),
   });
 }
 
@@ -150,6 +157,7 @@ export async function resetDatabase() {
 
 export const localFallbackSnapshot: BootstrapResponse = {
   currentUserId: null,
+  chairmanAssigned: false,
   amenityLibrary,
   defaultSetupDraft,
   data: seedData,

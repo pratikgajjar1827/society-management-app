@@ -11,37 +11,6 @@ import {
 } from '../components/ui';
 import { useApp } from '../state/AppContext';
 import { palette, spacing } from '../theme/tokens';
-import { AccountRole } from '../types/domain';
-
-const roleCards: Array<{
-  role: AccountRole;
-  title: string;
-  summary: string;
-  nextStep: string;
-  tone: 'primary' | 'accent' | 'warning';
-}> = [
-  {
-    role: 'chairman',
-    title: 'Chairman / Society Admin',
-    summary: 'Use this when you are creating the first workspace for a residential society.',
-    nextStep: 'Next: create the society workspace, units, amenities, maintenance rules, and baseline policies.',
-    tone: 'accent',
-  },
-  {
-    role: 'owner',
-    title: 'Resident Owner',
-    summary: 'Use this when you own a flat, bungalow, or plot in an existing society.',
-    nextStep: 'Next: choose the society you belong to, then open your resident workspace.',
-    tone: 'primary',
-  },
-  {
-    role: 'tenant',
-    title: 'Tenant',
-    summary: 'Use this when you are renting and need resident access to notices, dues, bookings, and helpdesk.',
-    nextStep: 'Next: choose the society you stay in, then open your resident workspace.',
-    tone: 'warning',
-  },
-];
 
 export function AccountRoleSelectionScreen() {
   const { state, actions } = useApp();
@@ -49,61 +18,76 @@ export function AccountRoleSelectionScreen() {
   return (
     <Page>
       <HeroCard
-        eyebrow="Role Selection"
-        title="Choose the account role for this login."
-        subtitle="Authentication stays shared, but onboarding changes by role. Chairman creates the first workspace. Owners and tenants join an existing one."
+        eyebrow="Portal Selection"
+        title="Choose how this mobile number should continue."
+        subtitle="If you are setting up a new residential community, use the society creation portal. If the society already exists, use the join portal to find it by country, state, city, and area."
         tone="accent"
       >
-        <View style={styles.heroActions}>
-          <ActionButton label="Sign out" onPress={actions.logout} variant="secondary" />
+        <View style={styles.heroMeta}>
+          <Pill label={state.session.verifiedDestination ?? 'OTP verified'} tone="warning" />
         </View>
       </HeroCard>
 
       <SectionHeader
-        title="Available onboarding roles"
-        description="This choice controls the next step after signup. It does not replace in-society profile switching later."
+        title="Two separate portals"
+        description="This architecture keeps workspace creation and resident enrollment cleanly separated."
       />
 
-      {roleCards.map((item) => (
-        <SurfaceCard key={item.role}>
-          <View style={styles.roleHeader}>
-            <View style={styles.roleHeadingBlock}>
-              <Text style={styles.roleTitle}>{item.title}</Text>
-              <Caption>{item.summary}</Caption>
-            </View>
-            <Pill
-              label={item.role === 'chairman' ? 'Create workspace' : 'Join society'}
-              tone={item.tone}
-            />
-          </View>
+      <SurfaceCard>
+        <Text style={styles.cardTitle}>Create Society Portal</Text>
+        <Caption>
+          Use this when you are the first person setting up the society workspace. You will enter the society name, country, state, city, area, address, unit count, maintenance settings, and starter amenities.
+        </Caption>
+        <View style={styles.pillRow}>
+          <Pill label="Chairman flow" tone="primary" />
+          <Pill label="Creates workspace" tone="accent" />
+          <Pill label="Captures location" tone="warning" />
+        </View>
+        <ActionButton
+          label={state.isSyncing ? 'Opening portal...' : 'Open creation portal'}
+          onPress={actions.startSetup}
+          disabled={state.isSyncing}
+        />
+      </SurfaceCard>
 
-          <Caption>{item.nextStep}</Caption>
+      <SurfaceCard>
+        <Text style={styles.cardTitle}>Join Society Portal</Text>
+        <Caption>
+          Use this when the society is already created. You will choose whether you are joining as an owner or tenant, filter the location step by step, select the society, and then choose your resident number or home.
+        </Caption>
+        <View style={styles.pillRow}>
+          <Pill label="Owner or tenant" tone="primary" />
+          <Pill label="Location filters" tone="accent" />
+          <Pill label="Unit selection" tone="warning" />
+        </View>
+        <ActionButton
+          label="Open join portal"
+          onPress={actions.startSocietyEnrollment}
+          variant="secondary"
+        />
+      </SurfaceCard>
 
-          <ActionButton
-            label={state.isSyncing ? 'Saving role...' : `Continue as ${item.title}`}
-            onPress={() => actions.selectAccountRole(item.role)}
-            disabled={state.isSyncing}
-          />
-        </SurfaceCard>
-      ))}
+      <SurfaceCard>
+        <ActionButton label="Sign out" onPress={actions.logout} variant="secondary" />
+      </SurfaceCard>
     </Page>
   );
 }
 
 const styles = StyleSheet.create({
-  heroActions: {
+  heroMeta: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: spacing.sm,
   },
-  roleHeader: {
-    gap: spacing.sm,
-  },
-  roleHeadingBlock: {
-    gap: spacing.xs,
-  },
-  roleTitle: {
+  cardTitle: {
     fontSize: 22,
     fontWeight: '800',
     color: palette.ink,
+  },
+  pillRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
   },
 });

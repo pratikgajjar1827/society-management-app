@@ -16,6 +16,10 @@ const amenityLibrary = [
 
 const defaultSetupDraft = {
   societyName: '',
+  country: 'India',
+  state: 'Gujarat',
+  city: 'Ahmedabad',
+  area: '',
   address: '',
   structure: 'apartment',
   totalUnits: '48',
@@ -87,6 +91,10 @@ const seedData = {
     {
       id: greenSocietyId,
       name: 'Green Vista Apartments',
+      country: 'India',
+      state: 'Gujarat',
+      city: 'Ahmedabad',
+      area: 'Prahladnagar',
       address: 'Prahladnagar Road, Ahmedabad',
       structure: 'apartment',
       timezone: 'Asia/Kolkata',
@@ -99,6 +107,10 @@ const seedData = {
     {
       id: palmSocietyId,
       name: 'Palm Meadows Bungalows',
+      country: 'India',
+      state: 'Gujarat',
+      city: 'Ahmedabad',
+      area: 'Bopal',
       address: 'Bopal Extension, Ahmedabad',
       structure: 'bungalow',
       timezone: 'Asia/Kolkata',

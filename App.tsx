@@ -30,7 +30,7 @@ function AppRoot() {
   let screen = <AuthScreen />;
 
   switch (state.screen) {
-    case 'accountRole':
+    case 'portalChoice':
       screen = <AccountRoleSelectionScreen />;
       break;
     case 'societyEnrollment':

@@ -10,6 +10,7 @@ const {
 const {
   HttpError,
   getOnboardingState,
+  hasAssignedChairman,
   requestOtp,
   requireChairmanRole,
   requireSession,
@@ -59,6 +60,7 @@ function parseBody(request) {
 function buildBootstrapPayload(currentUserId = null) {
   return {
     currentUserId,
+    chairmanAssigned: hasAssignedChairman(),
     amenityLibrary,
     defaultSetupDraft,
     data: getSnapshot(),
@@ -105,7 +107,7 @@ async function requestHandler(request, response) {
 
     if (request.method === 'POST' && url.pathname === '/api/auth/request-otp') {
       const body = await parseBody(request);
-      const challenge = await requestOtp(body.channel, body.destination);
+      const challenge = await requestOtp(body.intent, body.channel, body.destination);
       sendJson(response, 200, challenge);
       return;
     }
@@ -118,7 +120,7 @@ async function requestHandler(request, response) {
         return;
       }
 
-      const result = await verifyOtp(body.challengeId, body.code);
+      const result = await verifyOtp(body.intent, body.challengeId, body.code);
       sendJson(response, 200, {
         ...result,
         amenityLibrary,
@@ -143,12 +145,12 @@ async function requestHandler(request, response) {
       const userId = requireSession(getBearerToken(request));
       const body = await parseBody(request);
 
-      if (!body.societyId) {
-        sendJson(response, 400, { error: 'Missing societyId.' });
+      if (!body.societyId || !body.unitId || !body.residentType) {
+        sendJson(response, 400, { error: 'Missing societyId, unitId, or residentType.' });
         return;
       }
 
-      const result = selectSocietyForResident(userId, body.societyId);
+      const result = selectSocietyForResident(userId, body.societyId, body.unitId, body.residentType);
       sendJson(response, 200, {
         ...result,
         amenityLibrary,
@@ -162,9 +164,16 @@ async function requestHandler(request, response) {
       const body = await parseBody(request);
       requireChairmanRole(userId);
 
-      if (!body.draft?.societyName || !body.draft?.address) {
+      if (
+        !body.draft?.societyName ||
+        !body.draft?.country ||
+        !body.draft?.state ||
+        !body.draft?.city ||
+        !body.draft?.area ||
+        !body.draft?.address
+      ) {
         sendJson(response, 400, {
-          error: 'Missing required fields. Provide societyName and address.',
+          error: 'Missing required fields. Provide societyName, country, state, city, area, and address.',
         });
         return;
       }
@@ -172,6 +181,7 @@ async function requestHandler(request, response) {
       const result = createSocietyWorkspace(userId, body.draft);
       sendJson(response, 201, {
         ...result,
+        chairmanAssigned: hasAssignedChairman(),
         onboarding: getOnboardingState(userId),
         amenityLibrary,
         defaultSetupDraft,
