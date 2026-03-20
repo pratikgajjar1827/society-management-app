@@ -65,7 +65,7 @@ interface AppContextValue {
     enrollIntoSociety: (
       societyId: string,
       unitId: string,
-      residentType: 'owner' | 'tenant',
+      residentType: 'owner' | 'tenant' | 'committee',
     ) => Promise<void>;
     startSocietyEnrollment: () => void;
     selectSociety: (societyId: string) => void;
@@ -113,7 +113,7 @@ function resolveScreen(onboarding?: OnboardingState): Screen {
       return 'workspace';
     case 'choosePortal':
     default:
-      return 'portalChoice';
+      return 'societyEnrollment';
   }
 }
 
@@ -266,7 +266,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     goToPortalSelection: () =>
       setState((currentState) => ({
         ...currentState,
-        screen: 'portalChoice',
+        screen: 'societyEnrollment',
         apiError: undefined,
         session: {
           ...currentState.session,
@@ -326,14 +326,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
           amenityLibrary: response.amenityLibrary,
           defaultSetupDraft: response.defaultSetupDraft,
           onboarding: response.onboarding,
-          screen: 'dashboard',
+          screen: residentType === 'committee' ? 'role' : 'dashboard',
           isSyncing: false,
           apiError: undefined,
           session: {
             ...currentState.session,
             accountRole: response.preferredRole,
             selectedSocietyId: response.societyId,
-            selectedProfile: 'resident',
+            selectedProfile: residentType === 'committee' ? undefined : 'resident',
           },
         }));
       } catch (error) {
@@ -414,7 +414,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     cancelSetup: () =>
       setState((currentState) => ({
         ...currentState,
-        screen: currentState.onboarding?.membershipsCount ? 'workspace' : 'portalChoice',
+        screen: currentState.onboarding?.membershipsCount ? 'workspace' : 'societyEnrollment',
         apiError: undefined,
       })),
     selectProfile: (profile) =>

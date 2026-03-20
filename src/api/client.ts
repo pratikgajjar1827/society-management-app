@@ -58,6 +58,12 @@ export function getApiBaseUrl() {
     return normalizeBaseUrl(configured);
   }
 
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    const protocol = window.location.protocol || 'http:';
+    const hostname = window.location.hostname || 'localhost';
+    return `${protocol}//${hostname}:${DEFAULT_API_PORT}`;
+  }
+
   if (Platform.OS === 'android') {
     return `http://10.0.2.2:${DEFAULT_API_PORT}`;
   }
@@ -132,7 +138,7 @@ export async function enrollIntoSociety(
   sessionToken: string,
   societyId: string,
   unitId?: string,
-  residentType?: 'owner' | 'tenant',
+  residentType?: 'owner' | 'tenant' | 'committee',
 ) {
   return requestJson<SelectSocietyResponse>('/api/auth/select-society', {
     method: 'POST',

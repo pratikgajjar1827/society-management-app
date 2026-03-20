@@ -5,7 +5,7 @@ const { db, getSnapshot } = require('../db/database');
 const OTP_TTL_MINUTES = 10;
 const SESSION_TTL_DAYS = 30;
 const ACCOUNT_ROLES = new Set(['chairman', 'owner', 'tenant']);
-const RESIDENT_JOIN_ROLES = new Set(['owner', 'tenant']);
+const RESIDENT_JOIN_ROLES = new Set(['owner', 'tenant', 'committee']);
 const AUTH_INTENTS = new Set(['signUp', 'signIn', 'auto']);
 
 class HttpError extends Error {
@@ -600,7 +600,7 @@ function selectSocietyForResident(userId, societyId, unitId, residentType) {
   }
 
   if (!RESIDENT_JOIN_ROLES.has(residentType)) {
-    throw new HttpError(400, 'Choose whether you are joining as an owner or tenant.');
+    throw new HttpError(400, 'Choose owner, tenant, or society committee member.');
   }
 
   const unit = getUnit(unitId);
@@ -609,13 +609,18 @@ function selectSocietyForResident(userId, societyId, unitId, residentType) {
     throw new HttpError(404, 'Selected resident number or home was not found in this society.');
   }
 
+  const normalizedPreferredRole = residentType === 'tenant' ? 'tenant' : 'owner';
+  const membershipRoles =
+    residentType === 'committee' ? new Set(['owner', 'committee']) : new Set([residentType]);
+  const occupancyCategory = residentType === 'tenant' ? 'tenant' : 'owner';
+
   runTransaction(() => {
     const now = nowIso();
     db.prepare(
       `INSERT INTO userProfiles (userId, preferredRole, createdAt, updatedAt)
        VALUES (?, ?, ?, ?)
        ON CONFLICT(userId) DO UPDATE SET preferredRole = excluded.preferredRole, updatedAt = excluded.updatedAt`,
-    ).run(userId, residentType, now, now);
+    ).run(userId, normalizedPreferredRole, now, now);
 
     const existingMembership = db
       .prepare('SELECT id, roles, unitIds FROM memberships WHERE userId = ? AND societyId = ?')
@@ -624,7 +629,9 @@ function selectSocietyForResident(userId, societyId, unitId, residentType) {
     if (existingMembership) {
       const roles = new Set(parseStoredJson(existingMembership.roles));
       const unitIds = new Set(parseStoredJson(existingMembership.unitIds));
-      roles.add(residentType);
+      for (const role of membershipRoles) {
+        roles.add(role);
+      }
       unitIds.add(unitId);
       db.prepare('UPDATE memberships SET roles = ? WHERE id = ?').run(
         JSON.stringify([...roles]),
@@ -639,24 +646,31 @@ function selectSocietyForResident(userId, societyId, unitId, residentType) {
 
       db.prepare(
         'INSERT INTO memberships (id, userId, societyId, roles, unitIds, isPrimary) VALUES (?, ?, ?, ?, ?, ?)',
-      ).run(nextId('membership'), userId, societyId, JSON.stringify([residentType]), JSON.stringify([unitId]), isPrimary);
+      ).run(
+        nextId('membership'),
+        userId,
+        societyId,
+        JSON.stringify([...membershipRoles]),
+        JSON.stringify([unitId]),
+        isPrimary,
+      );
     }
 
     const existingOccupancy = db
       .prepare('SELECT id FROM occupancy WHERE societyId = ? AND unitId = ? AND userId = ? AND category = ?')
-      .get(societyId, unitId, userId, residentType);
+      .get(societyId, unitId, userId, occupancyCategory);
 
     if (!existingOccupancy) {
       db.prepare(
         'INSERT INTO occupancy (id, societyId, unitId, userId, category, startDate, endDate) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      ).run(nextId('occupancy'), societyId, unitId, userId, residentType, now.slice(0, 10), null);
+      ).run(nextId('occupancy'), societyId, unitId, userId, occupancyCategory, now.slice(0, 10), null);
     }
   });
 
   return {
     currentUserId: userId,
     chairmanAssigned: hasAssignedChairman(),
-    preferredRole: residentType,
+    preferredRole: normalizedPreferredRole,
     societyId,
     onboarding: getOnboardingState(userId),
     data: getSnapshot(),
