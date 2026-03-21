@@ -22,6 +22,10 @@ import { getCountryCatalog, locationCatalog } from '../data/locationCatalog';
 import { useApp } from '../state/AppContext';
 import { palette, radius, shadow, spacing } from '../theme/tokens';
 import { SocietyWorkspace } from '../types/domain';
+import {
+  getSocietyStructureLabel,
+  getSocietyUnitCollectionLabel,
+} from '../utils/selectors';
 
 type EnrollmentStep = 1 | 2 | 3 | 4;
 type ResidentProfile = 'owner' | 'tenant' | 'committee';
@@ -47,7 +51,7 @@ function buildCountryOptions(societies: SocietyWorkspace[]) {
       flag: catalog?.flag ?? countryName.slice(0, 2).toUpperCase(),
       subtitle:
         catalog?.subtitle ??
-        'Managed societies, apartment communities, and bungalow clusters',
+        'Managed societies, apartment communities, bungalow clusters, and commercial campuses',
       societyCount: societies.filter((society) => society.country === countryName).length,
     };
   });
@@ -78,7 +82,7 @@ function buildCityTiles(country: string | undefined, societies: SocietyWorkspace
     .map((cityName) => ({
       id: `${country}-${cityName}`.toLowerCase().replace(/\s+/g, '-'),
       name: cityName,
-      famousFor: 'Residential societies, apartment clusters, and local community living',
+      famousFor: 'Residential societies, apartment clusters, commercial campuses, and local community living',
       imageUrl: `https://source.unsplash.com/featured/1200x800/?${encodeURIComponent(
         `${cityName},${country}`,
       )}`,
@@ -160,7 +164,7 @@ export function SocietyEnrollmentScreen() {
   const [selectedCity, setSelectedCity] = useState<string | undefined>(undefined);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedSocietyId, setSelectedSocietyId] = useState<string | undefined>(undefined);
-  const [selectedUnitId, setSelectedUnitId] = useState<string | undefined>(undefined);
+  const [selectedUnitIds, setSelectedUnitIds] = useState<string[]>([]);
   const [residentProfile, setResidentProfile] = useState<ResidentProfile | undefined>(undefined);
 
   const existingSocietyIds = new Set(
@@ -231,7 +235,7 @@ export function SocietyEnrollmentScreen() {
     setSelectedCity(undefined);
     setSearchQuery('');
     setSelectedSocietyId(undefined);
-    setSelectedUnitId(undefined);
+    setSelectedUnitIds([]);
     setResidentProfile(undefined);
     setStep(2);
   }
@@ -240,7 +244,7 @@ export function SocietyEnrollmentScreen() {
     setSelectedCity(cityName);
     setSearchQuery('');
     setSelectedSocietyId(undefined);
-    setSelectedUnitId(undefined);
+    setSelectedUnitIds([]);
     setResidentProfile(undefined);
     setStep(3);
   }
@@ -323,8 +327,8 @@ export function SocietyEnrollmentScreen() {
       <>
         <SurfaceCard>
           <SectionHeader
-            title="Page 4. Search the society and choose the home number"
-            description="Search by society name, then select the flat, bungalow, or apartment number."
+            title="Page 4. Search the society and choose the unit number"
+            description="Search by society name, then select the home, office, or shed number."
           />
           <Caption>
             {selectedCountry} / {selectedCity}
@@ -357,7 +361,7 @@ export function SocietyEnrollmentScreen() {
                   <Caption>{society.address}</Caption>
                 </View>
                 <Pill
-                  label={society.structure === 'apartment' ? 'Apartment' : 'Bungalow'}
+                  label={getSocietyStructureLabel(society)}
                   tone="primary"
                 />
               </View>
@@ -367,7 +371,10 @@ export function SocietyEnrollmentScreen() {
               <View style={styles.metaRow}>
                 <Pill label={society.city} tone="accent" />
                 <Pill label={society.area} tone="warning" />
-                <Pill label={`${society.totalUnits} homes`} tone="primary" />
+                <Pill
+                  label={`${society.totalUnits} ${getSocietyUnitCollectionLabel(society)}`}
+                  tone="primary"
+                />
                 {isAlreadyLinked ? <Pill label="Already linked" tone="success" /> : null}
               </View>
 
@@ -381,7 +388,7 @@ export function SocietyEnrollmentScreen() {
                 }
                 onPress={() => {
                   setSelectedSocietyId(society.id);
-                  setSelectedUnitId(undefined);
+                  setSelectedUnitIds([]);
                 }}
                 variant={isSelected ? 'primary' : 'secondary'}
               />
@@ -392,23 +399,37 @@ export function SocietyEnrollmentScreen() {
         {selectedSocietyId ? (
           <SurfaceCard>
             <SectionHeader
-              title="Choose apartment or bungalow number"
-              description="Once you select your home number, the next button becomes active."
+              title="Choose one or more unit or space numbers"
+              description="Owners or committee members can claim multiple apartments, offices, sheds, or bungalows in one approval request."
             />
             <View style={styles.choiceWrap}>
               {availableUnits.map((unit) => (
                 <ChoiceChip
                   key={unit.id}
                   label={unit.code}
-                  selected={selectedUnitId === unit.id}
-                  onPress={() => setSelectedUnitId(unit.id)}
+                  selected={selectedUnitIds.includes(unit.id)}
+                  onPress={() =>
+                    setSelectedUnitIds((currentUnitIds) =>
+                      currentUnitIds.includes(unit.id)
+                        ? currentUnitIds.filter((currentUnitId) => currentUnitId !== unit.id)
+                        : [...currentUnitIds, unit.id],
+                    )
+                  }
                 />
               ))}
             </View>
+            <Caption>
+              Selected: {selectedUnitIds.length > 0
+                ? availableUnits
+                    .filter((unit) => selectedUnitIds.includes(unit.id))
+                    .map((unit) => unit.code)
+                    .join(', ')
+                : 'None yet'}
+            </Caption>
             <ActionButton
               label="Next"
               onPress={() => setStep(4)}
-              disabled={!selectedUnitId}
+              disabled={selectedUnitIds.length === 0}
             />
           </SurfaceCard>
         ) : null}
@@ -422,15 +443,20 @@ export function SocietyEnrollmentScreen() {
         <SurfaceCard>
           <SectionHeader
             title="Page 5. Residence profile details"
-            description="Choose how this mobile user belongs to the selected apartment or bungalow."
+            description="Choose how this mobile user belongs to the selected unit or commercial space."
           />
           <View style={styles.summaryBlock}>
             <Caption>Country: {selectedCountry}</Caption>
             <Caption>City: {selectedCity}</Caption>
             <Caption>Society: {selectedSociety?.name ?? 'Not selected'}</Caption>
             <Caption>
-              Home number:{' '}
-              {availableUnits.find((unit) => unit.id === selectedUnitId)?.code ?? 'Not selected'}
+              Selected numbers:{' '}
+              {selectedUnitIds.length > 0
+                ? availableUnits
+                    .filter((unit) => selectedUnitIds.includes(unit.id))
+                    .map((unit) => unit.code)
+                    .join(', ')
+                : 'Not selected'}
             </Caption>
           </View>
 
@@ -453,19 +479,19 @@ export function SocietyEnrollmentScreen() {
           </View>
 
           <Caption>
-            Committee members get the society linked to their home and can continue into the admin-capable profile selection flow.
+            Your claim will be sent to the society chairman for confirmation before access is granted. This supports members who own or manage multiple units or office spaces in the same society.
           </Caption>
 
           <ActionButton
-            label={state.isSyncing ? 'Opening workspace...' : 'Continue'}
+            label={state.isSyncing ? 'Sending request...' : 'Send request for chairman approval'}
             onPress={() =>
               actions.enrollIntoSociety(
                 selectedSocietyId ?? '',
-                selectedUnitId ?? '',
+                selectedUnitIds,
                 residentProfile ?? 'owner',
               )
             }
-            disabled={state.isSyncing || !selectedSocietyId || !selectedUnitId || !residentProfile}
+            disabled={state.isSyncing || !selectedSocietyId || selectedUnitIds.length === 0 || !residentProfile}
           />
         </SurfaceCard>
       </>
@@ -477,7 +503,7 @@ export function SocietyEnrollmentScreen() {
       <HeroCard
         eyebrow="Society Enrollment"
         title="Join the right society in five simple pages."
-        subtitle="Login with OTP, choose the country, browse city tiles, search the society, select the home number, and finish with the residence profile."
+        subtitle="Login with OTP, choose the country, browse city tiles, search the society, select the right unit or space number, and finish with the residence profile."
       >
         <View style={styles.heroActions}>
           <ActionButton label={step === 1 ? 'Exit' : 'Back'} onPress={goBack} variant="secondary" />

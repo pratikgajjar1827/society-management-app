@@ -2,7 +2,68 @@ function slugify(value) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 }
 
-function createUnitStructure(societyId, structure, totalUnits) {
+function expandOfficeNumbersInput(value) {
+  return String(value ?? '')
+    .split(/[\n,;]+/g)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .flatMap((part) => {
+      const rangeMatch = part.match(/^(\d+)\s*-\s*(\d+)$/);
+
+      if (!rangeMatch) {
+        return [part];
+      }
+
+      const rangeStart = Number.parseInt(rangeMatch[1], 10);
+      const rangeEnd = Number.parseInt(rangeMatch[2], 10);
+
+      if (!Number.isFinite(rangeStart) || !Number.isFinite(rangeEnd) || rangeEnd < rangeStart) {
+        return [];
+      }
+
+      const padWidth = Math.max(rangeMatch[1].length, rangeMatch[2].length);
+
+      return Array.from({ length: rangeEnd - rangeStart + 1 }, (_, index) =>
+        String(rangeStart + index).padStart(padWidth, '0'),
+      );
+    });
+}
+
+function normalizeOfficeFloorPlan(officeFloorPlan = []) {
+  return officeFloorPlan.map((floor, index) => ({
+    floorLabel: floor.floorLabel.trim() || `Floor ${index + 1}`,
+    officeCodes: expandOfficeNumbersInput(floor.officeNumbers),
+  }));
+}
+
+function countOfficeUnits(officeFloorPlan = []) {
+  return normalizeOfficeFloorPlan(officeFloorPlan).reduce(
+    (total, floor) => total + floor.officeCodes.length,
+    0,
+  );
+}
+
+function findDuplicateOfficeCodes(officeFloorPlan = []) {
+  const seen = new Set();
+  const duplicates = new Set();
+
+  normalizeOfficeFloorPlan(officeFloorPlan).forEach((floor) => {
+    floor.officeCodes.forEach((officeCode) => {
+      const normalized = officeCode.toLowerCase();
+
+      if (seen.has(normalized)) {
+        duplicates.add(officeCode);
+        return;
+      }
+
+      seen.add(normalized);
+    });
+  });
+
+  return [...duplicates];
+}
+
+function createUnitStructure(societyId, structure, totalUnits, options = {}) {
   if (structure === 'bungalow') {
     const units = Array.from({ length: totalUnits }, (_, index) => {
       const plotNumber = String(index + 1).padStart(2, '0');
@@ -13,6 +74,51 @@ function createUnitStructure(societyId, structure, totalUnits) {
         areaSqft: 1800 + index * 30,
         occupancyStatus: 'occupied',
         unitType: 'plot',
+      };
+    });
+
+    return { buildings: [], units };
+  }
+
+  if (structure === 'commercial') {
+    if (options.commercialSpaceType === 'office' && Array.isArray(options.officeFloorPlan)) {
+      const configuredFloors = normalizeOfficeFloorPlan(options.officeFloorPlan).filter(
+        (floor) => floor.officeCodes.length > 0,
+      );
+      const buildings = configuredFloors.map((floor, index) => ({
+        id: `${societyId}-building-${slugify(floor.floorLabel) || `floor-${index + 1}`}`,
+        societyId,
+        name: floor.floorLabel,
+        sortOrder: index + 1,
+      }));
+      const units = [];
+
+      buildings.forEach((building, floorIndex) => {
+        configuredFloors[floorIndex].officeCodes.forEach((officeCode, officeIndex) => {
+          units.push({
+            id: `${societyId}-unit-office-${slugify(`${building.name}-${officeCode}`) || `${floorIndex + 1}-${officeIndex + 1}`}`,
+            societyId,
+            buildingId: building.id,
+            code: officeCode,
+            areaSqft: 650 + units.length * 18,
+            occupancyStatus: 'occupied',
+            unitType: 'office',
+          });
+        });
+      });
+
+      return { buildings, units };
+    }
+
+    const units = Array.from({ length: totalUnits }, (_, index) => {
+      const shedNumber = String(index + 1).padStart(2, '0');
+      return {
+        id: `${societyId}-unit-shed-${shedNumber}`,
+        societyId,
+        code: `Shed ${shedNumber}`,
+        areaSqft: 900 + index * 35,
+        occupancyStatus: 'occupied',
+        unitType: 'shed',
       };
     });
 
@@ -121,6 +227,9 @@ function createAmenitiesFromSelection(societyId, selectedAmenities) {
 }
 
 module.exports = {
+  countOfficeUnits,
   createAmenitiesFromSelection,
   createUnitStructure,
+  findDuplicateOfficeCodes,
+  normalizeOfficeFloorPlan,
 };

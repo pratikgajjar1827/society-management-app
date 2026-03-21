@@ -2,6 +2,8 @@ import {
   Amenity,
   AmenityScheduleRule,
   Building,
+  CommercialSpaceType,
+  OfficeFloorPlanEntry,
   SocietyStructure,
   Unit,
 } from '../types/domain';
@@ -10,10 +12,75 @@ function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 }
 
+export function expandOfficeNumbersInput(value: string) {
+  return value
+    .split(/[\n,;]+/g)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .flatMap((part) => {
+      const rangeMatch = part.match(/^(\d+)\s*-\s*(\d+)$/);
+
+      if (!rangeMatch) {
+        return [part];
+      }
+
+      const rangeStart = Number.parseInt(rangeMatch[1], 10);
+      const rangeEnd = Number.parseInt(rangeMatch[2], 10);
+
+      if (!Number.isFinite(rangeStart) || !Number.isFinite(rangeEnd) || rangeEnd < rangeStart) {
+        return [];
+      }
+
+      const padWidth = Math.max(rangeMatch[1].length, rangeMatch[2].length);
+
+      return Array.from({ length: rangeEnd - rangeStart + 1 }, (_, index) =>
+        String(rangeStart + index).padStart(padWidth, '0'),
+      );
+    });
+}
+
+export function normalizeOfficeFloorPlan(officeFloorPlan: OfficeFloorPlanEntry[]) {
+  return officeFloorPlan.map((floor, index) => ({
+    floorLabel: floor.floorLabel.trim() || `Floor ${index + 1}`,
+    officeCodes: expandOfficeNumbersInput(floor.officeNumbers),
+  }));
+}
+
+export function countOfficeUnits(officeFloorPlan: OfficeFloorPlanEntry[]) {
+  return normalizeOfficeFloorPlan(officeFloorPlan).reduce(
+    (total, floor) => total + floor.officeCodes.length,
+    0,
+  );
+}
+
+export function findDuplicateOfficeCodes(officeFloorPlan: OfficeFloorPlanEntry[]) {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+
+  normalizeOfficeFloorPlan(officeFloorPlan).forEach((floor) => {
+    floor.officeCodes.forEach((officeCode) => {
+      const normalized = officeCode.toLowerCase();
+
+      if (seen.has(normalized)) {
+        duplicates.add(officeCode);
+        return;
+      }
+
+      seen.add(normalized);
+    });
+  });
+
+  return [...duplicates];
+}
+
 export function createUnitStructure(
   societyId: string,
   structure: SocietyStructure,
   totalUnits: number,
+  options?: {
+    commercialSpaceType?: CommercialSpaceType;
+    officeFloorPlan?: OfficeFloorPlanEntry[];
+  },
 ): { buildings: Building[]; units: Unit[] } {
   if (structure === 'bungalow') {
     const units: Unit[] = Array.from({ length: totalUnits }, (_, index) => {
@@ -25,6 +92,51 @@ export function createUnitStructure(
         areaSqft: 1800 + index * 30,
         occupancyStatus: 'occupied',
         unitType: 'plot',
+      };
+    });
+
+    return { buildings: [], units };
+  }
+
+  if (structure === 'commercial') {
+    if (options?.commercialSpaceType === 'office' && Array.isArray(options.officeFloorPlan)) {
+      const configuredFloors = normalizeOfficeFloorPlan(options.officeFloorPlan).filter(
+        (floor) => floor.officeCodes.length > 0,
+      );
+      const buildings: Building[] = configuredFloors.map((floor, index) => ({
+        id: `${societyId}-building-${slugify(floor.floorLabel) || `floor-${index + 1}`}`,
+        societyId,
+        name: floor.floorLabel,
+        sortOrder: index + 1,
+      }));
+      const units: Unit[] = [];
+
+      buildings.forEach((building, floorIndex) => {
+        configuredFloors[floorIndex].officeCodes.forEach((officeCode, officeIndex) => {
+          units.push({
+            id: `${societyId}-unit-office-${slugify(`${building.name}-${officeCode}`) || `${floorIndex + 1}-${officeIndex + 1}`}`,
+            societyId,
+            buildingId: building.id,
+            code: officeCode,
+            areaSqft: 650 + units.length * 18,
+            occupancyStatus: 'occupied',
+            unitType: 'office',
+          });
+        });
+      });
+
+      return { buildings, units };
+    }
+
+    const units: Unit[] = Array.from({ length: totalUnits }, (_, index) => {
+      const shedNumber = String(index + 1).padStart(2, '0');
+      return {
+        id: `${societyId}-unit-shed-${shedNumber}`,
+        societyId,
+        code: `Shed ${shedNumber}`,
+        areaSqft: 900 + index * 35,
+        occupancyStatus: 'occupied',
+        unitType: 'shed',
       };
     });
 

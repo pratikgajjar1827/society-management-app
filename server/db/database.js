@@ -2,7 +2,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 
-const { createAmenitiesFromSelection, createUnitStructure } = require('../seed/factories');
+const {
+  countOfficeUnits,
+  createAmenitiesFromSelection,
+  createUnitStructure,
+  findDuplicateOfficeCodes,
+  normalizeOfficeFloorPlan,
+} = require('../seed/factories');
 const { DEMO_USER_ID, seedData } = require('../seed/seedData');
 
 const dbDirectory = path.join(process.cwd(), 'backend-data');
@@ -15,6 +21,7 @@ const tableConfigs = [
   ['buildings'],
   ['units'],
   ['memberships', ['roles', 'unitIds']],
+  ['joinRequests', ['unitIds']],
   ['occupancy'],
   ['announcements', ['readByUserIds']],
   ['rules', ['acknowledgedByUserIds']],
@@ -22,8 +29,10 @@ const tableConfigs = [
   ['amenityScheduleRules', ['blackoutDates']],
   ['bookings'],
   ['maintenancePlans'],
+  ['expenseRecords'],
   ['invoices'],
   ['payments'],
+  ['paymentReminders', ['invoiceIds', 'unitIds']],
   ['receipts'],
   ['complaints'],
   ['staffProfiles', ['employerUnitIds']],
@@ -71,15 +80,56 @@ function ensureSchema() {
   const societyColumns = new Set(
     db.prepare("PRAGMA table_info('societies')").all().map((column) => column.name),
   );
-  const missingLocationColumns = [
+  const missingSocietyColumns = [
     ['country', "TEXT NOT NULL DEFAULT 'India'"],
     ['state', "TEXT NOT NULL DEFAULT 'Gujarat'"],
     ['city', "TEXT NOT NULL DEFAULT 'Ahmedabad'"],
     ['area', "TEXT NOT NULL DEFAULT ''"],
+    ['commercialSpaceType', 'TEXT'],
+    ['officeFloorPlan', 'TEXT'],
   ].filter(([columnName]) => !societyColumns.has(columnName));
 
-  for (const [columnName, definition] of missingLocationColumns) {
+  for (const [columnName, definition] of missingSocietyColumns) {
     db.exec(`ALTER TABLE societies ADD COLUMN ${columnName} ${definition}`);
+  }
+
+  const staffColumns = new Set(
+    db.prepare("PRAGMA table_info('staffProfiles')").all().map((column) => column.name),
+  );
+  const missingStaffColumns = [
+    ['requestedByUserId', 'TEXT'],
+    ['requestedAt', 'TEXT'],
+    ['reviewedByUserId', 'TEXT'],
+    ['reviewedAt', 'TEXT'],
+  ].filter(([columnName]) => !staffColumns.has(columnName));
+
+  for (const [columnName, definition] of missingStaffColumns) {
+    db.exec(`ALTER TABLE staffProfiles ADD COLUMN ${columnName} ${definition}`);
+  }
+
+  const paymentColumns = new Set(
+    db.prepare("PRAGMA table_info('payments')").all().map((column) => column.name),
+  );
+  const missingPaymentColumns = [
+    ['submittedByUserId', 'TEXT'],
+    ['referenceNote', 'TEXT'],
+    ['reviewedByUserId', 'TEXT'],
+    ['reviewedAt', 'TEXT'],
+  ].filter(([columnName]) => !paymentColumns.has(columnName));
+
+  for (const [columnName, definition] of missingPaymentColumns) {
+    db.exec(`ALTER TABLE payments ADD COLUMN ${columnName} ${definition}`);
+  }
+
+  const complaintColumns = new Set(
+    db.prepare("PRAGMA table_info('complaints')").all().map((column) => column.name),
+  );
+  const missingComplaintColumns = [
+    ['description', 'TEXT'],
+  ].filter(([columnName]) => !complaintColumns.has(columnName));
+
+  for (const [columnName, definition] of missingComplaintColumns) {
+    db.exec(`ALTER TABLE complaints ADD COLUMN ${columnName} ${definition}`);
   }
 }
 
@@ -116,7 +166,10 @@ function fromStoredValue(columnName, value) {
       columnName === 'readByUserIds' ||
       columnName === 'acknowledgedByUserIds' ||
       columnName === 'blackoutDates' ||
-      columnName === 'employerUnitIds'
+      columnName === 'employerUnitIds' ||
+      columnName === 'officeFloorPlan' ||
+      columnName === 'invoiceIds' ||
+      columnName === 'unitIds'
     ) {
       return [];
     }
@@ -130,7 +183,10 @@ function fromStoredValue(columnName, value) {
     columnName === 'readByUserIds' ||
     columnName === 'acknowledgedByUserIds' ||
     columnName === 'blackoutDates' ||
-    columnName === 'employerUnitIds'
+    columnName === 'employerUnitIds' ||
+    columnName === 'officeFloorPlan' ||
+    columnName === 'invoiceIds' ||
+    columnName === 'unitIds'
   ) {
     return JSON.parse(value);
   }
@@ -246,15 +302,78 @@ function nextId(prefix) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+function parseWholeNumber(value) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function resolveStructureSetup(draft) {
+  if (draft.structure === 'commercial') {
+    const commercialSpaceType = draft.commercialSpaceType === 'office' ? 'office' : 'shed';
+
+    if (commercialSpaceType === 'office') {
+      const officeFloorPlan = Array.isArray(draft.officeFloorPlan) ? draft.officeFloorPlan : [];
+      const configuredFloors = normalizeOfficeFloorPlan(officeFloorPlan).filter(
+        (floor) => floor.officeCodes.length > 0,
+      );
+      const totalUnits = countOfficeUnits(officeFloorPlan) || 1;
+      const duplicateOfficeCodes = findDuplicateOfficeCodes(officeFloorPlan);
+
+      return {
+        totalUnits,
+        commercialSpaceType,
+        officeFloorPlan,
+        unitStructureOptions: {
+          commercialSpaceType,
+          officeFloorPlan,
+        },
+        tagline:
+          duplicateOfficeCodes.length > 0
+            ? `Commercial office workspace with ${configuredFloors.length || 1} configured floors`
+            : `Commercial office workspace with ${configuredFloors.length || 1} configured floors and ${totalUnits} unique office spaces`,
+      };
+    }
+
+    const totalUnits = Math.max(1, parseWholeNumber(draft.totalUnits) || 1);
+
+    return {
+      totalUnits,
+      commercialSpaceType,
+      officeFloorPlan: [],
+      unitStructureOptions: {
+        commercialSpaceType,
+      },
+      tagline: `Commercial shed workspace with ${totalUnits} shed${totalUnits === 1 ? '' : 's'}`,
+    };
+  }
+
+  const totalUnits = Math.max(1, parseWholeNumber(draft.totalUnits) || 1);
+
+  return {
+    totalUnits,
+    commercialSpaceType: null,
+    officeFloorPlan: [],
+    unitStructureOptions: {},
+    tagline:
+      draft.structure === 'apartment'
+        ? 'New apartment community workspace'
+        : 'New bungalow cluster workspace',
+  };
+}
+
 function createSocietyWorkspace(userId, draft) {
   const now = new Date().toISOString();
   const societyId = nextId('society');
-  const totalUnits = Math.max(1, Number.parseInt(draft.totalUnits, 10) || 1);
   const maintenanceDay = Math.min(28, Math.max(1, Number.parseInt(draft.maintenanceDay, 10) || 10));
   const maintenanceAmount = Math.max(1000, Number.parseInt(draft.maintenanceAmount, 10) || 5000);
-  const structure = createUnitStructure(societyId, draft.structure, totalUnits);
+  const structureSetup = resolveStructureSetup(draft);
+  const generatedStructure = createUnitStructure(
+    societyId,
+    draft.structure,
+    structureSetup.totalUnits,
+    structureSetup.unitStructureOptions,
+  );
   const amenitySetup = createAmenitiesFromSelection(societyId, draft.selectedAmenities);
-  const primaryUnitId = structure.units[0]?.id ?? null;
 
   runTransaction(() => {
     const existingMembershipCount = Number(
@@ -271,20 +390,19 @@ function createSocietyWorkspace(userId, draft) {
         area: draft.area.trim(),
         address: draft.address.trim(),
         structure: draft.structure,
+        commercialSpaceType: structureSetup.commercialSpaceType,
+        officeFloorPlan: structureSetup.officeFloorPlan,
         timezone: 'Asia/Kolkata',
-        totalUnits,
+        totalUnits: structureSetup.totalUnits,
         maintenanceDayOfMonth: maintenanceDay,
         maintenanceAmount,
-        tagline:
-          draft.structure === 'apartment'
-            ? 'New apartment community workspace'
-            : 'New bungalow cluster workspace',
+        tagline: structureSetup.tagline,
         createdAt: now,
       },
     ]);
 
-    insertMany('buildings', structure.buildings);
-    insertMany('units', structure.units);
+    insertMany('buildings', generatedStructure.buildings);
+    insertMany('units', generatedStructure.units);
     db.prepare(
       `INSERT INTO userProfiles (userId, preferredRole, createdAt, updatedAt)
        VALUES (?, ?, ?, ?)
@@ -295,25 +413,11 @@ function createSocietyWorkspace(userId, draft) {
         id: nextId('membership'),
         userId,
         societyId,
-        roles: ['chairman', 'owner'],
-        unitIds: primaryUnitId ? [primaryUnitId] : [],
+        roles: ['chairman'],
+        unitIds: [],
         isPrimary: existingMembershipCount === 0,
       },
     ]);
-
-    if (primaryUnitId) {
-      insertMany('occupancy', [
-        {
-          id: nextId('occupancy'),
-          societyId,
-          unitId: primaryUnitId,
-          userId,
-          category: 'owner',
-          startDate: now.slice(0, 10),
-          endDate: null,
-        },
-      ]);
-    }
 
     insertMany('announcements', [
       {

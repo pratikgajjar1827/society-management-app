@@ -11,12 +11,23 @@ import {
 } from '../components/ui';
 import { useApp } from '../state/AppContext';
 import { palette, spacing } from '../theme/tokens';
-import { formatCurrency, getCurrentUser, getSocietyOptions, humanizeRole } from '../utils/selectors';
+import {
+  formatLongDate,
+  formatCurrency,
+  getCurrentUser,
+  getPendingJoinRequestsForUser,
+  getSocietyOptions,
+  getSocietyWorkspaceLabel,
+  humanizeRole,
+} from '../utils/selectors';
 
 export function WorkspaceSelectionScreen() {
   const { state, actions } = useApp();
   const user = getCurrentUser(state.data, state.session.userId);
   const options = state.session.userId ? getSocietyOptions(state.data, state.session.userId) : [];
+  const pendingRequests = state.session.userId
+    ? getPendingJoinRequestsForUser(state.data, state.session.userId)
+    : [];
 
   return (
     <Page>
@@ -37,10 +48,37 @@ export function WorkspaceSelectionScreen() {
         description="Each card below represents one society workspace tied to your login. The same person can safely move across communities without new accounts."
       />
 
+      {pendingRequests.length > 0 ? (
+        <SurfaceCard>
+          <SectionHeader
+            title="Pending access requests"
+            description="These unit or space claims are waiting for chairman approval before they become active workspaces."
+          />
+          {pendingRequests.map((request) => (
+            <View key={request.joinRequest.id} style={styles.pendingRequestCard}>
+              <Text style={styles.societyName}>{request.society?.name ?? 'Requested society'}</Text>
+              <Caption>
+                Requested as {request.joinRequest.residentType} on {formatLongDate(request.joinRequest.createdAt)}
+              </Caption>
+              <Caption>
+                Units or spaces: {request.units.map((unit) => unit?.code).filter(Boolean).join(', ') || 'Pending mapping'}
+              </Caption>
+              <View style={styles.roleRow}>
+                <Pill label="Awaiting chairman approval" tone="warning" />
+              </View>
+            </View>
+          ))}
+        </SurfaceCard>
+      ) : null}
+
       {options.length === 0 ? (
         <SurfaceCard>
           <Text style={styles.societyName}>No society workspace linked yet</Text>
-          <Caption>Create a new society or join an existing one to populate this list.</Caption>
+          <Caption>
+            {pendingRequests.length > 0
+              ? 'Your claims are pending approval. You can still create another society or submit a new join request.'
+              : 'Create a new society or join an existing one to populate this list.'}
+          </Caption>
           <View style={styles.heroActions}>
             <ActionButton label="Create first workspace" onPress={actions.startSetup} />
             <ActionButton label="Join a society" onPress={actions.startSocietyEnrollment} variant="secondary" />
@@ -56,7 +94,7 @@ export function WorkspaceSelectionScreen() {
               <Caption>{option.society.address}</Caption>
             </View>
             <Pill
-              label={option.society.structure === 'apartment' ? 'Apartment society' : 'Bungalow society'}
+              label={getSocietyWorkspaceLabel(option.society)}
               tone="primary"
             />
           </View>
@@ -135,5 +173,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.sm,
+  },
+  pendingRequestCard: {
+    gap: spacing.xs,
+    paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: palette.border,
   },
 });

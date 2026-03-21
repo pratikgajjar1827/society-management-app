@@ -1,4 +1,5 @@
-export type SocietyStructure = 'apartment' | 'bungalow';
+export type SocietyStructure = 'apartment' | 'bungalow' | 'commercial';
+export type CommercialSpaceType = 'shed' | 'office';
 export type AuthChannel = 'sms' | 'email';
 export type AuthIntent = 'signUp' | 'signIn' | 'auto';
 export type AccountRole = 'chairman' | 'owner' | 'tenant';
@@ -7,6 +8,8 @@ export type OnboardingNextStep =
   | 'createSociety'
   | 'joinSociety'
   | 'workspaceSelection';
+export type JoinRequestStatus = 'pending' | 'approved' | 'rejected';
+export type JoinRequestRole = 'owner' | 'tenant' | 'committee';
 
 export type MembershipRole =
   | 'chairman'
@@ -25,12 +28,19 @@ export type ApprovalMode = 'auto' | 'committee';
 export type MaintenanceFrequency = 'monthly' | 'quarterly';
 export type InvoiceStatus = 'paid' | 'pending' | 'overdue';
 export type PaymentMethod = 'upi' | 'netbanking' | 'cash';
+export type PaymentStatus = 'captured' | 'pending' | 'rejected';
+export type ExpenseType = 'maintenance' | 'adhoc';
 export type ComplaintStatus = 'open' | 'inProgress' | 'resolved';
 export type ComplaintCategory = 'plumbing' | 'security' | 'billing' | 'cleaning' | 'general';
 export type StaffCategory = 'domesticHelp' | 'driver' | 'cook' | 'vendor';
 export type VerificationState = 'pending' | 'verified' | 'expired';
 export type EntrySubjectType = 'staff' | 'visitor' | 'delivery';
 export type EntryStatus = 'inside' | 'exited';
+
+export interface OfficeFloorPlanEntry {
+  floorLabel: string;
+  officeNumbers: string;
+}
 
 export interface SocietyWorkspace {
   id: string;
@@ -41,6 +51,8 @@ export interface SocietyWorkspace {
   area: string;
   address: string;
   structure: SocietyStructure;
+  commercialSpaceType?: CommercialSpaceType | null;
+  officeFloorPlan?: OfficeFloorPlanEntry[] | null;
   timezone: string;
   totalUnits: number;
   maintenanceDayOfMonth: number;
@@ -63,7 +75,7 @@ export interface Unit {
   code: string;
   areaSqft: number;
   occupancyStatus: 'vacant' | 'occupied';
-  unitType: 'flat' | 'plot';
+  unitType: 'flat' | 'plot' | 'shed' | 'office';
 }
 
 export interface UserProfile {
@@ -86,6 +98,7 @@ export interface AuthChallenge {
 export interface OnboardingState {
   preferredRole: AccountRole | null;
   membershipsCount: number;
+  pendingJoinRequestsCount: number;
   nextStep: OnboardingNextStep;
 }
 
@@ -175,6 +188,18 @@ export interface MaintenancePlan {
   receiptPrefix: string;
 }
 
+export interface ExpenseRecord {
+  id: string;
+  societyId: string;
+  expenseType: ExpenseType;
+  title: string;
+  amountInr: number;
+  incurredOn: string;
+  notes?: string;
+  createdByUserId: string;
+  createdAt: string;
+}
+
 export interface Invoice {
   id: string;
   societyId: string;
@@ -193,7 +218,11 @@ export interface Payment {
   amountInr: number;
   method: PaymentMethod;
   paidAt: string;
-  status: 'captured' | 'pending';
+  status: PaymentStatus;
+  submittedByUserId?: string;
+  referenceNote?: string;
+  reviewedByUserId?: string;
+  reviewedAt?: string;
 }
 
 export interface Receipt {
@@ -211,9 +240,20 @@ export interface ComplaintTicket {
   createdByUserId: string;
   category: ComplaintCategory;
   title: string;
+  description?: string;
   status: ComplaintStatus;
   createdAt: string;
   assignedTo?: string;
+}
+
+export interface PaymentReminder {
+  id: string;
+  societyId: string;
+  invoiceIds: string[];
+  unitIds: string[];
+  message: string;
+  sentByUserId: string;
+  sentAt: string;
 }
 
 export interface StaffProfile {
@@ -224,6 +264,10 @@ export interface StaffProfile {
   category: StaffCategory;
   verificationState: VerificationState;
   employerUnitIds: string[];
+  requestedByUserId?: string;
+  requestedAt?: string;
+  reviewedByUserId?: string;
+  reviewedAt?: string;
 }
 
 export interface StaffAssignment {
@@ -264,6 +308,19 @@ export interface EntryLog {
   status: EntryStatus;
 }
 
+export interface JoinRequest {
+  id: string;
+  societyId: string;
+  userId: string;
+  residentType: JoinRequestRole;
+  unitIds: string[];
+  status: JoinRequestStatus;
+  createdAt: string;
+  reviewedAt?: string;
+  reviewedByUserId?: string;
+  reviewNote?: string;
+}
+
 export interface SocietySetupDraft {
   societyName: string;
   country: string;
@@ -272,6 +329,8 @@ export interface SocietySetupDraft {
   area: string;
   address: string;
   structure: SocietyStructure;
+  commercialSpaceType: CommercialSpaceType;
+  officeFloorPlan: OfficeFloorPlanEntry[];
   totalUnits: string;
   maintenanceDay: string;
   maintenanceAmount: string;
@@ -285,6 +344,7 @@ export interface SeedData {
   buildings: Building[];
   units: Unit[];
   memberships: Membership[];
+  joinRequests: JoinRequest[];
   occupancy: UnitOccupancy[];
   announcements: Announcement[];
   rules: RuleDocument[];
@@ -292,8 +352,10 @@ export interface SeedData {
   amenityScheduleRules: AmenityScheduleRule[];
   bookings: AmenityBooking[];
   maintenancePlans: MaintenancePlan[];
+  expenseRecords: ExpenseRecord[];
   invoices: Invoice[];
   payments: Payment[];
+  paymentReminders: PaymentReminder[];
   receipts: Receipt[];
   complaints: ComplaintTicket[];
   staffProfiles: StaffProfile[];

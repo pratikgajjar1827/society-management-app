@@ -1,0 +1,6 @@
+
+> society-management-app@1.0.0 server
+> node server/index.js
+
+SocietyOS backend running on http://0.0.0.0:4000
+SQLite database: D:\Society Management Project\society-management-app\backend-data\societyos.db

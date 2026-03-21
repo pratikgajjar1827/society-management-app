@@ -61,6 +61,11 @@ function AppRoot() {
           <Text style={styles.bannerText}>{state.apiError}</Text>
         </View>
       ) : null}
+      {!state.apiError && state.noticeMessage ? (
+        <View style={styles.noticeBanner}>
+          <Text style={styles.noticeBannerText}>{state.noticeMessage}</Text>
+        </View>
+      ) : null}
       {screen}
     </View>
   );
@@ -114,6 +119,19 @@ const styles = StyleSheet.create({
   },
   bannerText: {
     color: '#6F4B00',
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: '600',
+  },
+  noticeBanner: {
+    backgroundColor: '#E7F5EE',
+    borderBottomColor: '#8EC3A8',
+    borderBottomWidth: 1,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+  },
+  noticeBannerText: {
+    color: '#1F5A3D',
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '600',

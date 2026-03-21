@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS societies (
   area TEXT NOT NULL,
   address TEXT NOT NULL,
   structure TEXT NOT NULL,
+  commercialSpaceType TEXT,
+  officeFloorPlan TEXT,
   timezone TEXT NOT NULL,
   totalUnits INTEGER NOT NULL,
   maintenanceDayOfMonth INTEGER NOT NULL,
@@ -54,6 +56,22 @@ CREATE TABLE IF NOT EXISTS memberships (
   isPrimary INTEGER NOT NULL,
   FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS joinRequests (
+  id TEXT PRIMARY KEY,
+  societyId TEXT NOT NULL,
+  userId TEXT NOT NULL,
+  residentType TEXT NOT NULL,
+  unitIds TEXT NOT NULL,
+  status TEXT NOT NULL,
+  createdAt TEXT NOT NULL,
+  reviewedAt TEXT,
+  reviewedByUserId TEXT,
+  reviewNote TEXT,
+  FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE,
+  FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (reviewedByUserId) REFERENCES users(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS occupancy (
@@ -145,6 +163,20 @@ CREATE TABLE IF NOT EXISTS maintenancePlans (
   FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS expenseRecords (
+  id TEXT PRIMARY KEY,
+  societyId TEXT NOT NULL,
+  expenseType TEXT NOT NULL,
+  title TEXT NOT NULL,
+  amountInr INTEGER NOT NULL,
+  incurredOn TEXT NOT NULL,
+  notes TEXT,
+  createdByUserId TEXT NOT NULL,
+  createdAt TEXT NOT NULL,
+  FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE,
+  FOREIGN KEY (createdByUserId) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS invoices (
   id TEXT PRIMARY KEY,
   societyId TEXT NOT NULL,
@@ -167,8 +199,26 @@ CREATE TABLE IF NOT EXISTS payments (
   method TEXT NOT NULL,
   paidAt TEXT NOT NULL,
   status TEXT NOT NULL,
+  submittedByUserId TEXT,
+  referenceNote TEXT,
+  reviewedByUserId TEXT,
+  reviewedAt TEXT,
   FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE,
-  FOREIGN KEY (invoiceId) REFERENCES invoices(id) ON DELETE CASCADE
+  FOREIGN KEY (invoiceId) REFERENCES invoices(id) ON DELETE CASCADE,
+  FOREIGN KEY (submittedByUserId) REFERENCES users(id) ON DELETE SET NULL,
+  FOREIGN KEY (reviewedByUserId) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS paymentReminders (
+  id TEXT PRIMARY KEY,
+  societyId TEXT NOT NULL,
+  invoiceIds TEXT NOT NULL,
+  unitIds TEXT NOT NULL,
+  message TEXT NOT NULL,
+  sentByUserId TEXT NOT NULL,
+  sentAt TEXT NOT NULL,
+  FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE,
+  FOREIGN KEY (sentByUserId) REFERENCES users(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS receipts (
@@ -188,6 +238,7 @@ CREATE TABLE IF NOT EXISTS complaints (
   createdByUserId TEXT NOT NULL,
   category TEXT NOT NULL,
   title TEXT NOT NULL,
+  description TEXT,
   status TEXT NOT NULL,
   createdAt TEXT NOT NULL,
   assignedTo TEXT,
@@ -204,6 +255,12 @@ CREATE TABLE IF NOT EXISTS staffProfiles (
   category TEXT NOT NULL,
   verificationState TEXT NOT NULL,
   employerUnitIds TEXT NOT NULL,
+  requestedByUserId TEXT,
+  requestedAt TEXT,
+  reviewedByUserId TEXT,
+  reviewedAt TEXT,
+  FOREIGN KEY (requestedByUserId) REFERENCES users(id) ON DELETE SET NULL,
+  FOREIGN KEY (reviewedByUserId) REFERENCES users(id) ON DELETE SET NULL,
   FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE
 );
 
