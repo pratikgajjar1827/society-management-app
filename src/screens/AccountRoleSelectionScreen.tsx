@@ -14,6 +14,8 @@ import { palette, spacing } from '../theme/tokens';
 
 export function AccountRoleSelectionScreen() {
   const { state, actions } = useApp();
+  const canCreateSociety = state.session.accountRole === 'superUser';
+  const hasMemberships = Boolean(state.onboarding?.membershipsCount);
 
   return (
     <Page>
@@ -33,22 +35,44 @@ export function AccountRoleSelectionScreen() {
         description="This architecture keeps workspace creation and resident enrollment cleanly separated."
       />
 
-      <SurfaceCard>
-        <Text style={styles.cardTitle}>Create Society Portal</Text>
-        <Caption>
-          Use this when you are the first person setting up the society workspace. You will enter the society name, country, state, city, area, address, unit count, maintenance settings, and starter amenities.
-        </Caption>
-        <View style={styles.pillRow}>
-          <Pill label="Chairman flow" tone="primary" />
-          <Pill label="Creates workspace" tone="accent" />
-          <Pill label="Captures location" tone="warning" />
-        </View>
-        <ActionButton
-          label={state.isSyncing ? 'Opening portal...' : 'Open creation portal'}
-          onPress={actions.startSetup}
-          disabled={state.isSyncing}
-        />
-      </SurfaceCard>
+      {canCreateSociety ? (
+        <SurfaceCard>
+          <Text style={styles.cardTitle}>Create Society Portal</Text>
+          <Caption>
+            Use this when you are the platform super user setting up a new society workspace. You will enter the society name, country, state, city, area, address, unit count, maintenance settings, and starter amenities.
+          </Caption>
+          <View style={styles.pillRow}>
+            <Pill label="Super user only" tone="primary" />
+            <Pill label="Creates workspace" tone="accent" />
+            <Pill label="Captures location" tone="warning" />
+          </View>
+          <ActionButton
+            label={state.isSyncing ? 'Opening portal...' : 'Open creation portal'}
+            onPress={actions.startSetup}
+            disabled={state.isSyncing}
+          />
+        </SurfaceCard>
+      ) : null}
+
+      {hasMemberships ? (
+        <SurfaceCard>
+          <Text style={styles.cardTitle}>Existing Workspaces</Text>
+          <Caption>
+            This login already has linked society workspaces. Open them directly to access admin or
+            resident modules without repeating the join workflow.
+          </Caption>
+          <View style={styles.pillRow}>
+            <Pill label="Direct access" tone="primary" />
+            <Pill label="Linked societies" tone="accent" />
+            {canCreateSociety ? <Pill label="Delete available there" tone="warning" /> : null}
+          </View>
+          <ActionButton
+            label="Open workspaces"
+            onPress={actions.goToWorkspaces}
+            variant="secondary"
+          />
+        </SurfaceCard>
+      ) : null}
 
       <SurfaceCard>
         <Text style={styles.cardTitle}>Join Society Portal</Text>

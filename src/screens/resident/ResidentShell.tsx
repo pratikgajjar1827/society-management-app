@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import {
   ActionButton,
@@ -14,8 +14,11 @@ import {
   SectionHeader,
   SurfaceCard,
 } from '../../components/ui';
+import { MaintenanceReceiptCard } from '../../components/MaintenanceReceiptCard';
 import { useApp } from '../../state/AppContext';
 import { palette, spacing } from '../../theme/tokens';
+import { openWebDataUrlInNewTab, pickWebFileAsDataUrl } from '../../utils/fileUploads';
+import { buildMaintenanceReceiptDetails, openMaintenanceReceiptPdf } from '../../utils/receipts';
 import {
   deriveProfiles,
   formatCurrency,
@@ -31,6 +34,7 @@ import {
   getMembershipForSociety,
   getPaymentRemindersForUser,
   getPaymentsForUserSociety,
+  getResidenceProfileForUserSociety,
   getResidentOverview,
   getRulesForSociety,
   getSelectedSociety,
@@ -38,7 +42,7 @@ import {
   getUnitsForSociety,
   humanizeRole,
 } from '../../utils/selectors';
-import { ComplaintCategory, PaymentMethod } from '../../types/domain';
+import { ComplaintCategory, PaymentMethod, SeedData } from '../../types/domain';
 
 type ResidentTab = 'home' | 'billing' | 'notices' | 'bookings' | 'helpdesk' | 'profile';
 
@@ -71,6 +75,204 @@ const complaintCategories = [
   { key: 'billing' as const, label: 'Billing' },
   { key: 'security' as const, label: 'Security' },
 ];
+
+type ComplaintTemplate = {
+  category: ComplaintCategory;
+  title: string;
+  description: string;
+};
+
+const defaultComplaintTemplates: Record<ComplaintCategory, ComplaintTemplate[]> = {
+  general: [
+    {
+      category: 'general',
+      title: 'Power issue in unit',
+      description: 'There is a power-related issue affecting {unitCode}. Please check and share the next step.',
+    },
+    {
+      category: 'general',
+      title: 'Lift not working',
+      description: 'The lift or common facility serving {unitCode} needs attention. Please arrange support.',
+    },
+    {
+      category: 'general',
+      title: 'Noise disturbance complaint',
+      description: 'There is a repeated disturbance affecting {unitCode}. Please review and help resolve it.',
+    },
+  ],
+  plumbing: [
+    {
+      category: 'plumbing',
+      title: 'Leakage near sink',
+      description: 'There is a water leakage near the sink in {unitCode}. Please inspect and confirm the next step.',
+    },
+    {
+      category: 'plumbing',
+      title: 'Blocked drain',
+      description: 'The drain is blocked in {unitCode}. Please help with cleaning and plumber support.',
+    },
+    {
+      category: 'plumbing',
+      title: 'Low water pressure',
+      description: 'Water pressure is low in {unitCode}. Please check the line and update me.',
+    },
+  ],
+  cleaning: [
+    {
+      category: 'cleaning',
+      title: 'Common area cleaning missed',
+      description: 'Cleaning was missed around {unitCode}. Please arrange housekeeping support.',
+    },
+    {
+      category: 'cleaning',
+      title: 'Garbage pickup pending',
+      description: 'Garbage pickup is pending near {unitCode}. Please help clear it today.',
+    },
+    {
+      category: 'cleaning',
+      title: 'Washroom cleaning required',
+      description: 'Cleaning near {unitCode} needs attention. Please schedule housekeeping.',
+    },
+  ],
+  billing: [
+    {
+      category: 'billing',
+      title: 'Maintenance charge clarification',
+      description: 'Please share the breakup or clarification for the maintenance charge linked to {unitCode}.',
+    },
+    {
+      category: 'billing',
+      title: 'Payment not reflected',
+      description: 'My maintenance payment for {unitCode} is not reflected yet. Please verify and update the ledger.',
+    },
+    {
+      category: 'billing',
+      title: 'Receipt requested',
+      description: 'Please share the maintenance receipt for the recent payment linked to {unitCode}.',
+    },
+  ],
+  security: [
+    {
+      category: 'security',
+      title: 'Visitor entry issue',
+      description: 'There was an issue with visitor entry for {unitCode}. Please review the guard desk update.',
+    },
+    {
+      category: 'security',
+      title: 'Access not working',
+      description: 'Access for {unitCode} is not working properly. Please help restore entry access.',
+    },
+    {
+      category: 'security',
+      title: 'Suspicious activity report',
+      description: 'Please review a security concern reported near {unitCode} and update me after checking.',
+    },
+  ],
+};
+
+function normalizeComplaintTitle(title: string) {
+  return title.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function getComplaintTemplateDescription(
+  category: ComplaintCategory,
+  title: string,
+  description: string | undefined,
+  unitCode: string,
+) {
+  const trimmedDescription = description?.trim();
+
+  if (trimmedDescription) {
+    return trimmedDescription.replace(/\{unitCode\}/g, unitCode);
+  }
+
+  const matchingDefault = defaultComplaintTemplates[category].find(
+    (template) => normalizeComplaintTitle(template.title) === normalizeComplaintTitle(title),
+  );
+
+  if (matchingDefault) {
+    return matchingDefault.description.replace(/\{unitCode\}/g, unitCode);
+  }
+
+  return `Please review this ${humanizeComplaintCategory(category).toLowerCase()} issue for ${unitCode} and share the next step.`;
+}
+
+function getComplaintTemplatesForSociety(
+  data: SeedData,
+  societyId: string,
+  category: ComplaintCategory,
+  unitCode: string,
+) {
+  const rankedTemplates = new Map<
+    string,
+    { template: ComplaintTemplate; count: number; latestCreatedAt: string }
+  >();
+
+  data.complaints
+    .filter((complaint) => complaint.societyId === societyId && complaint.category === category)
+    .forEach((complaint) => {
+      const normalizedTitle = normalizeComplaintTitle(complaint.title);
+
+      if (!normalizedTitle) {
+        return;
+      }
+
+      const nextTemplate: ComplaintTemplate = {
+        category,
+        title: complaint.title.trim(),
+        description: getComplaintTemplateDescription(
+          category,
+          complaint.title,
+          complaint.description,
+          unitCode,
+        ),
+      };
+      const existingTemplate = rankedTemplates.get(normalizedTitle);
+
+      if (!existingTemplate) {
+        rankedTemplates.set(normalizedTitle, {
+          template: nextTemplate,
+          count: 1,
+          latestCreatedAt: complaint.createdAt,
+        });
+        return;
+      }
+
+      existingTemplate.count += 1;
+
+      if (complaint.createdAt.localeCompare(existingTemplate.latestCreatedAt) > 0) {
+        existingTemplate.template = nextTemplate;
+        existingTemplate.latestCreatedAt = complaint.createdAt;
+      }
+    });
+
+  const defaultTemplates = defaultComplaintTemplates[category].map((template) => ({
+    ...template,
+    description: template.description.replace(/\{unitCode\}/g, unitCode),
+  }));
+  const mergedTemplates: ComplaintTemplate[] = [];
+  const seenTitles = new Set<string>();
+
+  const commonTemplates = [...rankedTemplates.values()]
+    .sort(
+      (left, right) =>
+        right.count - left.count || right.latestCreatedAt.localeCompare(left.latestCreatedAt),
+    )
+    .map((entry) => entry.template);
+
+  for (const template of [...commonTemplates, ...defaultTemplates]) {
+    const normalizedTitle = normalizeComplaintTitle(template.title);
+
+    if (!normalizedTitle || seenTitles.has(normalizedTitle)) {
+      continue;
+    }
+
+    seenTitles.add(normalizedTitle);
+    mergedTemplates.push(template);
+  }
+
+  return mergedTemplates.slice(0, 6);
+}
 
 export function ResidentShell() {
   const { state, actions } = useApp();
@@ -111,7 +313,12 @@ export function ResidentShell() {
         </View>
         <View style={styles.metricGrid}>
           <MetricCard label="Outstanding dues" value={formatCurrency(overview.totalDue)} tone="accent" />
-          <MetricCard label="Unread notices" value={String(overview.unreadAnnouncements.length)} tone="blue" />
+          <MetricCard
+            label="Unread notices"
+            value={String(overview.unreadAnnouncements.length)}
+            tone="blue"
+            onPress={() => setActiveTab('notices')}
+          />
           <MetricCard
             label="Open tickets"
             value={String(overview.myComplaints.filter((item) => item.status !== 'resolved').length)}
@@ -201,10 +408,20 @@ function ResidentBilling({ societyId, userId }: { societyId: string; userId: str
   const overview = getResidentOverview(state.data, userId, societyId);
   const paymentHistory = getPaymentsForUserSociety(state.data, userId, societyId);
   const reminders = getPaymentRemindersForUser(state.data, userId, societyId);
+  const plan = state.data.maintenancePlans.find((item) => item.societyId === societyId);
+  const society = getSelectedSociety(state.data, societyId);
+  const membership = getMembershipForSociety(state.data, userId, societyId);
+  const residentUnits = getUnitsForSociety(state.data, societyId).filter((unit) => membership?.unitIds.includes(unit.id));
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(overview.outstandingInvoices[0]?.id ?? null);
-  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('upi');
-  const [paidAt, setPaidAt] = useState(nowDateTimeInputValue());
-  const [referenceNote, setReferenceNote] = useState('');
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
+  const [manualPaidAt, setManualPaidAt] = useState(nowDateTimeInputValue());
+  const [manualReferenceNote, setManualReferenceNote] = useState('');
+  const [upiPaidAt, setUpiPaidAt] = useState(nowDateTimeInputValue());
+  const [upiReferenceNote, setUpiReferenceNote] = useState('');
+  const [upiProofImageDataUrl, setUpiProofImageDataUrl] = useState('');
+  const [upiHelperText, setUpiHelperText] = useState('');
+  const [receiptActionMessage, setReceiptActionMessage] = useState('');
+  const hasUpiSetup = Boolean(plan?.upiId || plan?.upiMobileNumber || plan?.upiQrCodeDataUrl);
 
   const pendingInvoiceIds = new Set(
     paymentHistory
@@ -215,6 +432,17 @@ function ResidentBilling({ societyId, userId }: { societyId: string; userId: str
     ?? overview.outstandingInvoices.find((invoice) => !pendingInvoiceIds.has(invoice.id))
     ?? overview.outstandingInvoices[0]
     ?? null;
+  const upiPayeeName = plan?.upiPayeeName?.trim() || society?.name || 'Society billing';
+  const selectedInvoiceUnit = selectedInvoice
+    ? state.data.units.find((unit) => unit.id === selectedInvoice.unitId)
+    : undefined;
+  const residentNumber = selectedInvoiceUnit?.code || residentUnits[0]?.code || '';
+  const receiverNote = [society?.name || 'Society', 'maintenance', residentNumber || null]
+    .filter(Boolean)
+    .join(' - ');
+  const invoiceNote = [society?.name || 'Society', 'maintenance', residentNumber || null, selectedInvoice?.periodLabel || null]
+    .filter(Boolean)
+    .join(' - ');
 
   async function handleSubmitPayment() {
     if (!selectedInvoice) {
@@ -225,16 +453,73 @@ function ResidentBilling({ societyId, userId }: { societyId: string; userId: str
       invoiceId: selectedInvoice.id,
       amountInr: String(selectedInvoice.amountInr),
       method: paymentMethod,
-      paidAt,
-      referenceNote,
+      paidAt: manualPaidAt,
+      referenceNote: manualReferenceNote,
     });
 
     if (saved) {
-      setReferenceNote('');
-      setPaidAt(nowDateTimeInputValue());
+      setManualReferenceNote('');
+      setManualPaidAt(nowDateTimeInputValue());
       const nextInvoice = overview.outstandingInvoices.find((invoice) => invoice.id !== selectedInvoice.id && !pendingInvoiceIds.has(invoice.id));
       setSelectedInvoiceId(nextInvoice?.id ?? null);
     }
+  }
+
+  async function handleConfirmUpiPayment() {
+    if (!selectedInvoice) {
+      return;
+    }
+
+    const saved = await actions.submitResidentPayment(societyId, {
+      invoiceId: selectedInvoice.id,
+      amountInr: String(selectedInvoice.amountInr),
+      method: 'upi',
+      paidAt: upiPaidAt,
+      referenceNote: upiReferenceNote,
+      proofImageDataUrl: upiProofImageDataUrl,
+    });
+
+    if (saved) {
+      setUpiReferenceNote('');
+      setUpiPaidAt(nowDateTimeInputValue());
+      setUpiProofImageDataUrl('');
+      setUpiHelperText('');
+      const nextInvoice = overview.outstandingInvoices.find((invoice) => invoice.id !== selectedInvoice.id && !pendingInvoiceIds.has(invoice.id));
+      setSelectedInvoiceId(nextInvoice?.id ?? null);
+    }
+  }
+
+  async function handleUpiProofUpload() {
+    try {
+      const selectedImage = await pickWebImageAsDataUrl();
+
+      if (!selectedImage) {
+        return;
+      }
+
+      setUpiProofImageDataUrl(selectedImage);
+      setUpiHelperText('Payment screenshot selected. Share it with the admin desk after the transfer.');
+    } catch (error) {
+      setUpiHelperText(error instanceof Error ? error.message : 'Could not load the payment screenshot.');
+    }
+  }
+
+  async function handleOpenReceiptPdf(paymentId: string) {
+    setReceiptActionMessage('');
+    const receipt = buildMaintenanceReceiptDetails(state.data, paymentId);
+
+    if (!receipt) {
+      setReceiptActionMessage('Receipt details are not available for this payment yet.');
+      return;
+    }
+
+    const opened = await openMaintenanceReceiptPdf(receipt);
+
+    setReceiptActionMessage(
+      opened
+        ? `PDF-ready receipt opened for ${receipt.periodLabel}.`
+        : 'Could not open the PDF receipt on this device.',
+    );
   }
 
   return (
@@ -242,7 +527,7 @@ function ResidentBilling({ societyId, userId }: { societyId: string; userId: str
       <SurfaceCard>
         <SectionHeader
           title="Maintenance billing"
-          description="Flag a maintenance payment here. The admin billing desk reviews it and updates the central ledger for the whole society."
+          description="Pay using the society QR, UPI ID, or payment mobile number, or use the manual review flow for cash and offline transfers."
         />
         <View style={styles.metricGrid}>
           <MetricCard label="Outstanding dues" value={formatCurrency(overview.totalDue)} tone="accent" />
@@ -259,7 +544,11 @@ function ResidentBilling({ societyId, userId }: { societyId: string; userId: str
               <Text style={styles.compactTitle}>Reminder from {sentBy?.name ?? 'Admin desk'}</Text>
               <Caption>{reminder.message}</Caption>
               <Caption>Units: {units.map((unit) => unit.code).join(', ')}</Caption>
-              <Caption>Invoices: {invoices.map((invoice) => invoice.periodLabel).join(', ')}</Caption>
+              <Caption>
+                Invoices: {invoices.length > 0
+                  ? invoices.map((invoice) => invoice.periodLabel).join(', ')
+                  : 'Current maintenance notice'}
+              </Caption>
               <Caption>Sent on {formatLongDate(reminder.sentAt)}</Caption>
             </View>
           ))}
@@ -267,47 +556,160 @@ function ResidentBilling({ societyId, userId }: { societyId: string; userId: str
       ) : null}
 
       <SurfaceCard>
-        <SectionHeader title="Flag payment for review" description="Pick an unpaid invoice, record how you paid, and send it to the chairman for confirmation." />
+        <SectionHeader
+          title="Society payment details"
+          description="Use these society payment details in GPay, PhonePe, Paytm, or any other UPI app. After you pay, share the UTR and screenshot below so the admin desk can verify it."
+        />
+        {hasUpiSetup ? (
+          <View style={styles.inlineSection}>
+            <Text style={styles.compactTitle}>Pay to the society account</Text>
+            <Caption>Receiver name: {upiPayeeName}</Caption>
+            {plan?.upiId ? <Caption>UPI ID: {plan.upiId}</Caption> : null}
+            {plan?.upiMobileNumber ? <Caption>Payment mobile number: {plan.upiMobileNumber}</Caption> : null}
+            {residentNumber ? <Caption>Your resident / unit number: {residentNumber}</Caption> : null}
+            <Caption>Suggested payment note: {receiverNote}</Caption>
+            {plan?.upiQrCodeDataUrl ? (
+              <View style={styles.qrSection}>
+                <Text style={styles.compactTitle}>Scan QR to pay</Text>
+                <Caption>Open your UPI app and scan this QR code to pay the maintenance bill.</Caption>
+                <View style={styles.qrCard}>
+                  <Image source={{ uri: plan?.upiQrCodeDataUrl }} style={styles.qrImage} />
+                </View>
+              </View>
+            ) : (
+              <Caption>The admin has not uploaded a QR image yet, so please use the UPI ID or mobile number above in your UPI app.</Caption>
+            )}
+
+            {overview.outstandingInvoices.length > 0 ? (
+              <>
+                <View style={styles.inlineSection}>
+                  <Text style={styles.compactTitle}>Select unpaid invoice</Text>
+                  <Caption>Choose the pending maintenance bill you are paying so the proof reaches the correct invoice.</Caption>
+                  <View style={styles.choiceRow}>
+                    {overview.outstandingInvoices.map((invoice) => {
+                      const invoiceLabel = `${invoice.periodLabel} - ${formatCurrency(invoice.amountInr)}`;
+                      return (
+                        <ChoiceChip
+                          key={invoice.id}
+                          label={pendingInvoiceIds.has(invoice.id) ? `${invoiceLabel} flagged` : invoiceLabel}
+                          selected={selectedInvoice?.id === invoice.id}
+                          onPress={() => setSelectedInvoiceId(invoice.id)}
+                        />
+                      );
+                    })}
+                  </View>
+                </View>
+                {selectedInvoice ? (
+                  <View style={styles.inlineSection}>
+                    <Text style={styles.compactTitle}>Payment reference for this invoice</Text>
+                    <Caption>Amount to pay: {formatCurrency(selectedInvoice.amountInr)}</Caption>
+                    <Caption>Billing period: {selectedInvoice.periodLabel}</Caption>
+                    <Caption>Use this note while paying if your UPI app supports remarks: {invoiceNote}</Caption>
+                    {pendingInvoiceIds.has(selectedInvoice.id) ? (
+                      <Caption>A payment update is already pending review for this invoice.</Caption>
+                    ) : null}
+                  </View>
+                ) : null}
+                {selectedInvoice ? (
+                  <>
+                    <View style={styles.inlineSection}>
+                      <Text style={styles.compactTitle}>Share your payment confirmation</Text>
+                      <Caption>After you complete the payment in your UPI app, add the UTR or note and upload the payment screenshot here.</Caption>
+                    </View>
+                    <View style={styles.formGrid}>
+                      <View style={styles.formField}>
+                        <InputField label="Paid on" value={upiPaidAt} onChangeText={setUpiPaidAt} placeholder="2026-03-20T10:30" />
+                      </View>
+                      <View style={styles.formField}>
+                        <InputField
+                          label="UPI reference / note"
+                          value={upiReferenceNote}
+                          onChangeText={setUpiReferenceNote}
+                          placeholder="UPI ref no. or note"
+                        />
+                      </View>
+                    </View>
+                    <View style={styles.inlineSection}>
+                      <Text style={styles.compactTitle}>Payment proof</Text>
+                      <Caption>Upload the payment screenshot or UPI success page so the admin can verify it quickly.</Caption>
+                      <View style={styles.heroActions}>
+                        <ActionButton
+                          label={upiProofImageDataUrl ? 'Replace payment screenshot' : 'Upload payment screenshot'}
+                          onPress={handleUpiProofUpload}
+                          variant="secondary"
+                          disabled={state.isSyncing}
+                        />
+                        {upiProofImageDataUrl ? (
+                          <ActionButton
+                            label="Remove screenshot"
+                            onPress={() => {
+                              setUpiProofImageDataUrl('');
+                              setUpiHelperText('Payment screenshot removed.');
+                            }}
+                            variant="secondary"
+                            disabled={state.isSyncing}
+                          />
+                        ) : null}
+                      </View>
+                      {Platform.OS !== 'web' ? (
+                        <Caption>Screenshot upload is available from the web workspace right now.</Caption>
+                      ) : null}
+                      {upiProofImageDataUrl ? (
+                        <View style={styles.proofCard}>
+                          <Image source={{ uri: upiProofImageDataUrl }} style={styles.proofImage} />
+                        </View>
+                      ) : null}
+                    </View>
+                    <ActionButton
+                      label={state.isSyncing ? 'Sharing...' : 'Send payment proof for verification'}
+                      onPress={handleConfirmUpiPayment}
+                      disabled={state.isSyncing || pendingInvoiceIds.has(selectedInvoice.id)}
+                    />
+                    {upiHelperText ? <Caption>{upiHelperText}</Caption> : null}
+                  </>
+                ) : null}
+              </>
+            ) : (
+              <Caption>No unpaid maintenance invoices are linked to your units right now, but the society payment details remain visible here.</Caption>
+            )}
+          </View>
+        ) : (
+          <Caption>The admin has not configured a society UPI receiver yet. Use the manual payment review flow below for now.</Caption>
+        )}
+      </SurfaceCard>
+
+      <SurfaceCard>
+        <SectionHeader
+          title="Flag cash or offline payment for review"
+          description="Use this when you paid in cash, by cheque, netbanking, or any transfer that still needs admin confirmation."
+        />
         {overview.outstandingInvoices.length > 0 ? (
           <>
             <View style={styles.choiceRow}>
-              {overview.outstandingInvoices.map((invoice) => {
-                const invoiceLabel = `${invoice.periodLabel} - ${formatCurrency(invoice.amountInr)}`;
-                return (
-                  <ChoiceChip
-                    key={invoice.id}
-                    label={pendingInvoiceIds.has(invoice.id) ? `${invoiceLabel} flagged` : invoiceLabel}
-                    selected={selectedInvoice?.id === invoice.id}
-                    onPress={() => setSelectedInvoiceId(invoice.id)}
-                  />
-                );
-              })}
+              {paymentMethods.map((option) => (
+                <ChoiceChip
+                  key={option.key}
+                  label={option.label}
+                  selected={paymentMethod === option.key}
+                  onPress={() => setPaymentMethod(option.key)}
+                />
+              ))}
             </View>
             {selectedInvoice ? (
               <View style={styles.inlineSection}>
                 <Caption>
-                  The exact invoice amount of {formatCurrency(selectedInvoice.amountInr)} will be sent for {selectedInvoice.periodLabel}.
+                  This sends {formatCurrency(selectedInvoice.amountInr)} for {selectedInvoice.periodLabel} to the chairman for review.
                 </Caption>
-                <View style={styles.choiceRow}>
-                  {paymentMethods.map((option) => (
-                    <ChoiceChip
-                      key={option.key}
-                      label={option.label}
-                      selected={paymentMethod === option.key}
-                      onPress={() => setPaymentMethod(option.key)}
-                    />
-                  ))}
-                </View>
                 <View style={styles.formGrid}>
                   <View style={styles.formField}>
-                    <InputField label="Paid on" value={paidAt} onChangeText={setPaidAt} placeholder="2026-03-20T10:30" />
+                    <InputField label="Paid on" value={manualPaidAt} onChangeText={setManualPaidAt} placeholder="2026-03-20T10:30" />
                   </View>
                   <View style={styles.formField}>
                     <InputField
                       label="Reference / note"
-                      value={referenceNote}
-                      onChangeText={setReferenceNote}
-                      placeholder="UPI ref, cheque no, or bank note"
+                      value={manualReferenceNote}
+                      onChangeText={setManualReferenceNote}
+                      placeholder="Cash note, UPI ref, cheque no, or bank note"
                     />
                   </View>
                 </View>
@@ -351,19 +753,38 @@ function ResidentBilling({ societyId, userId }: { societyId: string; userId: str
       )}
 
       <SectionHeader title="Payment history" />
-      {paymentHistory.length > 0 ? paymentHistory.map(({ payment, invoice, unit, receipt, reviewedBy }) => (
-        <SurfaceCard key={payment.id}>
-          <View style={styles.rowBetween}>
-            <Text style={styles.cardTitle}>{invoice.periodLabel}</Text>
-            <Pill label={humanizePaymentStatus(payment.status)} tone={getPaymentStatusTone(payment.status)} />
-          </View>
-          <Caption>{unit?.code ?? 'Unit'} - {formatCurrency(payment.amountInr)} via {humanizePaymentMethod(payment.method)}</Caption>
-          <Caption>Paid on {formatLongDate(payment.paidAt)}</Caption>
-          {payment.referenceNote ? <Caption>Reference: {payment.referenceNote}</Caption> : null}
-          {receipt ? <Caption>Receipt: {receipt.number}</Caption> : null}
-          {reviewedBy && payment.reviewedAt ? <Caption>Reviewed by {reviewedBy.name} on {formatLongDate(payment.reviewedAt)}</Caption> : null}
-        </SurfaceCard>
-      )) : (
+      {receiptActionMessage ? <Caption>{receiptActionMessage}</Caption> : null}
+      {paymentHistory.length > 0 ? paymentHistory.map(({ payment, invoice, unit, receipt, reviewedBy }) => {
+        const receiptDetails = receipt ? buildMaintenanceReceiptDetails(state.data, payment.id) : null;
+
+        return (
+          <SurfaceCard key={payment.id}>
+            <View style={styles.rowBetween}>
+              <Text style={styles.cardTitle}>{invoice.periodLabel}</Text>
+              <Pill label={humanizePaymentStatus(payment.status)} tone={getPaymentStatusTone(payment.status)} />
+            </View>
+            <Caption>{unit?.code ?? 'Unit'} - {formatCurrency(payment.amountInr)} via {humanizePaymentMethod(payment.method)}</Caption>
+            <Caption>Paid on {formatLongDate(payment.paidAt)}</Caption>
+            {payment.referenceNote ? <Caption>Reference: {payment.referenceNote}</Caption> : null}
+            {payment.proofImageDataUrl ? (
+              <View style={styles.proofCard}>
+                <Image source={{ uri: payment.proofImageDataUrl }} style={styles.proofImage} />
+              </View>
+            ) : null}
+            {receiptDetails ? (
+              <MaintenanceReceiptCard
+                receipt={receiptDetails}
+                onOpenPdf={() => handleOpenReceiptPdf(payment.id)}
+              />
+            ) : null}
+            {!receiptDetails && receipt ? <Caption>Receipt: {receipt.number}</Caption> : null}
+            {!receipt && payment.status === 'captured' ? (
+              <Caption>The receipt will appear here once it is synced from the billing ledger.</Caption>
+            ) : null}
+            {reviewedBy && payment.reviewedAt ? <Caption>Reviewed by {reviewedBy.name} on {formatLongDate(payment.reviewedAt)}</Caption> : null}
+          </SurfaceCard>
+        );
+      }) : (
         <SurfaceCard><Caption>No payment history yet.</Caption></SurfaceCard>
       )}
     </>
@@ -371,8 +792,9 @@ function ResidentBilling({ societyId, userId }: { societyId: string; userId: str
 }
 
 function ResidentNotices({ societyId, userId }: { societyId: string; userId: string }) {
-  const { state } = useApp();
-  const announcements = getAnnouncementsForSociety(state.data, societyId);
+  const { state, actions } = useApp();
+  const membership = getMembershipForSociety(state.data, userId, societyId);
+  const announcements = getAnnouncementsForSociety(state.data, societyId, membership?.roles);
   const rules = getRulesForSociety(state.data, societyId);
 
   return (
@@ -381,18 +803,32 @@ function ResidentNotices({ societyId, userId }: { societyId: string; userId: str
         title="Announcements"
         description="Important society communication should support audience targeting, read receipts, and priority labels."
       />
-      {announcements.map((announcement) => (
-        <SurfaceCard key={announcement.id}>
-          <View style={styles.rowBetween}>
-            <Text style={styles.cardTitle}>{announcement.title}</Text>
-            <Pill label={announcement.priority} tone={announcement.priority === 'high' ? 'warning' : 'primary'} />
-          </View>
-          <Caption>{announcement.body}</Caption>
-          <Caption>
-            {announcement.readByUserIds.includes(userId) ? 'Read' : 'Unread'} · {formatShortDate(announcement.createdAt)}
-          </Caption>
-        </SurfaceCard>
-      ))}
+      {announcements.map((announcement) => {
+        const isUnread = !announcement.readByUserIds.includes(userId);
+
+        return (
+          <Pressable
+            key={announcement.id}
+            onPress={() => {
+              if (isUnread && !state.isSyncing) {
+                void actions.markAnnouncementRead(societyId, announcement.id);
+              }
+            }}
+            style={({ pressed }) => [
+              styles.interactiveCard,
+              isUnread ? styles.noticeUnreadCard : null,
+              pressed ? styles.interactiveCardPressed : null,
+            ]}
+          >
+            <View style={styles.rowBetween}>
+              <Text style={styles.cardTitle}>{announcement.title}</Text>
+              <Pill label={announcement.priority} tone={announcement.priority === 'high' ? 'warning' : 'primary'} />
+            </View>
+            <Caption>{announcement.body}</Caption>
+            <Caption>{isUnread ? 'Unread - tap to mark read' : 'Read'} · {formatShortDate(announcement.createdAt)}</Caption>
+          </Pressable>
+        );
+      })}
 
       <SectionHeader title="Rules and documents" />
       {rules.map((rule) => (
@@ -568,6 +1004,13 @@ function ResidentHelpdesk({ societyId, userId }: { societyId: string; userId: st
   const [category, setCategory] = useState<ComplaintCategory>('general');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
+  const selectedUnit = userUnits.find((unit) => unit.id === selectedUnitId) ?? userUnits[0] ?? null;
+  const complaintTemplates = getComplaintTemplatesForSociety(
+    state.data,
+    societyId,
+    category,
+    selectedUnit?.code ?? 'your unit',
+  );
 
   async function handleRaiseComplaint() {
     if (!selectedUnitId) {
@@ -617,6 +1060,20 @@ function ResidentHelpdesk({ societyId, userId }: { societyId: string; userId: st
               />
             ))}
           </View>
+          <Caption>Choose a common complaint template to prefill the ticket, then edit anything you want.</Caption>
+          <View style={styles.choiceRow}>
+            {complaintTemplates.map((template) => (
+              <ChoiceChip
+                key={`${template.category}-${template.title}`}
+                label={template.title}
+                selected={normalizeComplaintTitle(title) === normalizeComplaintTitle(template.title)}
+                onPress={() => {
+                  setTitle(template.title);
+                  setDescription(template.description);
+                }}
+              />
+            ))}
+          </View>
           <View style={styles.formGrid}>
             <View style={styles.formField}>
               <InputField label="Ticket title" value={title} onChangeText={setTitle} placeholder="Leakage near kitchen sink" />
@@ -660,7 +1117,9 @@ function ResidentHelpdesk({ societyId, userId }: { societyId: string; userId: st
 
 function ResidentProfile({ societyId, userId }: { societyId: string; userId: string }) {
   const { state, actions } = useApp();
+  const currentUser = getCurrentUser(state.data, userId);
   const membership = getMembershipForSociety(state.data, userId, societyId);
+  const residenceProfile = getResidenceProfileForUserSociety(state.data, userId, societyId);
   const units = getUnitsForSociety(state.data, societyId).filter((unit) => membership?.unitIds.includes(unit.id));
   const allowedUnitIds = new Set(units.map((unit) => unit.id));
   const staff = getStaffVerificationDirectory(state.data, societyId).filter(
@@ -668,6 +1127,13 @@ function ResidentProfile({ societyId, userId }: { societyId: string; userId: str
       staff.requestedByUserId === userId || employerUnits.some((unit) => allowedUnitIds.has(unit.id)),
   );
   const canSubmitStaffRequest = membership?.roles.some((role) => role === 'owner' || role === 'tenant') ?? false;
+  const residentType =
+    residenceProfile?.residentType ??
+    (membership?.roles.includes('committee')
+      ? 'committee'
+      : membership?.roles.includes('tenant')
+        ? 'tenant'
+        : 'owner');
   const [staffName, setStaffName] = useState('');
   const [staffPhone, setStaffPhone] = useState('');
   const [staffCategory, setStaffCategory] = useState<'domesticHelp' | 'cook' | 'driver' | 'vendor'>('domesticHelp');
@@ -676,6 +1142,50 @@ function ResidentProfile({ societyId, userId }: { societyId: string; userId: str
   const [selectedUnitCodes, setSelectedUnitCodes] = useState<string[]>(() =>
     units.length === 1 ? [units[0].code] : [],
   );
+  const [profileFullName, setProfileFullName] = useState(residenceProfile?.fullName ?? currentUser?.name ?? '');
+  const [profileEmail, setProfileEmail] = useState(residenceProfile?.email ?? currentUser?.email ?? '');
+  const [profileAlternatePhone, setProfileAlternatePhone] = useState(residenceProfile?.alternatePhone ?? '');
+  const [profileEmergencyContactName, setProfileEmergencyContactName] = useState(
+    residenceProfile?.emergencyContactName ?? '',
+  );
+  const [profileEmergencyContactPhone, setProfileEmergencyContactPhone] = useState(
+    residenceProfile?.emergencyContactPhone ?? '',
+  );
+  const [profileMoveInDate, setProfileMoveInDate] = useState(
+    residenceProfile?.moveInDate ?? todayString(),
+  );
+  const [profileConsent, setProfileConsent] = useState(Boolean(residenceProfile?.dataProtectionConsentAt));
+  const [rentAgreementFileName, setRentAgreementFileName] = useState(
+    residenceProfile?.rentAgreementFileName ?? '',
+  );
+  const [rentAgreementDataUrl, setRentAgreementDataUrl] = useState(
+    residenceProfile?.rentAgreementDataUrl ?? '',
+  );
+  const [profileActionMessage, setProfileActionMessage] = useState('');
+
+  useEffect(() => {
+    setProfileFullName(residenceProfile?.fullName ?? currentUser?.name ?? '');
+    setProfileEmail(residenceProfile?.email ?? currentUser?.email ?? '');
+    setProfileAlternatePhone(residenceProfile?.alternatePhone ?? '');
+    setProfileEmergencyContactName(residenceProfile?.emergencyContactName ?? '');
+    setProfileEmergencyContactPhone(residenceProfile?.emergencyContactPhone ?? '');
+    setProfileMoveInDate(residenceProfile?.moveInDate ?? todayString());
+    setProfileConsent(Boolean(residenceProfile?.dataProtectionConsentAt));
+    setRentAgreementFileName(residenceProfile?.rentAgreementFileName ?? '');
+    setRentAgreementDataUrl(residenceProfile?.rentAgreementDataUrl ?? '');
+  }, [
+    currentUser?.email,
+    currentUser?.name,
+    residenceProfile?.alternatePhone,
+    residenceProfile?.dataProtectionConsentAt,
+    residenceProfile?.email,
+    residenceProfile?.emergencyContactName,
+    residenceProfile?.emergencyContactPhone,
+    residenceProfile?.fullName,
+    residenceProfile?.moveInDate,
+    residenceProfile?.rentAgreementDataUrl,
+    residenceProfile?.rentAgreementFileName,
+  ]);
 
   function toggleUnitCode(unitCode: string) {
     setSelectedUnitCodes((currentSelection) =>
@@ -705,6 +1215,47 @@ function ResidentProfile({ societyId, userId }: { societyId: string; userId: str
     }
   }
 
+  async function handleUploadRentAgreement() {
+    try {
+      const file = await pickWebFileAsDataUrl({
+        accept: 'application/pdf,image/png,image/jpeg,image/webp',
+        maxSizeInBytes: 4 * 1024 * 1024,
+        unsupportedMessage: 'Rent agreement upload is available from the web workspace right now.',
+        tooLargeMessage: 'Choose a rent agreement file smaller than 4 MB.',
+        readErrorMessage: 'Could not read the selected rent agreement file.',
+      });
+
+      if (!file) {
+        return;
+      }
+
+      setRentAgreementFileName(file.fileName);
+      setRentAgreementDataUrl(file.dataUrl);
+      setProfileActionMessage(`${file.fileName} is ready to save.`);
+    } catch (error) {
+      setProfileActionMessage(error instanceof Error ? error.message : 'Could not upload the rent agreement.');
+    }
+  }
+
+  async function handleSaveResidenceProfile() {
+    const saved = await actions.updateResidenceProfile(societyId, {
+      residentType,
+      fullName: profileFullName,
+      email: profileEmail,
+      alternatePhone: profileAlternatePhone,
+      emergencyContactName: profileEmergencyContactName,
+      emergencyContactPhone: profileEmergencyContactPhone,
+      moveInDate: profileMoveInDate,
+      dataProtectionConsent: profileConsent,
+      rentAgreementFileName: residentType === 'tenant' ? rentAgreementFileName : undefined,
+      rentAgreementDataUrl: residentType === 'tenant' ? rentAgreementDataUrl : undefined,
+    });
+
+    if (saved) {
+      setProfileActionMessage('Residence profile saved.');
+    }
+  }
+
   return (
     <>
       <SectionHeader title="Membership and household" />
@@ -712,8 +1263,135 @@ function ResidentProfile({ societyId, userId }: { societyId: string; userId: str
         <Text style={styles.cardTitle}>Roles in this society</Text>
         <View style={styles.pillRow}>
           {membership?.roles.map((role) => <Pill key={role} label={humanizeRole(role)} tone="primary" />)}
+          <Pill
+            label={residentType === 'committee' ? 'Committee profile' : residentType === 'tenant' ? 'Tenant profile' : 'Owner profile'}
+            tone={residentType === 'tenant' ? 'accent' : 'primary'}
+          />
         </View>
         <Caption>Unit access: {units.map((unit) => unit.code).join(', ') || 'Not assigned yet'}</Caption>
+      </SurfaceCard>
+
+      <SurfaceCard>
+        <Text style={styles.cardTitle}>Residence profile and verification</Text>
+        <Caption>
+          Keep only the minimum society-verification details here. This section carries your resident flag and tenant document status into the workspace.
+        </Caption>
+        <View style={styles.inlineSection}>
+          <View style={styles.pillRow}>
+            <Pill label={`Verified mobile ${currentUser?.phone ?? ''}`.trim()} tone="primary" />
+            {residentType === 'tenant' ? (
+              <Pill
+                label={rentAgreementFileName ? 'Rent agreement uploaded' : 'Rent agreement pending'}
+                tone={rentAgreementFileName ? 'success' : 'warning'}
+              />
+            ) : null}
+          </View>
+          <View style={styles.formGrid}>
+            <View style={styles.formField}>
+              <InputField
+                label="Resident full name"
+                value={profileFullName}
+                onChangeText={setProfileFullName}
+                placeholder="Enter full name"
+                autoCapitalize="words"
+              />
+            </View>
+            <View style={styles.formField}>
+              <InputField
+                label="Move-in date"
+                value={profileMoveInDate}
+                onChangeText={setProfileMoveInDate}
+                placeholder="YYYY-MM-DD"
+                autoCapitalize="none"
+                nativeType="date"
+              />
+            </View>
+            <View style={styles.formField}>
+              <InputField
+                label="Email for notices (optional)"
+                value={profileEmail}
+                onChangeText={setProfileEmail}
+                placeholder="name@example.com"
+                keyboardType="email-address"
+                autoCapitalize="none"
+                nativeType="email"
+              />
+            </View>
+            <View style={styles.formField}>
+              <InputField
+                label="Alternate mobile (optional)"
+                value={profileAlternatePhone}
+                onChangeText={setProfileAlternatePhone}
+                placeholder="+91 98765 43210"
+                keyboardType="phone-pad"
+              />
+            </View>
+            <View style={styles.formField}>
+              <InputField
+                label="Emergency contact name (optional)"
+                value={profileEmergencyContactName}
+                onChangeText={setProfileEmergencyContactName}
+                placeholder="Family contact"
+                autoCapitalize="words"
+              />
+            </View>
+            <View style={styles.formField}>
+              <InputField
+                label="Emergency contact mobile (optional)"
+                value={profileEmergencyContactPhone}
+                onChangeText={setProfileEmergencyContactPhone}
+                placeholder="+91 98980 55555"
+                keyboardType="phone-pad"
+              />
+            </View>
+          </View>
+          <Text style={styles.compactTitle}>Privacy confirmation</Text>
+          <Caption>
+            These details should only be used for society access, occupancy verification, emergency contact, and tenancy review.
+          </Caption>
+          <View style={styles.choiceRow}>
+            <ChoiceChip
+              label="Privacy notice accepted"
+              selected={profileConsent}
+              onPress={() => setProfileConsent((currentValue) => !currentValue)}
+            />
+          </View>
+          {residentType === 'tenant' ? (
+            <View style={styles.inlineSection}>
+              <Text style={styles.compactTitle}>Tenant rent agreement</Text>
+              <Caption>Upload or replace the current rent agreement from here whenever it changes.</Caption>
+              <View style={styles.heroActions}>
+                <ActionButton
+                  label={rentAgreementFileName ? 'Replace agreement' : 'Upload agreement'}
+                  onPress={handleUploadRentAgreement}
+                  variant="secondary"
+                />
+                {rentAgreementDataUrl ? (
+                  <ActionButton
+                    label="Open uploaded file"
+                    onPress={() => {
+                      try {
+                        openWebDataUrlInNewTab(rentAgreementDataUrl);
+                      } catch (error) {
+                        setProfileActionMessage(
+                          error instanceof Error ? error.message : 'Could not open the uploaded rent agreement.',
+                        );
+                      }
+                    }}
+                    variant="secondary"
+                  />
+                ) : null}
+              </View>
+              {rentAgreementFileName ? <Caption>Current file: {rentAgreementFileName}</Caption> : null}
+            </View>
+          ) : null}
+          {profileActionMessage ? <Caption>{profileActionMessage}</Caption> : null}
+          <ActionButton
+            label={state.isSyncing ? 'Saving...' : 'Save residence profile'}
+            onPress={handleSaveResidenceProfile}
+            disabled={state.isSyncing || !profileFullName.trim() || !profileMoveInDate || !profileConsent}
+          />
+        </View>
       </SurfaceCard>
 
       <SurfaceCard>
@@ -838,6 +1516,21 @@ const styles = StyleSheet.create({
     color: palette.ink,
     flex: 1,
   },
+  interactiveCard: {
+    backgroundColor: palette.surface,
+    borderRadius: 24,
+    padding: spacing.lg,
+    gap: spacing.sm,
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  interactiveCardPressed: {
+    opacity: 0.92,
+  },
+  noticeUnreadCard: {
+    borderColor: palette.blue,
+    backgroundColor: '#F6FBFF',
+  },
   compactRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -872,6 +1565,37 @@ const styles = StyleSheet.create({
   formField: {
     flexGrow: 1,
     flexBasis: 220,
+  },
+  qrSection: {
+    gap: spacing.sm,
+  },
+  qrCard: {
+    alignSelf: 'flex-start',
+    padding: spacing.sm,
+    borderRadius: 18,
+    backgroundColor: palette.white,
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  qrImage: {
+    width: 220,
+    height: 220,
+    borderRadius: 16,
+    backgroundColor: '#F4F1EB',
+  },
+  proofCard: {
+    alignSelf: 'flex-start',
+    padding: spacing.xs,
+    borderRadius: 18,
+    backgroundColor: palette.white,
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  proofImage: {
+    width: 180,
+    height: 220,
+    borderRadius: 14,
+    backgroundColor: '#F4F1EB',
   },
 });
 
@@ -1034,6 +1758,39 @@ function getComplaintTone(status: 'open' | 'inProgress' | 'resolved') {
     default:
       return 'warning' as const;
   }
+}
+
+async function pickWebImageAsDataUrl() {
+  if (Platform.OS !== 'web' || typeof document === 'undefined') {
+    throw new Error('Payment screenshot upload is available from the web workspace right now.');
+  }
+
+  return new Promise<string | null>((resolve, reject) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/png,image/jpeg,image/webp';
+
+    input.onchange = () => {
+      const file = input.files?.[0];
+
+      if (!file) {
+        resolve(null);
+        return;
+      }
+
+      if (file.size > 2 * 1024 * 1024) {
+        reject(new Error('Choose a payment screenshot smaller than 2 MB.'));
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+      reader.onerror = () => reject(new Error('Could not read the selected payment screenshot.'));
+      reader.readAsDataURL(file);
+    };
+
+    input.click();
+  });
 }
 
 function todayString() {

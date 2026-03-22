@@ -2,6 +2,7 @@ import { createAmenitiesFromSelection, createUnitStructure } from './factories';
 import { SeedData, SocietySetupDraft } from '../types/domain';
 
 export const DEMO_USER_ID = 'user-aarav';
+export const SUPER_USER_ID = 'user-super-admin';
 
 export const amenityLibrary = [
   'Clubhouse Hall',
@@ -23,7 +24,12 @@ export const defaultSetupDraft: SocietySetupDraft = {
   area: '',
   address: '',
   structure: 'apartment',
+  enabledStructures: ['apartment'],
   commercialSpaceType: 'shed',
+  enabledCommercialSpaceTypes: ['shed'],
+  apartmentUnitCount: '48',
+  bungalowUnitCount: '',
+  shedUnitCount: '',
   officeFloorPlan: [{ floorLabel: 'Ground Floor', officeNumbers: '' }],
   totalUnits: '48',
   maintenanceDay: '10',
@@ -61,6 +67,13 @@ function findUnitId(societyId: string, code: string) {
 
 export const seedData: SeedData = {
   users: [
+    {
+      id: SUPER_USER_ID,
+      name: 'Society Super User',
+      phone: '+91 98980 99999',
+      email: 'superuser@societyos.example',
+      avatarInitials: 'SU',
+    },
     {
       id: DEMO_USER_ID,
       name: 'Aarav Mehta',
@@ -173,6 +186,7 @@ export const seedData: SeedData = {
     },
   ],
   joinRequests: [],
+  residenceProfiles: [],
   occupancy: [
     {
       id: 'occupancy-aarav-green',
@@ -307,6 +321,8 @@ export const seedData: SeedData = {
       lateFeeInr: 250,
       calculationMethod: 'fixed',
       receiptPrefix: 'GVA',
+      upiId: 'greenvalley@okicici',
+      upiPayeeName: 'Green Valley Residency',
     },
     {
       id: 'plan-palm-monthly',
@@ -317,6 +333,8 @@ export const seedData: SeedData = {
       lateFeeInr: 200,
       calculationMethod: 'fixed',
       receiptPrefix: 'PMB',
+      upiId: 'palmmeadows@okhdfcbank',
+      upiPayeeName: 'Palm Meadows Business Park',
     },
   ],
   expenseRecords: [

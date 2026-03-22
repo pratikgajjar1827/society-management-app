@@ -1,8 +1,9 @@
-export type SocietyStructure = 'apartment' | 'bungalow' | 'commercial';
+export type SocietyStructureOption = 'apartment' | 'bungalow' | 'commercial';
+export type SocietyStructure = SocietyStructureOption | 'mixed';
 export type CommercialSpaceType = 'shed' | 'office';
 export type AuthChannel = 'sms' | 'email';
 export type AuthIntent = 'signUp' | 'signIn' | 'auto';
-export type AccountRole = 'chairman' | 'owner' | 'tenant';
+export type AccountRole = 'superUser' | 'chairman' | 'owner' | 'tenant';
 export type OnboardingNextStep =
   | 'choosePortal'
   | 'createSociety'
@@ -51,7 +52,12 @@ export interface SocietyWorkspace {
   area: string;
   address: string;
   structure: SocietyStructure;
+  enabledStructures?: SocietyStructureOption[] | null;
   commercialSpaceType?: CommercialSpaceType | null;
+  enabledCommercialSpaceTypes?: CommercialSpaceType[] | null;
+  apartmentUnitCount?: number | null;
+  bungalowUnitCount?: number | null;
+  shedUnitCount?: number | null;
   officeFloorPlan?: OfficeFloorPlanEntry[] | null;
   timezone: string;
   totalUnits: number;
@@ -186,6 +192,11 @@ export interface MaintenancePlan {
   lateFeeInr: number;
   calculationMethod: 'fixed' | 'areaSlab';
   receiptPrefix: string;
+  upiId?: string | null;
+  upiMobileNumber?: string | null;
+  upiPayeeName?: string | null;
+  upiQrCodeDataUrl?: string | null;
+  upiQrPayload?: string | null;
 }
 
 export interface ExpenseRecord {
@@ -221,6 +232,7 @@ export interface Payment {
   status: PaymentStatus;
   submittedByUserId?: string;
   referenceNote?: string;
+  proofImageDataUrl?: string | null;
   reviewedByUserId?: string;
   reviewedAt?: string;
 }
@@ -321,6 +333,25 @@ export interface JoinRequest {
   reviewNote?: string;
 }
 
+export interface ResidenceProfile {
+  id: string;
+  societyId: string;
+  userId: string;
+  residentType: JoinRequestRole;
+  fullName: string;
+  phone: string;
+  email?: string;
+  alternatePhone?: string;
+  emergencyContactName?: string;
+  emergencyContactPhone?: string;
+  moveInDate: string;
+  dataProtectionConsentAt: string;
+  rentAgreementFileName?: string;
+  rentAgreementDataUrl?: string;
+  rentAgreementUploadedAt?: string;
+  updatedAt: string;
+}
+
 export interface SocietySetupDraft {
   societyName: string;
   country: string;
@@ -329,7 +360,12 @@ export interface SocietySetupDraft {
   area: string;
   address: string;
   structure: SocietyStructure;
+  enabledStructures: SocietyStructureOption[];
   commercialSpaceType: CommercialSpaceType;
+  enabledCommercialSpaceTypes: CommercialSpaceType[];
+  apartmentUnitCount: string;
+  bungalowUnitCount: string;
+  shedUnitCount: string;
   officeFloorPlan: OfficeFloorPlanEntry[];
   totalUnits: string;
   maintenanceDay: string;
@@ -358,6 +394,7 @@ export interface SeedData {
   paymentReminders: PaymentReminder[];
   receipts: Receipt[];
   complaints: ComplaintTicket[];
+  residenceProfiles: ResidenceProfile[];
   staffProfiles: StaffProfile[];
   staffAssignments: StaffAssignment[];
   securityGuards: SecurityGuardProfile[];

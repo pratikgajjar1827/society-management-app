@@ -74,7 +74,7 @@ function AppRoot() {
 export default function App() {
   return (
     <AppProvider>
-      <StatusBar style="light" backgroundColor={palette.primary} />
+      <StatusBar style="light" backgroundColor={palette.primaryDark} />
       <AppRoot />
     </AppProvider>
   );
@@ -87,13 +87,13 @@ const styles = StyleSheet.create({
   },
   loadingScreen: {
     flex: 1,
-    backgroundColor: palette.primary,
+    backgroundColor: palette.primaryDark,
     justifyContent: 'center',
     paddingHorizontal: spacing.xxl,
     gap: spacing.md,
   },
   loadingEyebrow: {
-    color: '#DCEBE4',
+    color: '#D6E5F4',
     fontSize: 12,
     fontWeight: '700',
     letterSpacing: 1.5,
@@ -106,34 +106,34 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   loadingBody: {
-    color: '#DCEBE4',
+    color: '#D6E5F4',
     fontSize: 15,
     lineHeight: 23,
   },
   banner: {
-    backgroundColor: '#FFF4D7',
-    borderBottomColor: '#E3C16F',
+    backgroundColor: '#FFF6E0',
+    borderBottomColor: '#E6C981',
     borderBottomWidth: 1,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
   },
   bannerText: {
-    color: '#6F4B00',
+    color: '#775010',
     fontSize: 13,
     lineHeight: 18,
-    fontWeight: '600',
+    fontWeight: '700',
   },
   noticeBanner: {
-    backgroundColor: '#E7F5EE',
-    borderBottomColor: '#8EC3A8',
+    backgroundColor: '#E8F6EF',
+    borderBottomColor: '#A6D7BD',
     borderBottomWidth: 1,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.sm,
   },
   noticeBannerText: {
-    color: '#1F5A3D',
+    color: '#205C40',
     fontSize: 13,
     lineHeight: 18,
-    fontWeight: '600',
+    fontWeight: '700',
   },
 });

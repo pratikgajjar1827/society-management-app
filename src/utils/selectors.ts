@@ -1,11 +1,15 @@
 import {
+  AnnouncementAudience,
+  CommercialSpaceType,
   ComplaintTicket,
   JoinRequest,
   Membership,
   MembershipRole,
+  ResidenceProfile,
   RoleProfile,
   SeedData,
   SocietySetupDraft,
+  SocietyStructureOption,
   SocietyWorkspace,
   UserProfile,
 } from '../types/domain';
@@ -13,6 +17,7 @@ import {
 export type AdminRecommendationTab =
   | 'residents'
   | 'billing'
+  | 'collections'
   | 'amenities'
   | 'helpdesk'
   | 'security'
@@ -73,42 +78,158 @@ export function humanizeProfile(profile: RoleProfile) {
   return profile === 'admin' ? 'Admin view' : 'Resident view';
 }
 
-type StructureDescriptor =
-  | Pick<SocietySetupDraft, 'structure' | 'commercialSpaceType'>
-  | Pick<SocietyWorkspace, 'structure' | 'commercialSpaceType'>;
-
-export function getSocietyStructureLabel(society: StructureDescriptor) {
-  if (society.structure === 'commercial') {
-    return society.commercialSpaceType === 'office' ? 'Commercial office' : 'Commercial shed';
+function doesAnnouncementReachRoles(
+  audience: AnnouncementAudience,
+  roles?: MembershipRole[],
+) {
+  if (!roles) {
+    return true;
   }
 
-  return society.structure === 'apartment' ? 'Apartment' : 'Bungalow';
+  switch (audience) {
+    case 'residents':
+      return roles.some(isResidentRole);
+    case 'committee':
+      return roles.some(isAdminRole);
+    case 'owners':
+      return roles.includes('owner');
+    case 'tenants':
+      return roles.includes('tenant');
+    case 'all':
+    default:
+      return true;
+  }
+}
+
+type StructureDescriptor =
+  | Pick<
+      SocietySetupDraft,
+      'structure' | 'enabledStructures' | 'commercialSpaceType' | 'enabledCommercialSpaceTypes'
+    >
+  | Pick<
+      SocietyWorkspace,
+      'structure' | 'enabledStructures' | 'commercialSpaceType' | 'enabledCommercialSpaceTypes'
+    >;
+
+const structureOptions: SocietyStructureOption[] = ['apartment', 'bungalow', 'commercial'];
+const commercialSpaceTypes: CommercialSpaceType[] = ['shed', 'office'];
+
+function normalizeStructureList(value?: SocietyStructureOption[] | null) {
+  return [...new Set((value ?? []).filter((item): item is SocietyStructureOption => structureOptions.includes(item)))];
+}
+
+function normalizeCommercialSpaceTypeList(value?: CommercialSpaceType[] | null) {
+  return [...new Set((value ?? []).filter((item): item is CommercialSpaceType => commercialSpaceTypes.includes(item)))];
+}
+
+export function getEnabledStructures(society: StructureDescriptor) {
+  const configuredStructures = normalizeStructureList(society.enabledStructures);
+
+  if (configuredStructures.length > 0) {
+    return configuredStructures;
+  }
+
+  return structureOptions.includes(society.structure as SocietyStructureOption)
+    ? [society.structure as SocietyStructureOption]
+    : [];
+}
+
+export function getEnabledCommercialSpaceTypes(society: StructureDescriptor) {
+  const configuredTypes = normalizeCommercialSpaceTypeList(society.enabledCommercialSpaceTypes);
+
+  if (configuredTypes.length > 0) {
+    return configuredTypes;
+  }
+
+  if (!getEnabledStructures(society).includes('commercial')) {
+    return [];
+  }
+
+  return commercialSpaceTypes.includes(society.commercialSpaceType as CommercialSpaceType)
+    ? [society.commercialSpaceType as CommercialSpaceType]
+    : [];
+}
+
+export function societySupportsOfficeSpaces(society: StructureDescriptor) {
+  return getEnabledCommercialSpaceTypes(society).includes('office');
+}
+
+export function getSocietyStructureLabel(society: StructureDescriptor) {
+  const enabledStructures = getEnabledStructures(society);
+  const enabledCommercialTypes = getEnabledCommercialSpaceTypes(society);
+
+  if (enabledStructures.length > 1) {
+    return 'Mixed-use';
+  }
+
+  if (enabledStructures[0] === 'commercial') {
+    if (enabledCommercialTypes.length > 1) {
+      return 'Commercial mixed-use';
+    }
+
+    return enabledCommercialTypes[0] === 'office' ? 'Commercial office' : 'Commercial shed';
+  }
+
+  if (enabledStructures[0] === 'bungalow') {
+    return 'Bungalow';
+  }
+
+  return 'Apartment';
 }
 
 export function getSocietyWorkspaceLabel(society: StructureDescriptor) {
-  if (society.structure === 'commercial') {
-    return society.commercialSpaceType === 'office'
+  const enabledStructures = getEnabledStructures(society);
+  const enabledCommercialTypes = getEnabledCommercialSpaceTypes(society);
+
+  if (enabledStructures.length > 1) {
+    return 'Mixed-use society';
+  }
+
+  if (enabledStructures[0] === 'commercial') {
+    if (enabledCommercialTypes.length > 1) {
+      return 'Commercial mixed-use society';
+    }
+
+    return enabledCommercialTypes[0] === 'office'
       ? 'Commercial office society'
       : 'Commercial shed society';
   }
 
-  return society.structure === 'apartment' ? 'Apartment society' : 'Bungalow society';
+  return enabledStructures[0] === 'bungalow' ? 'Bungalow society' : 'Apartment society';
 }
 
 export function getSocietyUnitCollectionLabel(society: StructureDescriptor) {
-  if (society.structure === 'commercial') {
-    return society.commercialSpaceType === 'office' ? 'spaces' : 'sheds';
+  const enabledStructures = getEnabledStructures(society);
+  const enabledCommercialTypes = getEnabledCommercialSpaceTypes(society);
+
+  if (enabledStructures.length > 1) {
+    return 'units and spaces';
   }
 
-  return society.structure === 'bungalow' ? 'plots' : 'homes';
+  if (enabledStructures[0] === 'commercial') {
+    return enabledCommercialTypes[0] === 'office' ? 'spaces' : 'sheds';
+  }
+
+  return enabledStructures[0] === 'bungalow' ? 'plots' : 'homes';
 }
 
 export function getSocietyStructurePreviewLabel(society: StructureDescriptor) {
-  if (society.structure === 'commercial') {
-    return society.commercialSpaceType === 'office' ? 'Office floors enabled' : 'Shed registry enabled';
+  const enabledStructures = getEnabledStructures(society);
+  const enabledCommercialTypes = getEnabledCommercialSpaceTypes(society);
+
+  if (enabledStructures.length > 1) {
+    return 'Mixed structure enabled';
   }
 
-  return society.structure === 'apartment' ? 'Tower hierarchy enabled' : 'Plot hierarchy enabled';
+  if (enabledStructures[0] === 'commercial') {
+    if (enabledCommercialTypes.length > 1) {
+      return 'Office and shed registry enabled';
+    }
+
+    return enabledCommercialTypes[0] === 'office' ? 'Office floors enabled' : 'Shed registry enabled';
+  }
+
+  return enabledStructures[0] === 'apartment' ? 'Tower hierarchy enabled' : 'Plot hierarchy enabled';
 }
 
 export function deriveProfiles(roles: MembershipRole[]): RoleProfile[] {
@@ -159,7 +280,9 @@ export function getSocietyOptions(data: SeedData, userId: string) {
         .reduce((sum, invoice) => sum + invoice.amountInr, 0);
       const unreadAnnouncements = data.announcements.filter(
         (announcement) =>
-          announcement.societyId === society.id && !announcement.readByUserIds.includes(userId),
+          announcement.societyId === society.id &&
+          doesAnnouncementReachRoles(announcement.audience, membership.roles) &&
+          !announcement.readByUserIds.includes(userId),
       ).length;
       const openComplaints = data.complaints.filter(
         (complaint) =>
@@ -200,7 +323,9 @@ export function getResidentOverview(data: SeedData, userId: string, societyId: s
   );
   const unreadAnnouncements = data.announcements.filter(
     (announcement) =>
-      announcement.societyId === societyId && !announcement.readByUserIds.includes(userId),
+      announcement.societyId === societyId &&
+      doesAnnouncementReachRoles(announcement.audience, membership?.roles ?? []) &&
+      !announcement.readByUserIds.includes(userId),
   );
   const myStaffAssignments = data.staffAssignments.filter((assignment) => unitIds.has(assignment.unitId));
   const myPendingPayments = data.payments.filter((payment) => {
@@ -332,45 +457,45 @@ export function getAdminRecommendations(data: SeedData, societyId: string) {
           },
     pendingPaymentFlags.length > 0
       ? {
-          tab: 'billing',
+          tab: 'collections',
           title: 'Review resident payment flags',
           summary:
             'Residents have submitted maintenance payments for review. Confirm them quickly so the collection ledger stays current.',
           metric: `${pluralize(pendingPaymentFlags.length, 'payment flag')} pending`,
           tone: 'accent',
-          actionLabel: 'Open billing',
+          actionLabel: 'Open collections',
           priority: 134 + pendingPaymentFlags.length * 15 + overdueInvoices.length * 6,
         }
       : overdueInvoices.length > 0
       ? {
-          tab: 'billing',
+          tab: 'collections',
           title: 'Follow up collections',
           summary:
             'Billing pressure is visible in this society. Tackle overdue maintenance and close the current cycle before the gap widens.',
           metric: `${pluralize(overdueInvoices.length, 'overdue invoice')}`,
           tone: 'accent',
-          actionLabel: 'Open billing',
+          actionLabel: 'Open collections',
           priority: 128 + overdueInvoices.length * 14 + pendingInvoices.length * 5,
         }
       : pendingInvoices.length > 0 || overview.collectionRate < 100
         ? {
-            tab: 'billing',
+            tab: 'collections',
             title: 'Finish the maintenance cycle',
             summary:
               'Some invoices are still awaiting payment. This is the right place to reconcile receipts before they become overdue.',
             metric: `${overview.collectionRate}% collected`,
             tone: 'warning',
-            actionLabel: 'Open billing',
+            actionLabel: 'Open collections',
             priority: 82 + pendingInvoices.length * 10 + (100 - overview.collectionRate),
           }
         : {
-            tab: 'billing',
+            tab: 'collections',
             title: 'Keep billing audit-ready',
             summary:
-              'Collections look healthy right now. Use billing to keep receipts, periods, and reconciliation ready for the next run.',
+              'Collections look healthy right now. Use collections to keep receipts, periods, and reconciliation ready for the next run.',
             metric: `${overview.collectionRate}% collected`,
             tone: 'success',
-            actionLabel: 'Open billing',
+            actionLabel: 'Open collections',
             priority: 20,
           },
     pendingBookings.length > 0 || waitlistedBookings.length > 0
@@ -551,6 +676,11 @@ function buildJoinRequestView(data: SeedData, joinRequest: JoinRequest) {
   const units = joinRequest.unitIds
     .map((unitId) => data.units.find((unit) => unit.id === unitId))
     .filter(Boolean);
+  const residenceProfile = getResidenceProfileForUserSociety(
+    data,
+    joinRequest.userId,
+    joinRequest.societyId,
+  );
   const reviewer = joinRequest.reviewedByUserId
     ? getCurrentUser(data, joinRequest.reviewedByUserId)
     : undefined;
@@ -560,8 +690,21 @@ function buildJoinRequestView(data: SeedData, joinRequest: JoinRequest) {
     society,
     user,
     reviewer,
+    residenceProfile,
     units,
   };
+}
+
+export function getResidenceProfileForUserSociety(
+  data: SeedData,
+  userId: string,
+  societyId: string,
+): ResidenceProfile | undefined {
+  const residenceProfiles = Array.isArray(data.residenceProfiles) ? data.residenceProfiles : [];
+
+  return residenceProfiles.find(
+    (profile) => profile.userId === userId && profile.societyId === societyId,
+  );
 }
 
 export function getJoinRequestsForSociety(
@@ -583,9 +726,14 @@ export function getPendingJoinRequestsForUser(data: SeedData, userId: string) {
     .map((joinRequest) => buildJoinRequestView(data, joinRequest));
 }
 
-export function getAnnouncementsForSociety(data: SeedData, societyId: string) {
+export function getAnnouncementsForSociety(
+  data: SeedData,
+  societyId: string,
+  roles?: MembershipRole[],
+) {
   return [...data.announcements]
     .filter((announcement) => announcement.societyId === societyId)
+    .filter((announcement) => doesAnnouncementReachRoles(announcement.audience, roles))
     .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
 }
 

@@ -4,12 +4,14 @@ const { db, getSnapshot } = require('../db/database');
 
 const OTP_TTL_MINUTES = 10;
 const SESSION_TTL_DAYS = 30;
-const ACCOUNT_ROLES = new Set(['chairman', 'owner', 'tenant']);
+const ACCOUNT_ROLES = new Set(['superUser', 'chairman', 'owner', 'tenant']);
 const RESIDENT_JOIN_ROLES = new Set(['owner', 'tenant', 'committee']);
 const CHAIRMAN_SELF_ASSIGN_ROLES = new Set(['owner', 'tenant']);
 const JOIN_REQUEST_DECISIONS = new Set(['approve', 'reject']);
 const AUTH_INTENTS = new Set(['signUp', 'signIn', 'auto']);
 const EXPENSE_TYPES = new Set(['maintenance', 'adhoc']);
+const ANNOUNCEMENT_AUDIENCES = new Set(['all', 'residents', 'committee', 'owners', 'tenants']);
+const ANNOUNCEMENT_PRIORITIES = new Set(['critical', 'high', 'normal']);
 const PAYMENT_METHODS = new Set(['upi', 'netbanking', 'cash']);
 const PAYMENT_REVIEW_DECISIONS = new Set(['approve', 'reject']);
 const BOOKING_REVIEW_STATUSES = new Set(['confirmed', 'waitlisted']);
@@ -20,6 +22,7 @@ const VERIFICATION_STATES = new Set(['pending', 'verified', 'expired']);
 const ENTRY_SUBJECT_TYPES = new Set(['staff', 'visitor', 'delivery']);
 const ENTRY_STATUSES = new Set(['inside', 'exited']);
 const STAFF_REVIEW_STATES = new Set(['verified', 'expired']);
+const MAINTENANCE_FREQUENCIES = new Set(['monthly', 'quarterly']);
 
 class HttpError extends Error {
   constructor(statusCode, message) {
@@ -114,6 +117,137 @@ function normalizeEmail(value) {
   }
 
   return normalized;
+}
+
+function normalizeOptionalEmail(value) {
+  const normalized = String(value ?? '').trim();
+  return normalized ? normalizeEmail(normalized) : null;
+}
+
+function normalizeRequiredText(value, label, maxLength = 80) {
+  const normalized = String(value ?? '').trim();
+
+  if (!normalized) {
+    throw new HttpError(400, `Enter ${label}.`);
+  }
+
+  if (normalized.length > maxLength) {
+    throw new HttpError(400, `${label} should stay within ${maxLength} characters.`);
+  }
+
+  return normalized;
+}
+
+function normalizeOptionalText(value, maxLength = 80) {
+  const normalized = String(value ?? '').trim();
+
+  if (!normalized) {
+    return null;
+  }
+
+  if (normalized.length > maxLength) {
+    throw new HttpError(400, `Keep this field within ${maxLength} characters.`);
+  }
+
+  return normalized;
+}
+
+function normalizeOptionalPhoneNumber(value, label) {
+  const normalized = String(value ?? '').trim();
+
+  if (!normalized) {
+    return null;
+  }
+
+  try {
+    return normalizePhoneNumber(normalized);
+  } catch (error) {
+    throw new HttpError(400, `Enter a valid ${label}.`);
+  }
+}
+
+function normalizeDateOnlyInput(value, label) {
+  const normalized = String(value ?? '').trim();
+
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    throw new HttpError(400, `Choose ${label}.`);
+  }
+
+  const parsed = new Date(`${normalized}T00:00:00.000Z`);
+
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== normalized) {
+    throw new HttpError(400, `Choose a valid ${label}.`);
+  }
+
+  return normalized;
+}
+
+function normalizeRentAgreementAttachment(fileNameInput, dataUrlInput) {
+  const fileName = String(fileNameInput ?? '').trim();
+  const dataUrl = String(dataUrlInput ?? '').trim();
+
+  if (!fileName && !dataUrl) {
+    return {
+      fileName: null,
+      dataUrl: null,
+      uploadedAt: null,
+    };
+  }
+
+  if (!fileName || !dataUrl) {
+    throw new HttpError(400, 'Finish attaching the rent agreement before saving.');
+  }
+
+  if (
+    !/^data:(application\/pdf|image\/png|image\/jpeg|image\/webp);base64,/i.test(dataUrl)
+  ) {
+    throw new HttpError(400, 'Upload the rent agreement as a PDF, PNG, JPG, or WEBP file.');
+  }
+
+  if (dataUrl.length > 5_500_000) {
+    throw new HttpError(400, 'Choose a rent agreement file smaller than 4 MB.');
+  }
+
+  return {
+    fileName: fileName.slice(0, 120),
+    dataUrl,
+    uploadedAt: nowIso(),
+  };
+}
+
+function normalizeResidenceProfileInput(input, residentType) {
+  if (!input || typeof input !== 'object') {
+    throw new HttpError(400, 'Fill the residence profile before continuing.');
+  }
+
+  if (!RESIDENT_JOIN_ROLES.has(residentType)) {
+    throw new HttpError(400, 'Choose owner, tenant, or society committee member.');
+  }
+
+  if (input.dataProtectionConsent !== true) {
+    throw new HttpError(
+      400,
+      'Confirm the privacy notice before saving resident profile details.',
+    );
+  }
+
+  return {
+    residentType,
+    fullName: normalizeRequiredText(input.fullName, 'the resident full name'),
+    email: normalizeOptionalEmail(input.email),
+    alternatePhone: normalizeOptionalPhoneNumber(input.alternatePhone, 'alternate mobile number'),
+    emergencyContactName: normalizeOptionalText(input.emergencyContactName),
+    emergencyContactPhone: normalizeOptionalPhoneNumber(
+      input.emergencyContactPhone,
+      'emergency contact mobile number',
+    ),
+    moveInDate: normalizeDateOnlyInput(input.moveInDate, 'the move-in date'),
+    dataProtectionConsentAt: nowIso(),
+    rentAgreement:
+      residentType === 'tenant'
+        ? normalizeRentAgreementAttachment(input.rentAgreementFileName, input.rentAgreementDataUrl)
+        : { fileName: null, dataUrl: null, uploadedAt: null },
+  };
 }
 
 function normalizeDestination(channel, destination) {
@@ -263,6 +397,24 @@ function getUserProfile(userId) {
   return db.prepare('SELECT * FROM userProfiles WHERE userId = ?').get(userId);
 }
 
+function getResidenceProfileRecord(userId, societyId) {
+  return db
+    .prepare('SELECT * FROM residenceProfiles WHERE userId = ? AND societyId = ?')
+    .get(userId, societyId);
+}
+
+function getLatestJoinRequestForUserSociety(userId, societyId) {
+  return db
+    .prepare(
+      `SELECT id, residentType, status, createdAt
+       FROM joinRequests
+       WHERE userId = ? AND societyId = ?
+       ORDER BY datetime(createdAt) DESC
+       LIMIT 1`,
+    )
+    .get(userId, societyId);
+}
+
 function getIdentity(channel, destination) {
   return db.prepare('SELECT * FROM authIdentities WHERE channel = ? AND value = ?').get(channel, destination);
 }
@@ -344,7 +496,7 @@ function getUnit(unitId) {
 }
 
 function getSociety(societyId) {
-  return db.prepare('SELECT id, name FROM societies WHERE id = ?').get(societyId);
+  return db.prepare('SELECT * FROM societies WHERE id = ?').get(societyId);
 }
 
 function getStaffProfile(staffId) {
@@ -361,17 +513,25 @@ function getInvoice(invoiceId) {
     .get(invoiceId);
 }
 
+function getAnnouncement(announcementId) {
+  return db
+    .prepare('SELECT id, societyId, title, body, audience, createdAt, priority, readByUserIds FROM announcements WHERE id = ?')
+    .get(announcementId);
+}
+
 function getPayment(paymentId) {
   return db
     .prepare(
-      'SELECT id, societyId, invoiceId, amountInr, method, paidAt, status, submittedByUserId, referenceNote, reviewedByUserId, reviewedAt FROM payments WHERE id = ?',
+      'SELECT id, societyId, invoiceId, amountInr, method, paidAt, status, submittedByUserId, referenceNote, proofImageDataUrl, reviewedByUserId, reviewedAt FROM payments WHERE id = ?',
     )
     .get(paymentId);
 }
 
 function getMaintenancePlan(planId) {
   return db
-    .prepare('SELECT id, societyId, receiptPrefix FROM maintenancePlans WHERE id = ?')
+    .prepare(
+      'SELECT id, societyId, frequency, dueDay, amountInr, lateFeeInr, calculationMethod, receiptPrefix, upiId, upiMobileNumber, upiPayeeName, upiQrCodeDataUrl, upiQrPayload FROM maintenancePlans WHERE id = ?',
+    )
     .get(planId);
 }
 
@@ -499,7 +659,7 @@ function getOnboardingState(userId) {
     membershipsCount,
     pendingJoinRequestsCount,
     nextStep:
-      preferredRole === 'chairman'
+      preferredRole === 'superUser'
         ? 'createSociety'
         : preferredRole === 'owner' || preferredRole === 'tenant'
           ? 'joinSociety'
@@ -520,7 +680,7 @@ function buildAuthPayload(userId, sessionToken) {
     user,
     chairmanAssigned: hasAssignedChairman(),
     onboarding: getOnboardingState(userId),
-    data: getSnapshot(),
+    data: getSynchronizedSnapshot(),
   };
 }
 
@@ -654,7 +814,7 @@ function requireSession(sessionToken) {
 
 function setPreferredRole(userId, role) {
   if (!ACCOUNT_ROLES.has(role)) {
-    throw new HttpError(400, 'Choose chairman, owner, or tenant.');
+    throw new HttpError(400, 'Choose super user, chairman, owner, or tenant.');
   }
 
   const now = nowIso();
@@ -681,7 +841,7 @@ function setPreferredRole(userId, role) {
     chairmanAssigned: hasAssignedChairman(),
     preferredRole: role,
     onboarding: getOnboardingState(userId),
-    data: getSnapshot(),
+    data: getSynchronizedSnapshot(),
   };
 }
 
@@ -713,7 +873,149 @@ function getMembershipRoleSet(userId, societyId) {
   return membership ? new Set(parseStoredJson(membership.roles)) : new Set();
 }
 
-function selectSocietyForResident(userId, societyId, unitIdsInput, residentType) {
+function requireSocietyAnnouncementPublisher(userId, societyId) {
+  const society = getSociety(societyId);
+
+  if (!society) {
+    throw new HttpError(404, 'Selected society was not found.');
+  }
+
+  const membership = getMembership(userId, societyId);
+  const roleSet = membership ? new Set(parseStoredJson(membership.roles)) : new Set();
+
+  if (!roleSet.has('chairman') && !roleSet.has('committee')) {
+    throw new HttpError(403, 'Only a chairman or committee member can publish announcements.');
+  }
+}
+
+function saveResidenceProfile(userId, societyId, residentType, input) {
+  const user = getUserById(userId);
+
+  if (!user) {
+    throw new HttpError(404, 'Resident account not found.');
+  }
+
+  const normalized = normalizeResidenceProfileInput(input, residentType);
+  const existingProfile = getResidenceProfileRecord(userId, societyId);
+  const rentAgreementFileName =
+    residentType === 'tenant'
+      ? normalized.rentAgreement.fileName ?? existingProfile?.rentAgreementFileName ?? null
+      : null;
+  const rentAgreementDataUrl =
+    residentType === 'tenant'
+      ? normalized.rentAgreement.dataUrl ?? existingProfile?.rentAgreementDataUrl ?? null
+      : null;
+  const rentAgreementUploadedAt =
+    residentType === 'tenant'
+      ? normalized.rentAgreement.uploadedAt ?? existingProfile?.rentAgreementUploadedAt ?? null
+      : null;
+  const updatedAt = nowIso();
+  const profileId = existingProfile?.id ?? nextId('residence-profile');
+
+  db.prepare(
+    `INSERT INTO residenceProfiles (
+      id,
+      societyId,
+      userId,
+      residentType,
+      fullName,
+      phone,
+      email,
+      alternatePhone,
+      emergencyContactName,
+      emergencyContactPhone,
+      moveInDate,
+      dataProtectionConsentAt,
+      rentAgreementFileName,
+      rentAgreementDataUrl,
+      rentAgreementUploadedAt,
+      updatedAt
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(societyId, userId) DO UPDATE SET
+      residentType = excluded.residentType,
+      fullName = excluded.fullName,
+      phone = excluded.phone,
+      email = excluded.email,
+      alternatePhone = excluded.alternatePhone,
+      emergencyContactName = excluded.emergencyContactName,
+      emergencyContactPhone = excluded.emergencyContactPhone,
+      moveInDate = excluded.moveInDate,
+      dataProtectionConsentAt = excluded.dataProtectionConsentAt,
+      rentAgreementFileName = excluded.rentAgreementFileName,
+      rentAgreementDataUrl = excluded.rentAgreementDataUrl,
+      rentAgreementUploadedAt = excluded.rentAgreementUploadedAt,
+      updatedAt = excluded.updatedAt`,
+  ).run(
+    profileId,
+    societyId,
+    userId,
+    residentType,
+    normalized.fullName,
+    user.phone,
+    normalized.email,
+    normalized.alternatePhone,
+    normalized.emergencyContactName,
+    normalized.emergencyContactPhone,
+    normalized.moveInDate,
+    normalized.dataProtectionConsentAt,
+    rentAgreementFileName,
+    rentAgreementDataUrl,
+    rentAgreementUploadedAt,
+    updatedAt,
+  );
+
+  if (normalized.email) {
+    db.prepare('UPDATE users SET name = ?, email = ?, avatarInitials = ? WHERE id = ?').run(
+      normalized.fullName,
+      normalized.email,
+      getAvatarInitials(normalized.fullName),
+      userId,
+    );
+    return;
+  }
+
+  db.prepare('UPDATE users SET name = ?, avatarInitials = ? WHERE id = ?').run(
+    normalized.fullName,
+    getAvatarInitials(normalized.fullName),
+    userId,
+  );
+}
+
+function resolveResidentTypeForProfile(userId, societyId, requestedResidentType) {
+  if (RESIDENT_JOIN_ROLES.has(requestedResidentType)) {
+    return requestedResidentType;
+  }
+
+  const existingProfile = getResidenceProfileRecord(userId, societyId);
+
+  if (existingProfile?.residentType && RESIDENT_JOIN_ROLES.has(existingProfile.residentType)) {
+    return existingProfile.residentType;
+  }
+
+  const latestJoinRequest = getLatestJoinRequestForUserSociety(userId, societyId);
+
+  if (latestJoinRequest?.residentType && RESIDENT_JOIN_ROLES.has(latestJoinRequest.residentType)) {
+    return latestJoinRequest.residentType;
+  }
+
+  const membershipRoles = getMembershipRoleSet(userId, societyId);
+
+  if (membershipRoles.has('committee')) {
+    return 'committee';
+  }
+
+  if (membershipRoles.has('tenant')) {
+    return 'tenant';
+  }
+
+  if (membershipRoles.has('owner')) {
+    return 'owner';
+  }
+
+  throw new HttpError(403, 'You are not allowed to edit residence details for this society.');
+}
+
+function selectSocietyForResident(userId, societyId, unitIdsInput, residentType, residenceProfileInput) {
   const society = db.prepare('SELECT id, name FROM societies WHERE id = ?').get(societyId);
 
   if (!society) {
@@ -740,6 +1042,8 @@ function selectSocietyForResident(userId, societyId, unitIdsInput, residentType)
   const now = nowIso();
 
   runTransaction(() => {
+    saveResidenceProfile(userId, societyId, residentType, residenceProfileInput);
+
     db.prepare(
       `INSERT INTO userProfiles (userId, preferredRole, createdAt, updatedAt)
        VALUES (?, ?, ?, ?)
@@ -786,8 +1090,33 @@ function selectSocietyForResident(userId, societyId, unitIdsInput, residentType)
     joinRequestId: joinRequest?.id ?? null,
     joinRequestStatus: joinRequest?.status ?? 'pending',
     onboarding: getOnboardingState(userId),
-    data: getSnapshot(),
+    data: getSynchronizedSnapshot(),
   };
+}
+
+function updateResidenceProfile(userId, societyId, input) {
+  const society = getSociety(societyId);
+
+  if (!society) {
+    throw new HttpError(404, 'Selected society was not found.');
+  }
+
+  const residentType = resolveResidentTypeForProfile(userId, societyId, input?.residentType);
+  const membership = getMembership(userId, societyId);
+  const latestJoinRequest = getLatestJoinRequestForUserSociety(userId, societyId);
+
+  if (!membership && !latestJoinRequest) {
+    throw new HttpError(403, 'You are not allowed to edit residence details for this society.');
+  }
+
+  runTransaction(() => {
+    saveResidenceProfile(userId, societyId, residentType, {
+      ...input,
+      residentType,
+    });
+  });
+
+  return buildSocietyMutationPayload(userId, societyId);
 }
 
 function reviewJoinRequest(userId, joinRequestId, decision, reviewNoteInput = '') {
@@ -901,7 +1230,7 @@ function reviewJoinRequest(userId, joinRequestId, decision, reviewNoteInput = ''
     joinRequestId,
     joinRequestStatus: decision === 'approve' ? 'approved' : 'rejected',
     onboarding: getOnboardingState(userId),
-    data: getSnapshot(),
+    data: getSynchronizedSnapshot(),
   };
 }
 
@@ -923,6 +1252,51 @@ function parsePositiveWholeNumber(value, message) {
   }
 
   return parsed;
+}
+
+function parseMaintenanceDueDay(value, message) {
+  const parsed = parsePositiveWholeNumber(value, message);
+
+  if (parsed > 28) {
+    throw new HttpError(400, 'Choose a due day between 1 and 28.');
+  }
+
+  return parsed;
+}
+
+function normalizeReceiptPrefix(value) {
+  const normalized = String(value ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '')
+    .slice(0, 8);
+
+  if (normalized.length < 2) {
+    throw new HttpError(400, 'Enter a receipt prefix with at least 2 letters or numbers.');
+  }
+
+  return normalized;
+}
+
+function normalizeUpiMobileNumber(value) {
+  const digits = String(value ?? '').replace(/\D/g, '');
+
+  if (!digits) {
+    return null;
+  }
+
+  if (digits.length === 10) {
+    return digits;
+  }
+
+  if (digits.length === 12 && digits.startsWith('91')) {
+    return digits.slice(2);
+  }
+
+  throw new HttpError(
+    400,
+    'Enter a valid 10-digit Indian mobile number for the experimental UPI mobile-number flow.',
+  );
 }
 
 function normalizeCalendarDate(value, message) {
@@ -1012,8 +1386,179 @@ function buildSocietyMutationPayload(userId, societyId) {
     chairmanAssigned: hasAssignedChairman(),
     societyId,
     onboarding: getOnboardingState(userId),
-    data: getSnapshot(),
+    data: getSynchronizedSnapshot(),
   };
+}
+
+function getSynchronizedSnapshot(referenceDateInput = new Date()) {
+  synchronizeMaintenanceInvoices(referenceDateInput);
+  return getSnapshot();
+}
+
+function normalizeReferenceDateValue(referenceDateInput) {
+  const normalized =
+    referenceDateInput instanceof Date
+      ? new Date(referenceDateInput.getTime())
+      : new Date(referenceDateInput ?? Date.now());
+
+  return Number.isNaN(normalized.getTime()) ? new Date() : normalized;
+}
+
+function formatDateOnly(value) {
+  return normalizeReferenceDateValue(value).toISOString().slice(0, 10);
+}
+
+function getBillingCycleMonthSpan(frequency) {
+  return frequency === 'quarterly' ? 3 : 1;
+}
+
+function getBillingCycleStart(referenceDateInput, frequency) {
+  const referenceDate = normalizeReferenceDateValue(referenceDateInput);
+  const startMonth =
+    frequency === 'quarterly'
+      ? Math.floor(referenceDate.getUTCMonth() / 3) * 3
+      : referenceDate.getUTCMonth();
+
+  return new Date(Date.UTC(referenceDate.getUTCFullYear(), startMonth, 1));
+}
+
+function addUtcMonths(referenceDateInput, monthCount) {
+  const referenceDate = normalizeReferenceDateValue(referenceDateInput);
+  return new Date(Date.UTC(referenceDate.getUTCFullYear(), referenceDate.getUTCMonth() + monthCount, 1));
+}
+
+function shouldPrepareNextBillingCycle(referenceDateInput, frequency) {
+  const referenceDate = normalizeReferenceDateValue(referenceDateInput);
+  const isLastDayOfMonth =
+    referenceDate.getUTCDate() === new Date(Date.UTC(referenceDate.getUTCFullYear(), referenceDate.getUTCMonth() + 1, 0)).getUTCDate();
+
+  if (!isLastDayOfMonth) {
+    return false;
+  }
+
+  return frequency === 'quarterly' ? (referenceDate.getUTCMonth() + 1) % 3 === 0 : true;
+}
+
+function getFirstEligibleBillingCycleStart(societyCreatedAt, frequency) {
+  const createdDate = normalizeReferenceDateValue(societyCreatedAt);
+  const createdDateOnly = formatDateOnly(createdDate);
+  const createdCycleStart = getBillingCycleStart(createdDate, frequency);
+  const createdCycleStartDateOnly = formatDateOnly(createdCycleStart);
+
+  return createdDateOnly > createdCycleStartDateOnly
+    ? addUtcMonths(createdCycleStart, getBillingCycleMonthSpan(frequency))
+    : createdCycleStart;
+}
+
+function getTargetBillingCycleStart(referenceDateInput, frequency) {
+  const currentCycleStart = getBillingCycleStart(referenceDateInput, frequency);
+
+  return shouldPrepareNextBillingCycle(referenceDateInput, frequency)
+    ? addUtcMonths(currentCycleStart, getBillingCycleMonthSpan(frequency))
+    : currentCycleStart;
+}
+
+function getBillingDueDate(cycleStartInput, dueDayInput) {
+  const cycleStart = normalizeReferenceDateValue(cycleStartInput);
+  const dueDay = Math.min(28, Math.max(1, Number.parseInt(String(dueDayInput ?? ''), 10) || 10));
+  return new Date(Date.UTC(cycleStart.getUTCFullYear(), cycleStart.getUTCMonth(), dueDay)).toISOString().slice(0, 10);
+}
+
+function formatBillingPeriodLabel(cycleStartInput) {
+  const cycleStart = normalizeReferenceDateValue(cycleStartInput);
+  return new Intl.DateTimeFormat('en-IN', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  }).format(cycleStart);
+}
+
+function synchronizeMaintenanceInvoices(referenceDateInput = new Date()) {
+  const referenceDate = normalizeReferenceDateValue(referenceDateInput);
+  const openInvoices = db
+    .prepare("SELECT id, dueDate, status FROM invoices WHERE status != 'paid'")
+    .all();
+  const planContexts = db.prepare(
+    `SELECT
+      maintenancePlans.id,
+      maintenancePlans.societyId,
+      maintenancePlans.frequency,
+      maintenancePlans.dueDay,
+      maintenancePlans.amountInr,
+      societies.createdAt AS societyCreatedAt
+     FROM maintenancePlans
+     INNER JOIN societies ON societies.id = maintenancePlans.societyId
+     ORDER BY maintenancePlans.rowid ASC`,
+  ).all();
+  const listUnitsForSocietyStatement = db.prepare(
+    'SELECT id FROM units WHERE societyId = ? ORDER BY rowid ASC',
+  );
+  const findLatestInvoiceStatement = db.prepare(
+    'SELECT dueDate FROM invoices WHERE planId = ? AND unitId = ? ORDER BY dueDate DESC LIMIT 1',
+  );
+  const findInvoiceForDueDateStatement = db.prepare(
+    'SELECT id FROM invoices WHERE planId = ? AND unitId = ? AND dueDate = ? LIMIT 1',
+  );
+  const insertInvoiceStatement = db.prepare(
+    'INSERT INTO invoices (id, societyId, unitId, planId, periodLabel, dueDate, amountInr, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  );
+  const updateInvoiceStatusStatement = db.prepare(
+    'UPDATE invoices SET status = ? WHERE id = ?',
+  );
+
+  runTransaction(() => {
+    for (const invoice of openInvoices) {
+      const nextStatus = resolveInvoiceOpenStatus(invoice.dueDate);
+
+      if (invoice.status !== nextStatus) {
+        updateInvoiceStatusStatement.run(nextStatus, invoice.id);
+      }
+    }
+
+    for (const plan of planContexts) {
+      const cycleMonthSpan = getBillingCycleMonthSpan(plan.frequency);
+      const firstEligibleCycleStart = getFirstEligibleBillingCycleStart(plan.societyCreatedAt, plan.frequency);
+      const targetCycleStart = getTargetBillingCycleStart(referenceDate, plan.frequency);
+
+      if (firstEligibleCycleStart.getTime() > targetCycleStart.getTime()) {
+        continue;
+      }
+
+      const units = listUnitsForSocietyStatement.all(plan.societyId);
+
+      for (const unit of units) {
+        const latestInvoice = findLatestInvoiceStatement.get(plan.id, unit.id);
+        let cycleStart = firstEligibleCycleStart;
+
+        if (latestInvoice?.dueDate) {
+          cycleStart = addUtcMonths(
+            getBillingCycleStart(`${latestInvoice.dueDate}T00:00:00.000Z`, plan.frequency),
+            cycleMonthSpan,
+          );
+        }
+
+        while (cycleStart.getTime() <= targetCycleStart.getTime()) {
+          const dueDate = getBillingDueDate(cycleStart, plan.dueDay);
+          const existingInvoice = findInvoiceForDueDateStatement.get(plan.id, unit.id, dueDate);
+
+          if (!existingInvoice) {
+            insertInvoiceStatement.run(
+              nextId('invoice'),
+              plan.societyId,
+              unit.id,
+              plan.id,
+              formatBillingPeriodLabel(cycleStart),
+              dueDate,
+              plan.amountInr,
+              resolveInvoiceOpenStatus(dueDate),
+            );
+          }
+
+          cycleStart = addUtcMonths(cycleStart, cycleMonthSpan);
+        }
+      }
+    }
+  });
 }
 
 function resolveInvoiceOpenStatus(dueDate) {
@@ -1034,6 +1579,83 @@ function buildReceiptNumber(planId) {
   );
 
   return `${plan.receiptPrefix}-${String(receiptCount + 1).padStart(4, '0')}`;
+}
+
+function getExistingInvoicePayments(invoiceId) {
+  return db
+    .prepare('SELECT id, status FROM payments WHERE invoiceId = ? ORDER BY paidAt DESC')
+    .all(invoiceId);
+}
+
+function ensureInvoiceAvailableForPayment(invoice) {
+  if (invoice.status === 'paid') {
+    throw new HttpError(400, 'This invoice is already marked paid.');
+  }
+
+  const existingPayments = getExistingInvoicePayments(invoice.id);
+
+  if (existingPayments.some((payment) => payment.status === 'captured')) {
+    throw new HttpError(400, 'A captured payment already exists for this invoice.');
+  }
+
+  return existingPayments;
+}
+
+function requireInvoiceAmount(inputAmount, invoiceAmount) {
+  const amountInr = parsePositiveWholeNumber(inputAmount, 'Enter the payment amount.');
+
+  if (amountInr !== invoiceAmount) {
+    throw new HttpError(
+      400,
+      `The submitted amount must match the invoice amount of INR ${invoiceAmount}.`,
+    );
+  }
+
+  return amountInr;
+}
+
+function insertCapturedPayment({
+  societyId,
+  invoice,
+  amountInr,
+  method,
+  paidAt,
+  submittedByUserId = null,
+  referenceNote = null,
+  proofImageDataUrl = null,
+  reviewedByUserId = null,
+  reviewedAt = null,
+}) {
+  const paymentId = nextId('payment');
+
+  db.prepare(
+    `INSERT INTO payments (
+      id, societyId, invoiceId, amountInr, method, paidAt, status, submittedByUserId, referenceNote, proofImageDataUrl, reviewedByUserId, reviewedAt
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    paymentId,
+    societyId,
+    invoice.id,
+    amountInr,
+    method,
+    paidAt,
+    'captured',
+    submittedByUserId,
+    referenceNote || null,
+    proofImageDataUrl || null,
+    reviewedByUserId,
+    reviewedAt,
+  );
+
+  db.prepare('UPDATE invoices SET status = ? WHERE id = ?').run('paid', invoice.id);
+
+  const existingReceipt = db.prepare('SELECT id FROM receipts WHERE paymentId = ?').get(paymentId);
+
+  if (!existingReceipt) {
+    db.prepare(
+      'INSERT INTO receipts (id, societyId, paymentId, number, issuedAt) VALUES (?, ?, ?, ?, ?)',
+    ).run(nextId('receipt'), societyId, paymentId, buildReceiptNumber(invoice.planId), reviewedAt || paidAt);
+  }
 }
 
 function resolveAmenityAvailability(amenity, date, startTime, endTime, guests, excludedBookingId = null) {
@@ -1306,30 +1928,13 @@ function submitResidentPayment(userId, societyId, input) {
     throw new HttpError(403, 'You can only flag payment for invoices linked to your own units.');
   }
 
-  if (invoice.status === 'paid') {
-    throw new HttpError(400, 'This invoice is already marked paid.');
-  }
-
-  const existingPayments = db
-    .prepare('SELECT id, status FROM payments WHERE invoiceId = ? ORDER BY paidAt DESC')
-    .all(invoice.id);
-
-  if (existingPayments.some((payment) => payment.status === 'captured')) {
-    throw new HttpError(400, 'A captured payment already exists for this invoice.');
-  }
+  const existingPayments = ensureInvoiceAvailableForPayment(invoice);
 
   if (existingPayments.some((payment) => payment.status === 'pending')) {
     throw new HttpError(400, 'A payment confirmation is already pending review for this invoice.');
   }
 
-  const amountInr = parsePositiveWholeNumber(input?.amountInr, 'Enter the payment amount.');
-
-  if (amountInr !== invoice.amountInr) {
-    throw new HttpError(
-      400,
-      `The submitted amount must match the invoice amount of INR ${invoice.amountInr}.`,
-    );
-  }
+  const amountInr = requireInvoiceAmount(input?.amountInr, invoice.amountInr);
 
   const method = String(input?.method ?? '').trim();
 
@@ -1339,11 +1944,12 @@ function submitResidentPayment(userId, societyId, input) {
 
   const paidAt = normalizeDateTime(input?.paidAt, 'Enter when the payment was made.');
   const referenceNote = String(input?.referenceNote ?? '').trim();
+  const proofImageDataUrl = String(input?.proofImageDataUrl ?? '').trim();
 
   db.prepare(
     `INSERT INTO payments (
-      id, societyId, invoiceId, amountInr, method, paidAt, status, submittedByUserId, referenceNote, reviewedByUserId, reviewedAt
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      id, societyId, invoiceId, amountInr, method, paidAt, status, submittedByUserId, referenceNote, proofImageDataUrl, reviewedByUserId, reviewedAt
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     nextId('payment'),
     societyId,
@@ -1354,9 +1960,56 @@ function submitResidentPayment(userId, societyId, input) {
     'pending',
     userId,
     referenceNote || null,
+    proofImageDataUrl || null,
     null,
     null,
   );
+
+  return buildSocietyMutationPayload(userId, societyId);
+}
+
+function captureResidentUpiPayment(userId, societyId, input) {
+  const invoiceId = requireText(input?.invoiceId, 'Select the maintenance invoice first.');
+  const invoice = getInvoice(invoiceId);
+
+  if (!invoice || invoice.societyId !== societyId) {
+    throw new HttpError(404, 'Selected invoice was not found in this society.');
+  }
+
+  const membership = getMembership(userId, societyId);
+  const allowedUnitIds = new Set(parseStoredJson(membership?.unitIds));
+
+  if (!membership || !allowedUnitIds.has(invoice.unitId)) {
+    throw new HttpError(403, 'You can only pay invoices linked to your own units.');
+  }
+
+  const existingPayments = ensureInvoiceAvailableForPayment(invoice);
+
+  if (existingPayments.some((payment) => payment.status === 'pending')) {
+    throw new HttpError(400, 'A manual payment flag is already pending review for this invoice.');
+  }
+
+  const plan = getMaintenancePlan(invoice.planId);
+
+  if (!plan?.upiId) {
+    throw new HttpError(400, 'UPI billing is not configured for this society yet.');
+  }
+
+  const amountInr = requireInvoiceAmount(input?.amountInr, invoice.amountInr);
+  const paidAt = normalizeDateTime(input?.paidAt, 'Enter when the payment was made.');
+  const referenceNote = String(input?.referenceNote ?? '').trim();
+
+  runTransaction(() => {
+    insertCapturedPayment({
+      societyId,
+      invoice,
+      amountInr,
+      method: 'upi',
+      paidAt,
+      submittedByUserId: userId,
+      referenceNote,
+    });
+  });
 
   return buildSocietyMutationPayload(userId, societyId);
 }
@@ -1393,23 +2046,69 @@ function reviewResidentPayment(userId, paymentId, decisionInput) {
       'UPDATE payments SET status = ?, reviewedByUserId = ?, reviewedAt = ? WHERE id = ?',
     ).run(decision === 'approve' ? 'captured' : 'rejected', userId, reviewedAt, paymentId);
 
-    db.prepare('UPDATE invoices SET status = ? WHERE id = ?').run(
-      decision === 'approve' ? 'paid' : resolveInvoiceOpenStatus(invoice.dueDate),
-      invoice.id,
-    );
-
     if (decision === 'approve') {
       const existingReceipt = db.prepare('SELECT id FROM receipts WHERE paymentId = ?').get(paymentId);
+
+      db.prepare('UPDATE invoices SET status = ? WHERE id = ?').run('paid', invoice.id);
 
       if (!existingReceipt) {
         db.prepare(
           'INSERT INTO receipts (id, societyId, paymentId, number, issuedAt) VALUES (?, ?, ?, ?, ?)',
         ).run(nextId('receipt'), payment.societyId, paymentId, buildReceiptNumber(invoice.planId), reviewedAt);
       }
+      return;
     }
+
+    db.prepare('UPDATE invoices SET status = ? WHERE id = ?').run(
+      resolveInvoiceOpenStatus(invoice.dueDate),
+      invoice.id,
+    );
   });
 
   return buildSocietyMutationPayload(userId, payment.societyId);
+}
+
+function recordManualPayment(userId, societyId, input) {
+  requireSocietyChairman(userId, societyId);
+
+  const invoiceId = requireText(input?.invoiceId, 'Select the maintenance invoice first.');
+  const invoice = getInvoice(invoiceId);
+
+  if (!invoice || invoice.societyId !== societyId) {
+    throw new HttpError(404, 'Selected invoice was not found in this society.');
+  }
+
+  const existingPayments = ensureInvoiceAvailableForPayment(invoice);
+
+  if (existingPayments.some((payment) => payment.status === 'pending')) {
+    throw new HttpError(400, 'A resident payment flag is pending review for this invoice.');
+  }
+
+  const amountInr = requireInvoiceAmount(input?.amountInr, invoice.amountInr);
+  const method = String(input?.method ?? '').trim();
+
+  if (!PAYMENT_METHODS.has(method)) {
+    throw new HttpError(400, 'Choose UPI, netbanking, or cash as the payment method.');
+  }
+
+  const paidAt = normalizeDateTime(input?.paidAt, 'Enter when the payment was made.');
+  const referenceNote = String(input?.referenceNote ?? '').trim();
+  const reviewedAt = nowIso();
+
+  runTransaction(() => {
+    insertCapturedPayment({
+      societyId,
+      invoice,
+      amountInr,
+      method,
+      paidAt,
+      referenceNote,
+      reviewedByUserId: userId,
+      reviewedAt,
+    });
+  });
+
+  return buildSocietyMutationPayload(userId, societyId);
 }
 
 function createComplaintTicket(userId, societyId, input) {
@@ -1488,31 +2187,206 @@ function updateComplaintTicket(userId, complaintId, input) {
   return buildSocietyMutationPayload(userId, complaint.societyId);
 }
 
+function createAnnouncement(userId, societyId, input) {
+  requireSocietyAnnouncementPublisher(userId, societyId);
+
+  const title = requireText(input?.title, 'Enter an announcement title.');
+  const body = requireText(input?.body, 'Enter the announcement message.');
+  const audience = String(input?.audience ?? '').trim();
+  const priority = String(input?.priority ?? '').trim();
+
+  if (!ANNOUNCEMENT_AUDIENCES.has(audience)) {
+    throw new HttpError(400, 'Choose all, residents, committee, owners, or tenants as the announcement audience.');
+  }
+
+  if (!ANNOUNCEMENT_PRIORITIES.has(priority)) {
+    throw new HttpError(400, 'Choose critical, high, or normal as the announcement priority.');
+  }
+
+  db.prepare(
+    'INSERT INTO announcements (id, societyId, title, body, audience, createdAt, priority, readByUserIds) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  ).run(
+    nextId('announcement'),
+    societyId,
+    title,
+    body,
+    audience,
+    nowIso(),
+    priority,
+    JSON.stringify([]),
+  );
+
+  return buildSocietyMutationPayload(userId, societyId);
+}
+
+function markAnnouncementRead(userId, announcementId) {
+  const announcement = getAnnouncement(announcementId);
+
+  if (!announcement) {
+    throw new HttpError(404, 'Notice not found.');
+  }
+
+  const membership = getMembership(userId, announcement.societyId);
+
+  if (!membership) {
+    throw new HttpError(403, 'You can only open notices for societies you belong to.');
+  }
+
+  const readByUserIds = parseStoredJson(announcement.readByUserIds);
+
+  if (!readByUserIds.includes(userId)) {
+    db.prepare('UPDATE announcements SET readByUserIds = ? WHERE id = ?').run(
+      JSON.stringify([...readByUserIds, userId]),
+      announcement.id,
+    );
+  }
+
+  return buildSocietyMutationPayload(userId, announcement.societyId);
+}
+
+function updateMaintenanceBillingConfig(userId, planId, input) {
+  const plan = getMaintenancePlan(planId);
+
+  if (!plan) {
+    throw new HttpError(404, 'Maintenance plan not found.');
+  }
+
+  requireSocietyChairman(userId, plan.societyId);
+
+  const society = getSociety(plan.societyId);
+  const upiId = String(input?.upiId ?? '').trim();
+  const upiMobileNumber = normalizeUpiMobileNumber(input?.upiMobileNumber);
+  const upiPayeeName = String(input?.upiPayeeName ?? '').trim() || society?.name || null;
+  const upiQrCodeDataUrl = String(input?.upiQrCodeDataUrl ?? '').trim();
+  const upiQrPayload = String(input?.upiQrPayload ?? '').trim();
+
+  db.prepare('UPDATE maintenancePlans SET upiId = ?, upiMobileNumber = ?, upiPayeeName = ?, upiQrCodeDataUrl = ?, upiQrPayload = ? WHERE id = ?').run(
+    upiId || null,
+    upiMobileNumber,
+    upiPayeeName,
+    upiQrCodeDataUrl || null,
+    upiQrPayload || null,
+    plan.id,
+  );
+
+  return buildSocietyMutationPayload(userId, plan.societyId);
+}
+
+function updateSocietyProfile(userId, societyId, input) {
+  requireSocietyChairman(userId, societyId);
+
+  const society = getSociety(societyId);
+
+  if (!society) {
+    throw new HttpError(404, 'Selected society was not found.');
+  }
+
+  const name = requireText(input?.name, 'Enter the society name.');
+  const country = requireText(input?.country, 'Enter the country.');
+  const state = requireText(input?.state, 'Enter the state.');
+  const city = requireText(input?.city, 'Enter the city.');
+  const area = requireText(input?.area, 'Enter the area.');
+  const address = requireText(input?.address, 'Enter the full address.');
+  const tagline = String(input?.tagline ?? '').trim();
+
+  if (name.length < 3) {
+    throw new HttpError(400, 'Enter a society name with at least 3 characters.');
+  }
+
+  db.prepare(
+    'UPDATE societies SET name = ?, country = ?, state = ?, city = ?, area = ?, address = ?, tagline = ? WHERE id = ?',
+  ).run(
+    name,
+    country,
+    state,
+    city,
+    area,
+    address,
+    tagline || society.tagline,
+    societyId,
+  );
+
+  const currentPlan = db
+    .prepare('SELECT id, upiPayeeName FROM maintenancePlans WHERE societyId = ? ORDER BY rowid ASC LIMIT 1')
+    .get(societyId);
+
+  if (currentPlan && (!currentPlan.upiPayeeName || currentPlan.upiPayeeName === society.name)) {
+    db.prepare('UPDATE maintenancePlans SET upiPayeeName = ? WHERE id = ?').run(name, currentPlan.id);
+  }
+
+  return buildSocietyMutationPayload(userId, societyId);
+}
+
+function updateMaintenancePlanSettings(userId, planId, input) {
+  const plan = getMaintenancePlan(planId);
+
+  if (!plan) {
+    throw new HttpError(404, 'Maintenance plan not found.');
+  }
+
+  requireSocietyChairman(userId, plan.societyId);
+
+  const frequency = String(input?.frequency ?? '').trim();
+
+  if (!MAINTENANCE_FREQUENCIES.has(frequency)) {
+    throw new HttpError(400, 'Choose monthly or quarterly as the maintenance frequency.');
+  }
+
+  const dueDay = parseMaintenanceDueDay(input?.dueDay, 'Enter a due day between 1 and 28.');
+  const amountInr = parsePositiveWholeNumber(input?.amountInr, 'Enter a valid maintenance amount.');
+  const receiptPrefix = normalizeReceiptPrefix(input?.receiptPrefix);
+
+  runTransaction(() => {
+    db.prepare(
+      'UPDATE maintenancePlans SET frequency = ?, dueDay = ?, amountInr = ?, receiptPrefix = ? WHERE id = ?',
+    ).run(frequency, dueDay, amountInr, receiptPrefix, planId);
+
+    db.prepare(
+      'UPDATE societies SET maintenanceDayOfMonth = ?, maintenanceAmount = ? WHERE id = ?',
+    ).run(dueDay, amountInr, plan.societyId);
+  });
+
+  return buildSocietyMutationPayload(userId, plan.societyId);
+}
+
 function sendMaintenanceReminder(userId, societyId, input) {
   requireSocietyChairman(userId, societyId);
 
   const requestedInvoiceIds = normalizeRequestedUnitIds(input?.invoiceIds);
+  const requestedUnitIds = normalizeRequestedUnitIds(input?.unitIds);
   const invoices = requestedInvoiceIds.length > 0
     ? requestedInvoiceIds.map((invoiceId) => getInvoice(invoiceId))
-    : db
-      .prepare("SELECT id, societyId, unitId, planId, periodLabel, dueDate, amountInr, status FROM invoices WHERE societyId = ? AND status != 'paid'")
-      .all(societyId);
-
-  if (invoices.length === 0) {
-    throw new HttpError(400, 'There are no unpaid maintenance invoices to remind right now.');
-  }
+    : requestedUnitIds.length > 0
+      ? []
+      : db
+        .prepare("SELECT id, societyId, unitId, planId, periodLabel, dueDate, amountInr, status FROM invoices WHERE societyId = ? AND status != 'paid'")
+        .all(societyId);
 
   if (invoices.some((invoice) => !invoice || invoice.societyId !== societyId)) {
     throw new HttpError(404, 'One or more selected invoices were not found in this society.');
   }
 
+  const requestedUnits = requestedUnitIds.map((unitId) => getUnit(unitId));
+
+  if (requestedUnits.some((unit) => !unit || unit.societyId !== societyId)) {
+    throw new HttpError(404, 'One or more selected units were not found in this society.');
+  }
+
   const unpaidInvoices = invoices.filter((invoice) => invoice.status !== 'paid');
 
-  if (unpaidInvoices.length === 0) {
+  if (requestedInvoiceIds.length > 0 && unpaidInvoices.length === 0 && requestedUnitIds.length === 0) {
     throw new HttpError(400, 'Selected invoices are already paid.');
   }
 
-  const uniqueUnitIds = [...new Set(unpaidInvoices.map((invoice) => invoice.unitId))];
+  const uniqueUnitIds = [...new Set([
+    ...requestedUnitIds,
+    ...unpaidInvoices.map((invoice) => invoice.unitId),
+  ])];
+
+  if (uniqueUnitIds.length === 0) {
+    throw new HttpError(400, 'There are no unpaid maintenance invoices or units to remind right now.');
+  }
+
   const message = String(input?.message ?? '').trim() ||
     'Maintenance is still unpaid for the selected period. Please flag the payment in your resident workspace or contact the chairman if already settled.';
 
@@ -1715,11 +2589,11 @@ function createEntryLogRecord(userId, societyId, input) {
   return buildSocietyMutationPayload(userId, societyId);
 }
 
-function requireChairmanRole(userId) {
+function requireSuperUserRole(userId) {
   const preferredRole = getUserProfile(userId)?.preferredRole ?? null;
 
-  if (preferredRole !== 'chairman') {
-    throw new HttpError(403, 'Only chairman accounts can create a new society workspace.');
+  if (preferredRole !== 'superUser') {
+    throw new HttpError(403, 'Only the super user account can manage society workspaces.');
   }
 
   return preferredRole;
@@ -1729,27 +2603,36 @@ module.exports = {
   HttpError,
   assignChairmanResidence,
   buildAuthPayload,
+  captureResidentUpiPayment,
+  createAnnouncement,
   createAmenityBooking,
   createComplaintTicket,
   getOnboardingState,
   hasAssignedChairman,
+  markAnnouncementRead,
   normalizeAuthChannel,
   normalizeAuthIntent,
+  recordManualPayment,
   requestOtp,
   createEntryLogRecord,
   createExpenseRecord,
   createSecurityGuard,
   createStaffVerification,
+  getSynchronizedSnapshot,
   reviewAmenityBooking,
   reviewResidentPayment,
   reviewStaffVerification,
-  requireChairmanRole,
+  requireSuperUserRole,
   requireSession,
   reviewJoinRequest,
   sendMaintenanceReminder,
   selectSocietyForResident,
   setPreferredRole,
   submitResidentPayment,
+  updateResidenceProfile,
+  updateMaintenancePlanSettings,
+  updateMaintenanceBillingConfig,
+  updateSocietyProfile,
   updateComplaintTicket,
   verifyOtp,
 };

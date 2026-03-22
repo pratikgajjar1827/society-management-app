@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import {
@@ -15,6 +16,7 @@ import {
   formatLongDate,
   formatCurrency,
   getCurrentUser,
+  getMembershipForSociety,
   getPendingJoinRequestsForUser,
   getSocietyOptions,
   getSocietyWorkspaceLabel,
@@ -23,21 +25,59 @@ import {
 
 export function WorkspaceSelectionScreen() {
   const { state, actions } = useApp();
+  const [pendingDeleteSocietyId, setPendingDeleteSocietyId] = useState<string>();
   const user = getCurrentUser(state.data, state.session.userId);
-  const options = state.session.userId ? getSocietyOptions(state.data, state.session.userId) : [];
+  const canCreateSociety = state.session.accountRole === 'superUser';
+  const linkedOptions = state.session.userId ? getSocietyOptions(state.data, state.session.userId) : [];
+  const options = canCreateSociety
+    ? [...state.data.societies]
+        .sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }))
+        .map((society) => ({
+          society,
+          membership:
+            state.session.userId
+              ? getMembershipForSociety(state.data, state.session.userId, society.id)
+              : undefined,
+          totalDue: state.data.invoices
+            .filter((invoice) => invoice.societyId === society.id && invoice.status !== 'paid')
+            .reduce((sum, invoice) => sum + invoice.amountInr, 0),
+          unreadAnnouncements: state.data.announcements.filter(
+            (announcement) => announcement.societyId === society.id,
+          ).length,
+          openComplaints: state.data.complaints.filter(
+            (complaint) => complaint.societyId === society.id && complaint.status !== 'resolved',
+          ).length,
+        }))
+    : linkedOptions;
   const pendingRequests = state.session.userId
     ? getPendingJoinRequestsForUser(state.data, state.session.userId)
     : [];
+
+  async function handleDeleteSociety(societyId: string) {
+    const wasDeleted = await actions.deleteSocietyWorkspace(societyId);
+
+    if (wasDeleted) {
+      setPendingDeleteSocietyId((currentSocietyId) =>
+        currentSocietyId === societyId ? undefined : currentSocietyId,
+      );
+    }
+  }
 
   return (
     <Page>
       <HeroCard
         eyebrow={user ? `Welcome back, ${user.name}` : 'Select workspace'}
         title="Choose a society workspace first."
-        subtitle="The same mobile login can create societies, join societies, and move across every workspace already linked to it."
+        subtitle={
+          canCreateSociety
+            ? 'This super user login can open, delete, and create society workspaces across the full portfolio.'
+            : 'Use this login to join societies and move across every workspace already linked to it.'
+        }
       >
         <View style={styles.heroActions}>
-          <ActionButton label="Create new society" onPress={actions.startSetup} />
+          {canCreateSociety ? (
+            <ActionButton label="Create new society" onPress={actions.startSetup} />
+          ) : null}
           <ActionButton label="Join another society" onPress={actions.startSocietyEnrollment} variant="secondary" />
           <ActionButton label="Sign out" onPress={actions.logout} variant="ghost" />
         </View>
@@ -45,7 +85,11 @@ export function WorkspaceSelectionScreen() {
 
       <SectionHeader
         title="Your societies"
-        description="Each card below represents one society workspace tied to your login. The same person can safely move across communities without new accounts."
+        description={
+          canCreateSociety
+            ? 'The super user can review every society workspace from one list and delete any society without joining it as a resident.'
+            : 'Each card below represents one society workspace tied to your login. The same person can safely move across communities without new accounts.'
+        }
       />
 
       {pendingRequests.length > 0 ? (
@@ -76,11 +120,17 @@ export function WorkspaceSelectionScreen() {
           <Text style={styles.societyName}>No society workspace linked yet</Text>
           <Caption>
             {pendingRequests.length > 0
-              ? 'Your claims are pending approval. You can still create another society or submit a new join request.'
-              : 'Create a new society or join an existing one to populate this list.'}
+              ? canCreateSociety
+                ? 'Your claims are pending approval. You can still create another society or submit a new join request.'
+                : 'Your claims are pending approval. You can still submit another join request.'
+              : canCreateSociety
+                ? 'Create a new society or join an existing one to populate this list.'
+                : 'Join an existing society to populate this list.'}
           </Caption>
           <View style={styles.heroActions}>
-            <ActionButton label="Create first workspace" onPress={actions.startSetup} />
+            {canCreateSociety ? (
+              <ActionButton label="Create first workspace" onPress={actions.startSetup} />
+            ) : null}
             <ActionButton label="Join a society" onPress={actions.startSocietyEnrollment} variant="secondary" />
           </View>
         </SurfaceCard>
@@ -107,7 +157,7 @@ export function WorkspaceSelectionScreen() {
               <Text style={styles.metricValue}>{formatCurrency(option.totalDue)}</Text>
             </View>
             <View style={styles.metricTile}>
-              <Text style={styles.metricLabel}>Unread notices</Text>
+              <Text style={styles.metricLabel}>{canCreateSociety ? 'Notices' : 'Unread notices'}</Text>
               <Text style={styles.metricValue}>{option.unreadAnnouncements}</Text>
             </View>
             <View style={styles.metricTile}>
@@ -117,12 +167,60 @@ export function WorkspaceSelectionScreen() {
           </View>
 
           <View style={styles.roleRow}>
-            {option.membership.roles.map((role) => (
-              <Pill key={role} label={humanizeRole(role)} tone="accent" />
-            ))}
+            {canCreateSociety ? (
+              <>
+                <Pill label="Super user control" tone="accent" />
+                {option.membership?.roles.map((role) => (
+                  <Pill key={role} label={humanizeRole(role)} tone="primary" />
+                ))}
+              </>
+            ) : (
+              option.membership?.roles.map((role) => (
+                <Pill key={role} label={humanizeRole(role)} tone="accent" />
+              ))
+            )}
           </View>
+          {canCreateSociety && pendingDeleteSocietyId === option.society.id ? (
+            <Caption style={styles.deleteWarning}>
+              This permanently removes the society workspace and its linked units, notices, bills,
+              bookings, complaints, and approvals.
+            </Caption>
+          ) : null}
 
-          <ActionButton label="Open workspace" onPress={() => actions.selectSociety(option.society.id)} />
+          <View style={styles.cardActions}>
+            <ActionButton
+              label={canCreateSociety ? 'Open admin workspace' : 'Open workspace'}
+              onPress={() => actions.selectSociety(option.society.id)}
+              disabled={state.isSyncing}
+            />
+            {canCreateSociety ? (
+              pendingDeleteSocietyId === option.society.id ? (
+                <>
+                  <ActionButton
+                    label="Cancel"
+                    onPress={() => setPendingDeleteSocietyId(undefined)}
+                    variant="secondary"
+                    disabled={state.isSyncing}
+                  />
+                  <ActionButton
+                    label="Confirm delete"
+                    onPress={() => {
+                      void handleDeleteSociety(option.society.id);
+                    }}
+                    variant="danger"
+                    disabled={state.isSyncing}
+                  />
+                </>
+              ) : (
+                <ActionButton
+                  label="Delete society"
+                  onPress={() => setPendingDeleteSocietyId(option.society.id)}
+                  variant="danger"
+                  disabled={state.isSyncing}
+                />
+              )
+            ) : null}
+          </View>
         </SurfaceCard>
       ))}
     </Page>
@@ -154,10 +252,12 @@ const styles = StyleSheet.create({
   metricTile: {
     flex: 1,
     minWidth: 96,
-    backgroundColor: palette.surfaceMuted,
-    borderRadius: 18,
+    backgroundColor: palette.surface,
+    borderRadius: 20,
     padding: spacing.md,
     gap: spacing.xs,
+    borderWidth: 1,
+    borderColor: palette.border,
   },
   metricLabel: {
     fontSize: 12,
@@ -173,6 +273,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.sm,
+  },
+  cardActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  deleteWarning: {
+    color: palette.danger,
   },
   pendingRequestCard: {
     gap: spacing.xs,

@@ -9,7 +9,7 @@ const {
   findDuplicateOfficeCodes,
   normalizeOfficeFloorPlan,
 } = require('../seed/factories');
-const { DEMO_USER_ID, seedData } = require('../seed/seedData');
+const { DEMO_USER_ID, SUPER_USER_ID, seedData } = require('../seed/seedData');
 
 const dbDirectory = path.join(process.cwd(), 'backend-data');
 const dbPath = path.join(dbDirectory, 'societyos.db');
@@ -22,6 +22,7 @@ const tableConfigs = [
   ['units'],
   ['memberships', ['roles', 'unitIds']],
   ['joinRequests', ['unitIds']],
+  ['residenceProfiles'],
   ['occupancy'],
   ['announcements', ['readByUserIds']],
   ['rules', ['acknowledgedByUserIds']],
@@ -44,6 +45,7 @@ const tableConfigs = [
 
 const authTableNames = ['authSessions', 'authChallenges', 'authIdentities', 'userProfiles'];
 const seededRoleMap = {
+  'user-super-admin': 'superUser',
   'user-aarav': 'owner',
   'user-neha': 'tenant',
   'user-rohan': 'owner',
@@ -85,7 +87,12 @@ function ensureSchema() {
     ['state', "TEXT NOT NULL DEFAULT 'Gujarat'"],
     ['city', "TEXT NOT NULL DEFAULT 'Ahmedabad'"],
     ['area', "TEXT NOT NULL DEFAULT ''"],
+    ['enabledStructures', 'TEXT'],
     ['commercialSpaceType', 'TEXT'],
+    ['enabledCommercialSpaceTypes', 'TEXT'],
+    ['apartmentUnitCount', 'INTEGER'],
+    ['bungalowUnitCount', 'INTEGER'],
+    ['shedUnitCount', 'INTEGER'],
     ['officeFloorPlan', 'TEXT'],
   ].filter(([columnName]) => !societyColumns.has(columnName));
 
@@ -113,12 +120,28 @@ function ensureSchema() {
   const missingPaymentColumns = [
     ['submittedByUserId', 'TEXT'],
     ['referenceNote', 'TEXT'],
+    ['proofImageDataUrl', 'TEXT'],
     ['reviewedByUserId', 'TEXT'],
     ['reviewedAt', 'TEXT'],
   ].filter(([columnName]) => !paymentColumns.has(columnName));
 
   for (const [columnName, definition] of missingPaymentColumns) {
     db.exec(`ALTER TABLE payments ADD COLUMN ${columnName} ${definition}`);
+  }
+
+  const maintenancePlanColumns = new Set(
+    db.prepare("PRAGMA table_info('maintenancePlans')").all().map((column) => column.name),
+  );
+  const missingMaintenancePlanColumns = [
+    ['upiId', 'TEXT'],
+    ['upiMobileNumber', 'TEXT'],
+    ['upiPayeeName', 'TEXT'],
+    ['upiQrCodeDataUrl', 'TEXT'],
+    ['upiQrPayload', 'TEXT'],
+  ].filter(([columnName]) => !maintenancePlanColumns.has(columnName));
+
+  for (const [columnName, definition] of missingMaintenancePlanColumns) {
+    db.exec(`ALTER TABLE maintenancePlans ADD COLUMN ${columnName} ${definition}`);
   }
 
   const complaintColumns = new Set(
@@ -131,6 +154,63 @@ function ensureSchema() {
   for (const [columnName, definition] of missingComplaintColumns) {
     db.exec(`ALTER TABLE complaints ADD COLUMN ${columnName} ${definition}`);
   }
+}
+
+function ensureSuperUserAccount() {
+  const superUser = seedData.users.find((user) => user.id === SUPER_USER_ID);
+
+  if (!superUser) {
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const existingUser = db.prepare('SELECT id FROM users WHERE id = ?').get(superUser.id);
+
+  if (!existingUser) {
+    db.prepare(
+      'INSERT INTO users (id, name, phone, email, avatarInitials) VALUES (?, ?, ?, ?, ?)',
+    ).run(
+      superUser.id,
+      superUser.name,
+      superUser.phone,
+      superUser.email,
+      superUser.avatarInitials,
+    );
+  }
+
+  db.prepare(
+    `INSERT INTO userProfiles (userId, preferredRole, createdAt, updatedAt)
+     VALUES (?, ?, ?, ?)
+     ON CONFLICT(userId) DO UPDATE SET preferredRole = excluded.preferredRole, updatedAt = excluded.updatedAt`,
+  ).run(superUser.id, 'superUser', now, now);
+
+  db.prepare(
+    `INSERT INTO authIdentities (id, userId, channel, value, isPrimary, verifiedAt, createdAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO NOTHING`,
+  ).run(
+    `identity-${superUser.id}-sms`,
+    superUser.id,
+    'sms',
+    normalizeSeedPhone(superUser.phone),
+    1,
+    now,
+    now,
+  );
+
+  db.prepare(
+    `INSERT INTO authIdentities (id, userId, channel, value, isPrimary, verifiedAt, createdAt)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO NOTHING`,
+  ).run(
+    `identity-${superUser.id}-email`,
+    superUser.id,
+    'email',
+    normalizeSeedEmail(superUser.email),
+    0,
+    now,
+    now,
+  );
 }
 
 function listAll(tableName) {
@@ -167,6 +247,8 @@ function fromStoredValue(columnName, value) {
       columnName === 'acknowledgedByUserIds' ||
       columnName === 'blackoutDates' ||
       columnName === 'employerUnitIds' ||
+      columnName === 'enabledStructures' ||
+      columnName === 'enabledCommercialSpaceTypes' ||
       columnName === 'officeFloorPlan' ||
       columnName === 'invoiceIds' ||
       columnName === 'unitIds'
@@ -184,6 +266,8 @@ function fromStoredValue(columnName, value) {
     columnName === 'acknowledgedByUserIds' ||
     columnName === 'blackoutDates' ||
     columnName === 'employerUnitIds' ||
+    columnName === 'enabledStructures' ||
+    columnName === 'enabledCommercialSpaceTypes' ||
     columnName === 'officeFloorPlan' ||
     columnName === 'invoiceIds' ||
     columnName === 'unitIds'
@@ -307,58 +391,222 @@ function parseWholeNumber(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function resolveStructureSetup(draft) {
-  if (draft.structure === 'commercial') {
-    const commercialSpaceType = draft.commercialSpaceType === 'office' ? 'office' : 'shed';
+const structureOptions = ['apartment', 'bungalow', 'commercial'];
+const commercialSpaceTypes = ['shed', 'office'];
 
-    if (commercialSpaceType === 'office') {
-      const officeFloorPlan = Array.isArray(draft.officeFloorPlan) ? draft.officeFloorPlan : [];
-      const configuredFloors = normalizeOfficeFloorPlan(officeFloorPlan).filter(
-        (floor) => floor.officeCodes.length > 0,
-      );
-      const totalUnits = countOfficeUnits(officeFloorPlan) || 1;
-      const duplicateOfficeCodes = findDuplicateOfficeCodes(officeFloorPlan);
-
-      return {
-        totalUnits,
-        commercialSpaceType,
-        officeFloorPlan,
-        unitStructureOptions: {
-          commercialSpaceType,
-          officeFloorPlan,
-        },
-        tagline:
-          duplicateOfficeCodes.length > 0
-            ? `Commercial office workspace with ${configuredFloors.length || 1} configured floors`
-            : `Commercial office workspace with ${configuredFloors.length || 1} configured floors and ${totalUnits} unique office spaces`,
-      };
-    }
-
-    const totalUnits = Math.max(1, parseWholeNumber(draft.totalUnits) || 1);
-
-    return {
-      totalUnits,
-      commercialSpaceType,
-      officeFloorPlan: [],
-      unitStructureOptions: {
-        commercialSpaceType,
-      },
-      tagline: `Commercial shed workspace with ${totalUnits} shed${totalUnits === 1 ? '' : 's'}`,
-    };
+function normalizeSelections(value, allowedValues) {
+  if (!Array.isArray(value)) {
+    return [];
   }
 
-  const totalUnits = Math.max(1, parseWholeNumber(draft.totalUnits) || 1);
+  return [...new Set(value.filter((item) => allowedValues.includes(item)))];
+}
+
+function getEnabledStructuresFromDraft(draft) {
+  const enabledStructures = normalizeSelections(draft.enabledStructures, structureOptions);
+
+  if (enabledStructures.length > 0) {
+    return enabledStructures;
+  }
+
+  return structureOptions.includes(draft.structure) ? [draft.structure] : [];
+}
+
+function getEnabledCommercialSpaceTypesFromDraft(draft, enabledStructures = getEnabledStructuresFromDraft(draft)) {
+  if (!enabledStructures.includes('commercial')) {
+    return [];
+  }
+
+  const enabledCommercialSpaceTypes = normalizeSelections(
+    draft.enabledCommercialSpaceTypes,
+    commercialSpaceTypes,
+  );
+
+  if (enabledCommercialSpaceTypes.length > 0) {
+    return enabledCommercialSpaceTypes;
+  }
+
+  return commercialSpaceTypes.includes(draft.commercialSpaceType) ? [draft.commercialSpaceType] : [];
+}
+
+function getDraftUnitCount(value, fallbackValue) {
+  return Math.max(0, parseWholeNumber(value) ?? parseWholeNumber(fallbackValue) ?? 0);
+}
+
+function buildStructureTagline(structureSetup) {
+  const segments = [];
+
+  if (structureSetup.apartmentUnitCount) {
+    segments.push(
+      `${structureSetup.apartmentUnitCount} apartment home${structureSetup.apartmentUnitCount === 1 ? '' : 's'}`,
+    );
+  }
+
+  if (structureSetup.bungalowUnitCount) {
+    segments.push(
+      `${structureSetup.bungalowUnitCount} plot${structureSetup.bungalowUnitCount === 1 ? '' : 's'}`,
+    );
+  }
+
+  if (structureSetup.shedUnitCount) {
+    segments.push(
+      `${structureSetup.shedUnitCount} shed${structureSetup.shedUnitCount === 1 ? '' : 's'}`,
+    );
+  }
+
+  if (structureSetup.officeUnitCount) {
+    segments.push(
+      `${structureSetup.officeUnitCount} office space${structureSetup.officeUnitCount === 1 ? '' : 's'}`,
+    );
+  }
+
+  if (segments.length === 0) {
+    return 'New society workspace';
+  }
+
+  if (structureSetup.enabledStructures.length > 1) {
+    return `Mixed-use workspace with ${segments.join(', ')}`;
+  }
+
+  if (structureSetup.enabledStructures[0] === 'commercial') {
+    if (structureSetup.enabledCommercialSpaceTypes.length > 1) {
+      return `Commercial mixed-use workspace with ${segments.join(', ')}`;
+    }
+
+    if (structureSetup.enabledCommercialSpaceTypes[0] === 'office') {
+      const configuredFloorCount = normalizeOfficeFloorPlan(structureSetup.officeFloorPlan).filter(
+        (floor) => floor.officeCodes.length > 0,
+      ).length;
+
+      return `Commercial office workspace with ${configuredFloorCount || 1} configured floors and ${structureSetup.officeUnitCount} unique office spaces`;
+    }
+
+    return `Commercial shed workspace with ${structureSetup.shedUnitCount} shed${structureSetup.shedUnitCount === 1 ? '' : 's'}`;
+  }
+
+  if (structureSetup.enabledStructures[0] === 'bungalow') {
+    return `Bungalow cluster workspace with ${structureSetup.bungalowUnitCount} plot${structureSetup.bungalowUnitCount === 1 ? '' : 's'}`;
+  }
+
+  return `Apartment community workspace with ${structureSetup.apartmentUnitCount} home${structureSetup.apartmentUnitCount === 1 ? '' : 's'}`;
+}
+
+function resolveStructureSetup(draft) {
+  const enabledStructures = getEnabledStructuresFromDraft(draft);
+  const enabledCommercialSpaceTypes = getEnabledCommercialSpaceTypesFromDraft(draft, enabledStructures);
+  const apartmentUnitCount = enabledStructures.includes('apartment')
+    ? getDraftUnitCount(draft.apartmentUnitCount, enabledStructures.length === 1 ? draft.totalUnits : null)
+    : 0;
+  const bungalowUnitCount = enabledStructures.includes('bungalow')
+    ? getDraftUnitCount(draft.bungalowUnitCount, enabledStructures.length === 1 ? draft.totalUnits : null)
+    : 0;
+  const shedUnitCount =
+    enabledStructures.includes('commercial') && enabledCommercialSpaceTypes.includes('shed')
+      ? getDraftUnitCount(
+        draft.shedUnitCount,
+        enabledStructures.length === 1 && enabledCommercialSpaceTypes.length === 1 ? draft.totalUnits : null,
+      )
+      : 0;
+  const officeFloorPlan =
+    enabledStructures.includes('commercial') && enabledCommercialSpaceTypes.includes('office') && Array.isArray(draft.officeFloorPlan)
+      ? draft.officeFloorPlan
+      : [];
+  const officeUnitCount = enabledCommercialSpaceTypes.includes('office') ? countOfficeUnits(officeFloorPlan) : 0;
+  const totalUnits = apartmentUnitCount + bungalowUnitCount + shedUnitCount + officeUnitCount;
+  const structure = enabledStructures.length > 1 ? 'mixed' : enabledStructures[0] ?? 'apartment';
+  const commercialSpaceType =
+    enabledCommercialSpaceTypes.length === 0
+      ? null
+      : enabledCommercialSpaceTypes.includes('office')
+        ? 'office'
+        : 'shed';
+  const generationPlan = [];
+
+  if (apartmentUnitCount > 0) {
+    generationPlan.push({
+      structure: 'apartment',
+      totalUnits: apartmentUnitCount,
+      unitStructureOptions: {},
+    });
+  }
+
+  if (bungalowUnitCount > 0) {
+    generationPlan.push({
+      structure: 'bungalow',
+      totalUnits: bungalowUnitCount,
+      unitStructureOptions: {},
+    });
+  }
+
+  if (shedUnitCount > 0) {
+    generationPlan.push({
+      structure: 'commercial',
+      totalUnits: shedUnitCount,
+      unitStructureOptions: {
+        commercialSpaceType: 'shed',
+      },
+    });
+  }
+
+  if (officeUnitCount > 0) {
+    generationPlan.push({
+      structure: 'commercial',
+      totalUnits: officeUnitCount,
+      unitStructureOptions: {
+        commercialSpaceType: 'office',
+        officeFloorPlan,
+      },
+    });
+  }
+
+  const structureSetup = {
+    structure,
+    enabledStructures,
+    commercialSpaceType,
+    enabledCommercialSpaceTypes,
+    apartmentUnitCount: apartmentUnitCount || null,
+    bungalowUnitCount: bungalowUnitCount || null,
+    shedUnitCount: shedUnitCount || null,
+    officeFloorPlan,
+    officeUnitCount,
+    totalUnits: Math.max(1, totalUnits),
+    generationPlan,
+  };
 
   return {
-    totalUnits,
-    commercialSpaceType: null,
-    officeFloorPlan: [],
-    unitStructureOptions: {},
-    tagline:
-      draft.structure === 'apartment'
-        ? 'New apartment community workspace'
-        : 'New bungalow cluster workspace',
+    ...structureSetup,
+    tagline: buildStructureTagline(structureSetup),
   };
+}
+
+function mergeGeneratedStructures(structures) {
+  let nextSortOrder = 1;
+  const buildings = [];
+  const units = [];
+
+  structures.forEach((structure) => {
+    const buildingIdMap = new Map();
+
+    structure.buildings.forEach((building) => {
+      const normalizedBuilding = {
+        ...building,
+        sortOrder: nextSortOrder,
+      };
+
+      nextSortOrder += 1;
+      buildings.push(normalizedBuilding);
+      buildingIdMap.set(building.id, normalizedBuilding.id);
+    });
+
+    structure.units.forEach((unit) => {
+      units.push({
+        ...unit,
+        buildingId: unit.buildingId ? buildingIdMap.get(unit.buildingId) ?? unit.buildingId : unit.buildingId,
+      });
+    });
+  });
+
+  return { buildings, units };
 }
 
 function createSocietyWorkspace(userId, draft) {
@@ -367,13 +615,19 @@ function createSocietyWorkspace(userId, draft) {
   const maintenanceDay = Math.min(28, Math.max(1, Number.parseInt(draft.maintenanceDay, 10) || 10));
   const maintenanceAmount = Math.max(1000, Number.parseInt(draft.maintenanceAmount, 10) || 5000);
   const structureSetup = resolveStructureSetup(draft);
-  const generatedStructure = createUnitStructure(
-    societyId,
-    draft.structure,
-    structureSetup.totalUnits,
-    structureSetup.unitStructureOptions,
+  const generatedStructure = mergeGeneratedStructures(
+    structureSetup.generationPlan.map((structurePlan) =>
+      createUnitStructure(
+        societyId,
+        structurePlan.structure,
+        structurePlan.totalUnits,
+        structurePlan.unitStructureOptions,
+      ),
+    ),
   );
   const amenitySetup = createAmenitiesFromSelection(societyId, draft.selectedAmenities);
+  const existingUserProfile = db.prepare('SELECT preferredRole FROM userProfiles WHERE userId = ?').get(userId);
+  const preferredRoleToPersist = existingUserProfile?.preferredRole ?? null;
 
   runTransaction(() => {
     const existingMembershipCount = Number(
@@ -389,8 +643,13 @@ function createSocietyWorkspace(userId, draft) {
         city: draft.city.trim(),
         area: draft.area.trim(),
         address: draft.address.trim(),
-        structure: draft.structure,
+        structure: structureSetup.structure,
+        enabledStructures: structureSetup.enabledStructures,
         commercialSpaceType: structureSetup.commercialSpaceType,
+        enabledCommercialSpaceTypes: structureSetup.enabledCommercialSpaceTypes,
+        apartmentUnitCount: structureSetup.apartmentUnitCount,
+        bungalowUnitCount: structureSetup.bungalowUnitCount,
+        shedUnitCount: structureSetup.shedUnitCount,
         officeFloorPlan: structureSetup.officeFloorPlan,
         timezone: 'Asia/Kolkata',
         totalUnits: structureSetup.totalUnits,
@@ -407,7 +666,7 @@ function createSocietyWorkspace(userId, draft) {
       `INSERT INTO userProfiles (userId, preferredRole, createdAt, updatedAt)
        VALUES (?, ?, ?, ?)
        ON CONFLICT(userId) DO UPDATE SET preferredRole = excluded.preferredRole, updatedAt = excluded.updatedAt`,
-    ).run(userId, 'chairman', now, now);
+    ).run(userId, preferredRoleToPersist, now, now);
     insertMany('memberships', [
       {
         id: nextId('membership'),
@@ -457,6 +716,9 @@ function createSocietyWorkspace(userId, draft) {
         lateFeeInr: 250,
         calculationMethod: 'fixed',
         receiptPrefix: draft.societyName.trim().slice(0, 3).toUpperCase(),
+        upiId: null,
+        upiPayeeName: draft.societyName.trim(),
+        upiQrCodeDataUrl: null,
       },
     ]);
   });
@@ -466,6 +728,18 @@ function createSocietyWorkspace(userId, draft) {
     societyId,
     data: getSnapshot(),
   };
+}
+
+function deleteSocietyWorkspace(societyId) {
+  const existingSociety = db.prepare('SELECT id FROM societies WHERE id = ?').get(societyId);
+
+  if (!existingSociety) {
+    return false;
+  }
+
+  db.prepare('DELETE FROM societies WHERE id = ?').run(societyId);
+
+  return true;
 }
 
 function resetDatabase() {
@@ -491,6 +765,7 @@ function initializeDatabase() {
   if (!hasSeedData()) {
     seedDatabase(seedData);
   }
+  ensureSuperUserAccount();
 }
 
 module.exports = {
@@ -498,6 +773,7 @@ module.exports = {
   createSocietyWorkspace,
   db,
   dbPath,
+  deleteSocietyWorkspace,
   getSnapshot,
   initializeDatabase,
   resetDatabase,

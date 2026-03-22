@@ -86,7 +86,7 @@ function createUnitStructure(societyId, structure, totalUnits, options = {}) {
         (floor) => floor.officeCodes.length > 0,
       );
       const buildings = configuredFloors.map((floor, index) => ({
-        id: `${societyId}-building-${slugify(floor.floorLabel) || `floor-${index + 1}`}`,
+        id: `${societyId}-building-office-${slugify(floor.floorLabel) || `floor-${index + 1}`}`,
         societyId,
         name: floor.floorLabel,
         sortOrder: index + 1,

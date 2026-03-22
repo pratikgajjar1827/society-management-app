@@ -20,14 +20,30 @@ import {
 } from '../data/factories';
 import { useApp } from '../state/AppContext';
 import { palette, radius, spacing } from '../theme/tokens';
-import { OfficeFloorPlanEntry, SocietySetupDraft } from '../types/domain';
 import {
+  CommercialSpaceType,
+  OfficeFloorPlanEntry,
+  SocietySetupDraft,
+  SocietyStructure,
+  SocietyStructureOption,
+} from '../types/domain';
+import {
+  getEnabledCommercialSpaceTypes,
+  getEnabledStructures,
   getSocietyStructurePreviewLabel,
   getSocietyUnitCollectionLabel,
 } from '../utils/selectors';
 
+const structureOptions: SocietyStructureOption[] = ['apartment', 'bungalow', 'commercial'];
+const commercialSpaceTypes: CommercialSpaceType[] = ['shed', 'office'];
+
 function sanitizeNumber(value: string) {
   return value.replace(/[^0-9]/g, '');
+}
+
+function parseWholeNumber(value: string) {
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function cloneOfficeFloorPlan(officeFloorPlan: OfficeFloorPlanEntry[]) {
@@ -51,19 +67,95 @@ function cloneDraft(draft: SocietySetupDraft): SocietySetupDraft {
   };
 }
 
-function getDerivedTotalUnits(draft: SocietySetupDraft) {
-  if (draft.structure !== 'commercial' || draft.commercialSpaceType !== 'office') {
-    return draft.totalUnits;
+function normalizeStructureSelections(value?: SocietyStructureOption[]) {
+  return [...new Set((value ?? []).filter((item): item is SocietyStructureOption => structureOptions.includes(item)))];
+}
+
+function normalizeCommercialSelections(value?: CommercialSpaceType[]) {
+  return [...new Set((value ?? []).filter((item): item is CommercialSpaceType => commercialSpaceTypes.includes(item)))];
+}
+
+function deriveStructure(enabledStructures: SocietyStructureOption[]): SocietyStructure {
+  if (enabledStructures.length > 1) {
+    return 'mixed';
   }
 
-  const totalOfficeSpaces = countOfficeUnits(draft.officeFloorPlan);
-  return totalOfficeSpaces > 0 ? String(totalOfficeSpaces) : '';
+  return enabledStructures[0] ?? 'apartment';
+}
+
+function deriveCommercialSpaceType(enabledCommercialSpaceTypes: CommercialSpaceType[]): CommercialSpaceType {
+  if (enabledCommercialSpaceTypes.includes('office')) {
+    return 'office';
+  }
+
+  return 'shed';
+}
+
+function hasStructureSelected(draft: SocietySetupDraft, structure: SocietyStructureOption) {
+  return getEnabledStructures(draft).includes(structure);
+}
+
+function hasCommercialSpaceTypeSelected(draft: SocietySetupDraft, commercialSpaceType: CommercialSpaceType) {
+  return getEnabledCommercialSpaceTypes(draft).includes(commercialSpaceType);
+}
+
+function getDerivedTotalUnits(draft: SocietySetupDraft) {
+  const enabledStructures = getEnabledStructures(draft);
+  const enabledCommercialSpaceTypes = getEnabledCommercialSpaceTypes(draft);
+  const apartmentUnitCount = enabledStructures.includes('apartment')
+    ? parseWholeNumber(draft.apartmentUnitCount)
+    : 0;
+  const bungalowUnitCount = enabledStructures.includes('bungalow')
+    ? parseWholeNumber(draft.bungalowUnitCount)
+    : 0;
+  const shedUnitCount =
+    enabledStructures.includes('commercial') && enabledCommercialSpaceTypes.includes('shed')
+      ? parseWholeNumber(draft.shedUnitCount)
+      : 0;
+  const officeUnitCount =
+    enabledStructures.includes('commercial') && enabledCommercialSpaceTypes.includes('office')
+      ? countOfficeUnits(draft.officeFloorPlan)
+      : 0;
+  const totalUnits = apartmentUnitCount + bungalowUnitCount + shedUnitCount + officeUnitCount;
+
+  return totalUnits > 0 ? String(totalUnits) : '';
 }
 
 function syncDerivedFields(draft: SocietySetupDraft) {
-  return {
+  const normalizedStructureSelections = normalizeStructureSelections(draft.enabledStructures);
+  const enabledStructures =
+    normalizedStructureSelections.length > 0
+      ? normalizedStructureSelections
+      : structureOptions.includes(draft.structure as SocietyStructureOption)
+        ? [draft.structure as SocietyStructureOption]
+        : [];
+  const normalizedCommercialStructureSelections = normalizeCommercialSelections(
+    draft.enabledCommercialSpaceTypes,
+  );
+  const enabledCommercialSpaceTypes = enabledStructures.includes('commercial')
+    ? normalizedCommercialStructureSelections.length > 0
+      ? normalizedCommercialStructureSelections
+      : commercialSpaceTypes.includes(draft.commercialSpaceType)
+        ? [draft.commercialSpaceType]
+        : []
+    : [];
+  const normalizedDraft = {
     ...draft,
-    totalUnits: getDerivedTotalUnits(draft),
+    enabledStructures,
+    enabledCommercialSpaceTypes,
+  };
+
+  return {
+    ...normalizedDraft,
+    enabledStructures,
+    enabledCommercialSpaceTypes,
+    structure: deriveStructure(enabledStructures),
+    commercialSpaceType: deriveCommercialSpaceType(enabledCommercialSpaceTypes),
+    officeFloorPlan:
+      draft.officeFloorPlan.length > 0
+        ? cloneOfficeFloorPlan(draft.officeFloorPlan)
+        : [createOfficeFloorEntry(0)],
+    totalUnits: getDerivedTotalUnits(normalizedDraft),
   };
 }
 
@@ -78,20 +170,61 @@ function toggleAmenity(draft: SocietySetupDraft, amenityName: string): SocietySe
   };
 }
 
-function getUnitCountFieldLabel(draft: SocietySetupDraft) {
-  if (draft.structure === 'commercial') {
-    return draft.commercialSpaceType === 'office' ? 'Total office spaces' : 'Total sheds';
-  }
+function toggleStructureSelection(draft: SocietySetupDraft, structure: SocietyStructureOption): SocietySetupDraft {
+  const enabledStructures = hasStructureSelected(draft, structure)
+    ? getEnabledStructures(draft).filter((item) => item !== structure)
+    : [...getEnabledStructures(draft), structure];
 
-  return draft.structure === 'bungalow' ? 'Total plots' : 'Total units';
+  return syncDerivedFields({
+    ...draft,
+    enabledStructures,
+    enabledCommercialSpaceTypes: enabledStructures.includes('commercial')
+      ? draft.enabledCommercialSpaceTypes
+      : [],
+  });
+}
+
+function toggleCommercialSpaceTypeSelection(
+  draft: SocietySetupDraft,
+  commercialSpaceType: CommercialSpaceType,
+): SocietySetupDraft {
+  const enabledCommercialSpaceTypes = hasCommercialSpaceTypeSelected(draft, commercialSpaceType)
+    ? getEnabledCommercialSpaceTypes(draft).filter((item) => item !== commercialSpaceType)
+    : [...getEnabledCommercialSpaceTypes(draft), commercialSpaceType];
+
+  return syncDerivedFields({
+    ...draft,
+    enabledCommercialSpaceTypes,
+  });
 }
 
 function getSelectionLabel(draft: SocietySetupDraft) {
-  if (draft.structure === 'commercial') {
-    return draft.commercialSpaceType === 'office' ? 'office space number' : 'shed number';
+  const enabledStructures = getEnabledStructures(draft);
+  const enabledCommercialSpaceTypes = getEnabledCommercialSpaceTypes(draft);
+
+  if (enabledStructures.length > 1) {
+    return 'unit or space number';
   }
 
-  return draft.structure === 'bungalow' ? 'plot number' : 'home number';
+  if (enabledStructures[0] === 'commercial') {
+    if (enabledCommercialSpaceTypes.length > 1) {
+      return 'unit or space number';
+    }
+
+    return enabledCommercialSpaceTypes[0] === 'office' ? 'office space number' : 'shed number';
+  }
+
+  return enabledStructures[0] === 'bungalow' ? 'plot number' : 'home number';
+}
+
+function getUnitsSectionDescription(draft: SocietySetupDraft) {
+  const enabledCommercialSpaceTypes = getEnabledCommercialSpaceTypes(draft);
+
+  if (enabledCommercialSpaceTypes.includes('office')) {
+    return 'Office totals are calculated from the floor-wise office allocations you configure above.';
+  }
+
+  return 'Set the count for each structure type this society manages. Total inventory is calculated automatically.';
 }
 
 export function SocietySetupWizardScreen() {
@@ -145,6 +278,11 @@ export function SocietySetupWizardScreen() {
     });
   }
 
+  const enabledStructures = getEnabledStructures(draft);
+  const enabledCommercialSpaceTypes = getEnabledCommercialSpaceTypes(draft);
+  const apartmentUnitCount = parseWholeNumber(draft.apartmentUnitCount);
+  const bungalowUnitCount = parseWholeNumber(draft.bungalowUnitCount);
+  const shedUnitCount = parseWholeNumber(draft.shedUnitCount);
   const totalUnits = Number.parseInt(draft.totalUnits, 10);
   const totalUnitsValid = Number.isFinite(totalUnits) && totalUnits > 0;
   const normalizedOfficeFloors = normalizeOfficeFloorPlan(draft.officeFloorPlan);
@@ -175,11 +313,31 @@ export function SocietySetupWizardScreen() {
     validationIssues.push('Enter the full address.');
   }
 
+  if (enabledStructures.length === 0) {
+    validationIssues.push('Select at least one society structure.');
+  }
+
+  if (enabledStructures.includes('apartment') && apartmentUnitCount < 1) {
+    validationIssues.push('Add at least one apartment or tower home.');
+  }
+
+  if (enabledStructures.includes('bungalow') && bungalowUnitCount < 1) {
+    validationIssues.push('Add at least one bungalow or plot.');
+  }
+
+  if (enabledStructures.includes('commercial') && enabledCommercialSpaceTypes.length === 0) {
+    validationIssues.push('Choose at least one commercial space type.');
+  }
+
+  if (enabledCommercialSpaceTypes.includes('shed') && shedUnitCount < 1) {
+    validationIssues.push('Add at least one shed when commercial sheds are enabled.');
+  }
+
   if (!totalUnitsValid) {
     validationIssues.push('Add at least one unit or commercial space.');
   }
 
-  if (draft.structure === 'commercial' && draft.commercialSpaceType === 'office') {
+  if (enabledCommercialSpaceTypes.includes('office')) {
     const emptyOfficeFloors = draft.officeFloorPlan
       .map((floor, index) => ({
         label: floor.floorLabel.trim() || `Floor ${index + 1}`,
@@ -292,45 +450,62 @@ export function SocietySetupWizardScreen() {
       </SurfaceCard>
 
       <SurfaceCard>
-        <SectionHeader title="2. Society structure" />
+        <SectionHeader
+          title="2. Society structure"
+          description="Select every structure this society manages. Mixed-use builders can enable apartments, bungalows, and commercial spaces together."
+        />
         <View style={styles.choiceWrap}>
           <ChoiceChip
             label="Apartment / tower model"
-            selected={draft.structure === 'apartment'}
-            onPress={() => updateDraft({ structure: 'apartment' })}
+            selected={enabledStructures.includes('apartment')}
+            onPress={() =>
+              setDraft((currentDraft) => toggleStructureSelection(currentDraft, 'apartment'))
+            }
           />
           <ChoiceChip
             label="Bungalow / plot model"
-            selected={draft.structure === 'bungalow'}
-            onPress={() => updateDraft({ structure: 'bungalow' })}
+            selected={enabledStructures.includes('bungalow')}
+            onPress={() =>
+              setDraft((currentDraft) => toggleStructureSelection(currentDraft, 'bungalow'))
+            }
           />
           <ChoiceChip
             label="Commercial complex"
-            selected={draft.structure === 'commercial'}
-            onPress={() => updateDraft({ structure: 'commercial' })}
+            selected={enabledStructures.includes('commercial')}
+            onPress={() =>
+              setDraft((currentDraft) => toggleStructureSelection(currentDraft, 'commercial'))
+            }
           />
         </View>
 
-        {draft.structure === 'commercial' ? (
+        {enabledStructures.includes('commercial') ? (
           <View style={styles.structurePanel}>
             <SectionHeader
               title="Commercial space type"
-              description="Choose whether this society manages sheds or office spaces."
+              description="Choose one or both if this society includes sheds and office spaces in the same workspace."
             />
             <View style={styles.choiceWrap}>
               <ChoiceChip
                 label="Shed"
-                selected={draft.commercialSpaceType === 'shed'}
-                onPress={() => updateDraft({ commercialSpaceType: 'shed' })}
+                selected={enabledCommercialSpaceTypes.includes('shed')}
+                onPress={() =>
+                  setDraft((currentDraft) =>
+                    toggleCommercialSpaceTypeSelection(currentDraft, 'shed'),
+                  )
+                }
               />
               <ChoiceChip
                 label="Office space"
-                selected={draft.commercialSpaceType === 'office'}
-                onPress={() => updateDraft({ commercialSpaceType: 'office' })}
+                selected={enabledCommercialSpaceTypes.includes('office')}
+                onPress={() =>
+                  setDraft((currentDraft) =>
+                    toggleCommercialSpaceTypeSelection(currentDraft, 'office'),
+                  )
+                }
               />
             </View>
 
-            {draft.commercialSpaceType === 'office' ? (
+            {enabledCommercialSpaceTypes.includes('office') ? (
               <>
                 <Caption>
                   Add each floor separately and enter the exact office numbers or ranges the society
@@ -394,16 +569,21 @@ export function SocietySetupWizardScreen() {
                 ) : null}
 
                 <View style={styles.previewRow}>
-                  <Pill label={`${draft.totalUnits || '0'} office spaces`} tone="accent" />
+                  <Pill
+                    label={`${countOfficeUnits(draft.officeFloorPlan) || 0} office spaces`}
+                    tone="accent"
+                  />
                   <Pill label={`${draft.officeFloorPlan.length} configured floors`} tone="primary" />
                 </View>
               </>
-            ) : (
+            ) : null}
+
+            {enabledCommercialSpaceTypes.includes('shed') ? (
               <Caption>
                 Each shed will be created as an individual commercial space and can be assigned
                 later during occupancy and billing setup.
               </Caption>
-            )}
+            ) : null}
           </View>
         ) : null}
       </SurfaceCard>
@@ -411,30 +591,56 @@ export function SocietySetupWizardScreen() {
       <SurfaceCard>
         <SectionHeader
           title="3. Units and maintenance"
-          description={
-            draft.structure === 'commercial' && draft.commercialSpaceType === 'office'
-              ? 'Office totals are calculated from the floor-wise office allocations you configure above.'
-              : undefined
-          }
+          description={getUnitsSectionDescription(draft)}
         />
 
-        {draft.structure === 'commercial' && draft.commercialSpaceType === 'office' ? (
+        {enabledStructures.includes('apartment') ? (
+          <InputField
+            label="Apartment / tower homes"
+            value={draft.apartmentUnitCount}
+            onChangeText={(value) => updateDraft({ apartmentUnitCount: sanitizeNumber(value) })}
+            keyboardType="numeric"
+            placeholder="48"
+          />
+        ) : null}
+
+        {enabledStructures.includes('bungalow') ? (
+          <InputField
+            label="Bungalow / plot homes"
+            value={draft.bungalowUnitCount}
+            onChangeText={(value) => updateDraft({ bungalowUnitCount: sanitizeNumber(value) })}
+            keyboardType="numeric"
+            placeholder="12"
+          />
+        ) : null}
+
+        {enabledCommercialSpaceTypes.includes('shed') ? (
+          <InputField
+            label="Commercial sheds"
+            value={draft.shedUnitCount}
+            onChangeText={(value) => updateDraft({ shedUnitCount: sanitizeNumber(value) })}
+            keyboardType="numeric"
+            placeholder="8"
+          />
+        ) : null}
+
+        {enabledCommercialSpaceTypes.includes('office') ? (
           <View style={styles.generatedSummary}>
-            <Text style={styles.generatedValue}>{draft.totalUnits || '0'} office spaces</Text>
+            <Text style={styles.generatedValue}>{countOfficeUnits(draft.officeFloorPlan) || 0} office spaces</Text>
             <Caption>
               Based on {draft.officeFloorPlan.length} floor allocation
               {draft.officeFloorPlan.length === 1 ? '' : 's'} and the exact office codes you enter.
             </Caption>
           </View>
-        ) : (
-          <InputField
-            label={getUnitCountFieldLabel(draft)}
-            value={draft.totalUnits}
-            onChangeText={(value) => updateDraft({ totalUnits: sanitizeNumber(value) })}
-            keyboardType="numeric"
-            placeholder="48"
-          />
-        )}
+        ) : null}
+
+        <View style={styles.generatedSummary}>
+          <Text style={styles.generatedValue}>{draft.totalUnits || '0'} total units and spaces</Text>
+          <Caption>
+            Inventory is calculated automatically from the structure mix and the per-type counts
+            you configure here.
+          </Caption>
+        </View>
 
         <View style={styles.twoColumn}>
           <View style={styles.column}>

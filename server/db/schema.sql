@@ -17,7 +17,12 @@ CREATE TABLE IF NOT EXISTS societies (
   area TEXT NOT NULL,
   address TEXT NOT NULL,
   structure TEXT NOT NULL,
+  enabledStructures TEXT,
   commercialSpaceType TEXT,
+  enabledCommercialSpaceTypes TEXT,
+  apartmentUnitCount INTEGER,
+  bungalowUnitCount INTEGER,
+  shedUnitCount INTEGER,
   officeFloorPlan TEXT,
   timezone TEXT NOT NULL,
   totalUnits INTEGER NOT NULL,
@@ -72,6 +77,28 @@ CREATE TABLE IF NOT EXISTS joinRequests (
   FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE,
   FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (reviewedByUserId) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS residenceProfiles (
+  id TEXT PRIMARY KEY,
+  societyId TEXT NOT NULL,
+  userId TEXT NOT NULL,
+  residentType TEXT NOT NULL,
+  fullName TEXT NOT NULL,
+  phone TEXT NOT NULL,
+  email TEXT,
+  alternatePhone TEXT,
+  emergencyContactName TEXT,
+  emergencyContactPhone TEXT,
+  moveInDate TEXT NOT NULL,
+  dataProtectionConsentAt TEXT NOT NULL,
+  rentAgreementFileName TEXT,
+  rentAgreementDataUrl TEXT,
+  rentAgreementUploadedAt TEXT,
+  updatedAt TEXT NOT NULL,
+  FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE,
+  FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
+  UNIQUE (societyId, userId)
 );
 
 CREATE TABLE IF NOT EXISTS occupancy (
@@ -160,6 +187,11 @@ CREATE TABLE IF NOT EXISTS maintenancePlans (
   lateFeeInr INTEGER NOT NULL,
   calculationMethod TEXT NOT NULL,
   receiptPrefix TEXT NOT NULL,
+  upiId TEXT,
+  upiMobileNumber TEXT,
+  upiPayeeName TEXT,
+  upiQrCodeDataUrl TEXT,
+  upiQrPayload TEXT,
   FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE
 );
 
@@ -201,6 +233,7 @@ CREATE TABLE IF NOT EXISTS payments (
   status TEXT NOT NULL,
   submittedByUserId TEXT,
   referenceNote TEXT,
+  proofImageDataUrl TEXT,
   reviewedByUserId TEXT,
   reviewedAt TEXT,
   FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE,

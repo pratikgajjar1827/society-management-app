@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import {
   ActionButton,
@@ -15,8 +15,16 @@ import {
   SectionHeader,
   SurfaceCard,
 } from '../../components/ui';
+import { MaintenanceReceiptCard } from '../../components/MaintenanceReceiptCard';
 import { useApp } from '../../state/AppContext';
 import { palette, spacing } from '../../theme/tokens';
+import {
+  buildMaintenanceReceiptDetails,
+  buildMaintenanceReceiptWhatsappMessage,
+  downloadMaintenanceReceiptPdf,
+  openMaintenanceReceiptPdf,
+  shareMaintenanceReceiptPdfWithMessage,
+} from '../../utils/receipts';
 import {
   AdminRecommendationTab,
   formatCurrency,
@@ -40,19 +48,25 @@ import {
   getPaymentRemindersForSociety,
   getPaymentsForSociety,
   getResidentsDirectory,
+  getEnabledStructures,
   getSocietyUnitCollectionLabel,
   getRulesForSociety,
   getSelectedSociety,
   getStaffVerificationDirectory,
+  societySupportsOfficeSpaces,
   humanizeRole,
 } from '../../utils/selectors';
+import { AnnouncementAudience, AnnouncementPriority, PaymentMethod } from '../../types/domain';
 
-type AdminTab = 'home' | AdminRecommendationTab;
+type AdminTab = 'home' | AdminRecommendationTab | 'ledger';
+type OfficeMaintenanceState = 'paid' | 'pending' | 'overdue' | 'unbilled';
 
 const adminTabs: Array<{ key: AdminTab; label: string }> = [
   { key: 'home', label: 'Admin Home' },
   { key: 'residents', label: 'Residents' },
   { key: 'billing', label: 'Billing' },
+  { key: 'collections', label: 'Collections' },
+  { key: 'ledger', label: 'Payment ledger' },
   { key: 'amenities', label: 'Amenities' },
   { key: 'helpdesk', label: 'Helpdesk' },
   { key: 'security', label: 'Security' },
@@ -63,6 +77,12 @@ const adminTabs: Array<{ key: AdminTab; label: string }> = [
 const expenseTypes = [
   { key: 'maintenance' as const, label: 'Maintenance' },
   { key: 'adhoc' as const, label: 'Ad hoc' },
+];
+
+const paymentMethodOptions = [
+  { key: 'upi' as const, label: 'UPI' },
+  { key: 'netbanking' as const, label: 'Netbanking' },
+  { key: 'cash' as const, label: 'Cash' },
 ];
 
 const staffCategories = [
@@ -87,6 +107,131 @@ const entrySubjects = [
 const entryStatuses = [
   { key: 'inside' as const, label: 'Inside' },
   { key: 'exited' as const, label: 'Exited' },
+];
+
+const announcementAudienceOptions = [
+  { key: 'all' as const, label: 'All members' },
+  { key: 'residents' as const, label: 'Residents' },
+  { key: 'owners' as const, label: 'Owners' },
+  { key: 'tenants' as const, label: 'Tenants' },
+  { key: 'committee' as const, label: 'Committee' },
+];
+
+const announcementPriorityOptions = [
+  { key: 'normal' as const, label: 'Normal' },
+  { key: 'high' as const, label: 'High' },
+  { key: 'critical' as const, label: 'Critical' },
+];
+
+const announcementTemplates = [
+  {
+    key: 'water-shutdown',
+    title: 'Water supply shutdown',
+    summary: 'Planned water tank cleaning or line maintenance notice.',
+    audience: 'all' as const,
+    priority: 'high' as const,
+    buildBody: (societyName: string) =>
+      `Water supply in ${societyName} will remain unavailable on [date and time] due to tank cleaning / plumbing maintenance. Please store enough water in advance. Supply will resume once the work is completed.`,
+  },
+  {
+    key: 'lift-maintenance',
+    title: 'Lift maintenance notice',
+    summary: 'Temporary elevator shutdown for service or repair.',
+    audience: 'residents' as const,
+    priority: 'high' as const,
+    buildBody: (societyName: string) =>
+      `One of the lifts in ${societyName} will remain under maintenance on [date and time]. Please plan movement accordingly and support senior citizens during the service window.`,
+  },
+  {
+    key: 'society-meeting',
+    title: 'Society meeting notice',
+    summary: 'AGM, SGM, or committee briefing for members.',
+    audience: 'all' as const,
+    priority: 'normal' as const,
+    buildBody: (societyName: string) =>
+      `A society meeting has been scheduled in ${societyName} on [date and time] at [venue / online link]. Agenda: [add agenda]. Members are requested to attend on time.`,
+  },
+  {
+    key: 'pest-control',
+    title: 'Pest control drive',
+    summary: 'Common-area pest control or fumigation update.',
+    audience: 'residents' as const,
+    priority: 'normal' as const,
+    buildBody: (societyName: string) =>
+      `Pest control activity has been planned in ${societyName} on [date and time]. Please keep windows closed where required and cooperate with the housekeeping / vendor team during the treatment window.`,
+  },
+  {
+    key: 'security-advisory',
+    title: 'Security advisory',
+    summary: 'Important gate, visitor, or suspicious activity alert.',
+    audience: 'all' as const,
+    priority: 'critical' as const,
+    buildBody: (societyName: string) =>
+      `Important security advisory for ${societyName}: [describe the issue]. Residents are requested to follow gate instructions, verify visitors properly, and report anything unusual immediately.`,
+  },
+  {
+    key: 'parking-discipline',
+    title: 'Parking discipline reminder',
+    summary: 'Wrong parking, visitor parking, or towing reminder.',
+    audience: 'residents' as const,
+    priority: 'normal' as const,
+    buildBody: (societyName: string) =>
+      `This is a parking discipline reminder for ${societyName}. Please use only your allotted parking space, avoid blocking driveways, and ensure visitor parking is used only as instructed by security.`,
+  },
+  {
+    key: 'fire-drill',
+    title: 'Fire drill / mock drill',
+    summary: 'Emergency preparedness drill for all members.',
+    audience: 'all' as const,
+    priority: 'high' as const,
+    buildBody: (societyName: string) =>
+      `A fire and emergency preparedness drill has been scheduled in ${societyName} on [date and time]. Residents are requested to stay calm, follow the security team's instructions, and participate if asked.`,
+  },
+  {
+    key: 'housekeeping-delay',
+    title: 'Housekeeping delay notice',
+    summary: 'Cleaning or support services running late today.',
+    audience: 'residents' as const,
+    priority: 'normal' as const,
+    buildBody: (societyName: string) =>
+      `Housekeeping services in ${societyName} may run behind schedule on [date] due to staffing or vendor constraints. We appreciate your patience while the team completes pending areas.`,
+  },
+  {
+    key: 'garbage-segregation',
+    title: 'Garbage segregation reminder',
+    summary: 'Wet and dry waste instructions for residents.',
+    audience: 'residents' as const,
+    priority: 'normal' as const,
+    buildBody: (societyName: string) =>
+      `Residents of ${societyName} are requested to follow waste segregation strictly. Please separate wet, dry, and hazardous waste as per society instructions so collection can happen smoothly.`,
+  },
+  {
+    key: 'festival-guidelines',
+    title: 'Festival guidelines and quiet hours',
+    summary: 'Celebration timing, decor, and sound-level guidance.',
+    audience: 'residents' as const,
+    priority: 'normal' as const,
+    buildBody: (societyName: string) =>
+      `Festival celebrations in ${societyName} are welcome. Please follow quiet hours, use common spaces responsibly, and avoid blocking passages or emergency access while decorating or gathering.`,
+  },
+  {
+    key: 'common-repair',
+    title: 'Common area repair work',
+    summary: 'Repair work update for lobby, gate, or pathway areas.',
+    audience: 'all' as const,
+    priority: 'high' as const,
+    buildBody: (societyName: string) =>
+      `Repair work is planned in a common area of ${societyName} on [date and time]. Temporary movement restrictions or noise may occur near [location]. We appreciate your cooperation until the work is completed.`,
+  },
+  {
+    key: 'amenity-closure',
+    title: 'Amenity closure notice',
+    summary: 'Temporary closure of clubhouse, gym, pool, or hall.',
+    audience: 'residents' as const,
+    priority: 'normal' as const,
+    buildBody: (societyName: string) =>
+      `[Amenity name] in ${societyName} will remain closed on [date and time] for cleaning, maintenance, or a private event. Please plan bookings and visits accordingly.`,
+  },
 ];
 
 export function AdminShell() {
@@ -114,7 +259,9 @@ export function AdminShell() {
         subtitle="Admin mode is built for occupancy control, collections, security, and auditable society operations."
       >
         <View style={styles.heroActions}>
-          <ActionButton label="Resident view" onPress={actions.goToRoleSelection} variant="secondary" />
+          {state.session.accountRole !== 'superUser' ? (
+            <ActionButton label="Resident view" onPress={actions.goToRoleSelection} variant="secondary" />
+          ) : null}
           <ActionButton label="Workspaces" onPress={actions.goToWorkspaces} variant="ghost" />
         </View>
         <View style={styles.metricGrid}>
@@ -129,6 +276,8 @@ export function AdminShell() {
       {activeTab === 'home' ? <AdminHome societyId={society.id} onOpenTab={setActiveTab} /> : null}
       {activeTab === 'residents' ? <AdminResidents societyId={society.id} /> : null}
       {activeTab === 'billing' ? <AdminBilling societyId={society.id} /> : null}
+      {activeTab === 'collections' ? <AdminCollections societyId={society.id} /> : null}
+      {activeTab === 'ledger' ? <AdminPaymentLedger societyId={society.id} /> : null}
       {activeTab === 'amenities' ? <AdminAmenities societyId={society.id} /> : null}
       {activeTab === 'helpdesk' ? <AdminHelpdesk societyId={society.id} /> : null}
       {activeTab === 'security' ? <AdminSecurity societyId={society.id} /> : null}
@@ -143,6 +292,55 @@ function AdminHome({ societyId, onOpenTab }: { societyId: string; onOpenTab: (ta
   const overview = getAdminOverview(state.data, societyId);
   const pendingJoinRequests = getJoinRequestsForSociety(state.data, societyId, 'pending');
   const recommendations = getAdminRecommendations(state.data, societyId);
+  const society = getSelectedSociety(state.data, societyId);
+  const isSuperUser = state.session.accountRole === 'superUser';
+  const [societyName, setSocietyName] = useState('');
+  const [country, setCountry] = useState('');
+  const [regionState, setRegionState] = useState('');
+  const [city, setCity] = useState('');
+  const [area, setArea] = useState('');
+  const [address, setAddress] = useState('');
+  const [tagline, setTagline] = useState('');
+  const [confirmDeleteSociety, setConfirmDeleteSociety] = useState(false);
+
+  useEffect(() => {
+    setSocietyName(society?.name ?? '');
+    setCountry(society?.country ?? '');
+    setRegionState(society?.state ?? '');
+    setCity(society?.city ?? '');
+    setArea(society?.area ?? '');
+    setAddress(society?.address ?? '');
+    setTagline(society?.tagline ?? '');
+  }, [
+    society?.address,
+    society?.area,
+    society?.city,
+    society?.country,
+    society?.id,
+    society?.name,
+    society?.state,
+    society?.tagline,
+  ]);
+
+  async function handleSaveSocietyProfile() {
+    await actions.updateSocietyProfile(societyId, {
+      name: societyName,
+      country,
+      state: regionState,
+      city,
+      area,
+      address,
+      tagline,
+    });
+  }
+
+  async function handleDeleteSociety() {
+    const deleted = await actions.deleteSocietyWorkspace(societyId);
+
+    if (deleted) {
+      setConfirmDeleteSociety(false);
+    }
+  }
 
   return (
     <>
@@ -151,9 +349,24 @@ function AdminHome({ societyId, onOpenTab }: { societyId: string; onOpenTab: (ta
           <SectionHeader title="Pending access approvals" description="Approve ownership and tenancy claims before access is linked." />
           {pendingJoinRequests.map((request) => (
             <View key={request.joinRequest.id} style={styles.requestCard}>
-              <Text style={styles.cardTitle}>{request.user?.name ?? 'Resident request'}</Text>
+              <Text style={styles.cardTitle}>
+                {request.residenceProfile?.fullName ?? request.user?.name ?? 'Resident request'}
+              </Text>
               <Caption>Requested as {request.joinRequest.residentType} on {formatLongDate(request.joinRequest.createdAt)}</Caption>
               <Caption>Units: {request.units.map((unit) => unit?.code).filter(Boolean).join(', ')}</Caption>
+              {request.residenceProfile ? (
+                <Caption>
+                  Move-in date: {formatLongDate(request.residenceProfile.moveInDate)}
+                  {request.residenceProfile.emergencyContactName
+                    ? ` · Emergency contact ${request.residenceProfile.emergencyContactName}`
+                    : ''}
+                </Caption>
+              ) : null}
+              {request.joinRequest.residentType === 'tenant' ? (
+                <Caption>
+                  Rent agreement: {request.residenceProfile?.rentAgreementFileName ? 'Attached' : 'Pending upload'}
+                </Caption>
+              ) : null}
               <View style={styles.heroActions}>
                 <ActionButton
                   label={state.isSyncing ? 'Processing...' : 'Approve'}
@@ -178,6 +391,118 @@ function AdminHome({ societyId, onOpenTab }: { societyId: string; onOpenTab: (ta
           Overdue invoices: {overview.overdueInvoices}. Pending approvals: {overview.pendingApprovals}. Active guards: {overview.activeGuards}.
         </Caption>
       </SurfaceCard>
+
+      {society ? (
+        <SurfaceCard>
+          <SectionHeader
+            title="Society profile"
+            description="Update the society name and location here after setup. Structure, unit count, and space layout stay locked so existing records remain stable."
+          />
+          <View style={styles.formGrid}>
+            <View style={styles.formField}>
+              <InputField
+                label="Society name"
+                value={societyName}
+                onChangeText={setSocietyName}
+                placeholder="Green Valley Residency"
+              />
+            </View>
+            <View style={styles.formField}>
+              <InputField
+                label="Country"
+                value={country}
+                onChangeText={setCountry}
+                placeholder="India"
+                autoCapitalize="words"
+              />
+            </View>
+            <View style={styles.formField}>
+              <InputField
+                label="State"
+                value={regionState}
+                onChangeText={setRegionState}
+                placeholder="Gujarat"
+                autoCapitalize="words"
+              />
+            </View>
+            <View style={styles.formField}>
+              <InputField
+                label="City"
+                value={city}
+                onChangeText={setCity}
+                placeholder="Ahmedabad"
+                autoCapitalize="words"
+              />
+            </View>
+            <View style={styles.formField}>
+              <InputField
+                label="Area"
+                value={area}
+                onChangeText={setArea}
+                placeholder="Prahladnagar"
+                autoCapitalize="words"
+              />
+            </View>
+          </View>
+          <InputField
+            label="Address"
+            value={address}
+            onChangeText={setAddress}
+            placeholder="Prahladnagar Road, Ahmedabad"
+            multiline
+          />
+          <InputField
+            label="Tagline"
+            value={tagline}
+            onChangeText={setTagline}
+            placeholder="Short summary shown in society discovery"
+          />
+          <ActionButton
+            label={state.isSyncing ? 'Saving...' : 'Save society profile'}
+            onPress={handleSaveSocietyProfile}
+            disabled={state.isSyncing}
+          />
+
+          {isSuperUser ? (
+            <View style={styles.deleteZone}>
+              <SectionHeader
+                title="Danger zone"
+                description="Delete this society workspace permanently. This removes linked units, announcements, billing records, complaints, bookings, and approvals for this society."
+              />
+              {confirmDeleteSociety ? (
+                <>
+                  <Caption style={styles.deleteWarningText}>
+                    This action cannot be undone. After deletion, this workspace will disappear from the super-user portfolio immediately.
+                  </Caption>
+                  <View style={styles.heroActions}>
+                    <ActionButton
+                      label="Cancel"
+                      onPress={() => setConfirmDeleteSociety(false)}
+                      variant="secondary"
+                      disabled={state.isSyncing}
+                    />
+                    <ActionButton
+                      label={state.isSyncing ? 'Deleting...' : 'Confirm delete society'}
+                      onPress={() => {
+                        void handleDeleteSociety();
+                      }}
+                      variant="danger"
+                      disabled={state.isSyncing}
+                    />
+                  </View>
+                </>
+              ) : (
+                <ActionButton
+                  label="Delete this society"
+                  onPress={() => setConfirmDeleteSociety(true)}
+                  variant="danger"
+                  disabled={state.isSyncing}
+                />
+              )}
+            </View>
+          ) : null}
+        </SurfaceCard>
+      ) : null}
 
       <SurfaceCard>
         <SectionHeader title="Recommended next admin modules" description="Open the next module directly from the current workload." />
@@ -404,41 +729,68 @@ function AdminBilling({ societyId }: { societyId: string }) {
   const [amount, setAmount] = useState('');
   const [incurredOn, setIncurredOn] = useState(todayString());
   const [notes, setNotes] = useState('');
-  const [reminderMessage, setReminderMessage] = useState('');
+  const [planFrequency, setPlanFrequency] = useState<'monthly' | 'quarterly'>('monthly');
+  const [planDueDay, setPlanDueDay] = useState('');
+  const [planAmountInr, setPlanAmountInr] = useState('');
+  const [receiptPrefix, setReceiptPrefix] = useState('');
+  const [upiId, setUpiId] = useState('');
+  const [upiMobileNumber, setUpiMobileNumber] = useState('');
+  const [upiPayeeName, setUpiPayeeName] = useState('');
+  const [upiQrCodeDataUrl, setUpiQrCodeDataUrl] = useState('');
+  const [upiQrPayload, setUpiQrPayload] = useState('');
+  const [qrUploadMessage, setQrUploadMessage] = useState('');
+  const [manualInvoiceId, setManualInvoiceId] = useState<string | null>(null);
+  const [manualPaymentMethod, setManualPaymentMethod] = useState<PaymentMethod>('cash');
+  const [manualPaidAt, setManualPaidAt] = useState(nowDateTimeString(10));
+  const [manualReferenceNote, setManualReferenceNote] = useState('');
+  const society = getSelectedSociety(state.data, societyId);
   const plan = state.data.maintenancePlans.find((item) => item.societyId === societyId);
   const expenses = getExpenseRecordsForSociety(state.data, societyId);
   const payments = getPaymentsForSociety(state.data, societyId);
   const invoiceCollection = getInvoiceCollectionDirectory(state.data, societyId);
-  const paymentReminders = getPaymentRemindersForSociety(state.data, societyId);
-  const pendingPaymentFlags = payments
-    .filter((payment) => payment.status === 'pending')
-    .map((payment) => {
-      const invoice = state.data.invoices.find((invoiceRecord) => invoiceRecord.id === payment.invoiceId);
-      const unit = invoice ? state.data.units.find((unitRecord) => unitRecord.id === invoice.unitId) : undefined;
-      const submitter = payment.submittedByUserId ? getCurrentUser(state.data, payment.submittedByUserId) : undefined;
-
-      if (!invoice) {
-        return undefined;
-      }
-
-      return {
-        payment,
-        invoice,
-        unit,
-        submitter,
-      };
-    })
-    .filter(Boolean) as Array<{
-    payment: typeof payments[number];
-    invoice: typeof state.data.invoices[number];
-    unit?: typeof state.data.units[number];
-    submitter?: typeof state.data.users[number];
-  }>;
   const unpaidInvoices = invoiceCollection.filter(({ invoice }) => invoice.status !== 'paid');
-  const totalOutstanding = unpaidInvoices.reduce((sum, entry) => sum + entry.invoice.amountInr, 0);
-  const totalCaptured = payments
-    .filter((payment) => payment.status === 'captured')
-    .reduce((sum, payment) => sum + payment.amountInr, 0);
+  const pendingPaymentInvoiceIds = new Set(
+    payments.filter((payment) => payment.status === 'pending').map((payment) => payment.invoiceId),
+  );
+  const selectedManualInvoice = unpaidInvoices.find(({ invoice }) => invoice.id === manualInvoiceId)
+    ?? unpaidInvoices[0]
+    ?? null;
+
+  useEffect(() => {
+    setPlanFrequency(plan?.frequency === 'quarterly' ? 'quarterly' : 'monthly');
+    setPlanDueDay(plan?.dueDay ? String(plan.dueDay) : '');
+    setPlanAmountInr(plan?.amountInr ? String(plan.amountInr) : '');
+    setReceiptPrefix(plan?.receiptPrefix ?? '');
+    setUpiId(plan?.upiId?.trim() ?? '');
+    setUpiMobileNumber(plan?.upiMobileNumber?.trim() ?? '');
+    setUpiPayeeName(plan?.upiPayeeName?.trim() || society?.name || '');
+    setUpiQrCodeDataUrl(plan?.upiQrCodeDataUrl?.trim() ?? '');
+    setUpiQrPayload(plan?.upiQrPayload?.trim() ?? '');
+    setQrUploadMessage('');
+  }, [
+    plan?.amountInr,
+    plan?.dueDay,
+    plan?.frequency,
+    plan?.id,
+    plan?.receiptPrefix,
+    plan?.upiId,
+    plan?.upiMobileNumber,
+    plan?.upiPayeeName,
+    plan?.upiQrCodeDataUrl,
+    plan?.upiQrPayload,
+    society?.name,
+  ]);
+
+  useEffect(() => {
+    if (manualInvoiceId && !unpaidInvoices.some(({ invoice }) => invoice.id === manualInvoiceId)) {
+      setManualInvoiceId(unpaidInvoices[0]?.invoice.id ?? null);
+      return;
+    }
+
+    if (!manualInvoiceId && unpaidInvoices.length > 0) {
+      setManualInvoiceId(unpaidInvoices[0].invoice.id);
+    }
+  }, [manualInvoiceId, unpaidInvoices]);
 
   async function handleSave() {
     const saved = await actions.createExpenseRecord(societyId, {
@@ -458,14 +810,73 @@ function AdminBilling({ societyId }: { societyId: string }) {
     }
   }
 
-  async function handleReminder(invoiceIds: string[]) {
-    const sent = await actions.sendMaintenanceReminder(societyId, {
-      invoiceIds,
-      message: reminderMessage,
+  async function handleSaveBillingConfig() {
+    if (!plan) {
+      return;
+    }
+
+    await actions.updateMaintenanceBillingConfig(societyId, plan.id, {
+      upiId,
+      upiMobileNumber,
+      upiPayeeName,
+      upiQrCodeDataUrl,
+      upiQrPayload,
+    });
+  }
+
+  async function handleSavePlanSettings() {
+    if (!plan) {
+      return;
+    }
+
+    await actions.updateMaintenancePlanSettings(societyId, plan.id, {
+      frequency: planFrequency,
+      dueDay: planDueDay,
+      amountInr: planAmountInr,
+      receiptPrefix,
+    });
+  }
+
+  async function handleQrCodeUpload() {
+    try {
+      const selectedImage = await pickWebImageAsDataUrl();
+
+      if (!selectedImage) {
+        return;
+      }
+
+      setUpiQrCodeDataUrl(selectedImage);
+      const decodedPayload = await tryDecodeQrPayloadFromDataUrl(selectedImage);
+      setUpiQrPayload(decodedPayload ?? '');
+      setQrUploadMessage(
+        decodedPayload
+          ? 'QR image selected and decoded. Save the billing setup to publish the exact UPI payload to residents.'
+          : 'QR image selected. Save the billing setup to publish it to residents.',
+      );
+    } catch (error) {
+      setQrUploadMessage(error instanceof Error ? error.message : 'Could not load the selected QR image.');
+    }
+  }
+
+  async function handleManualPaymentCapture() {
+    if (!selectedManualInvoice) {
+      return;
+    }
+
+    const saved = await actions.recordManualPayment(societyId, {
+      invoiceId: selectedManualInvoice.invoice.id,
+      amountInr: String(selectedManualInvoice.invoice.amountInr),
+      method: manualPaymentMethod,
+      paidAt: manualPaidAt,
+      referenceNote: manualReferenceNote,
     });
 
-    if (sent) {
-      setReminderMessage('');
+    if (saved) {
+      setManualReferenceNote('');
+      setManualPaidAt(nowDateTimeString(10));
+      setManualPaymentMethod('cash');
+      const nextInvoice = unpaidInvoices.find(({ invoice }) => invoice.id !== selectedManualInvoice.invoice.id);
+      setManualInvoiceId(nextInvoice?.invoice.id ?? null);
     }
   }
 
@@ -473,101 +884,190 @@ function AdminBilling({ societyId }: { societyId: string }) {
     <>
       {plan ? (
         <SurfaceCard>
-          <SectionHeader title="Maintenance plan" />
-          <DetailRow label="Frequency" value={plan.frequency} />
-          <DetailRow label="Due day" value={`Day ${plan.dueDay}`} />
-          <DetailRow label="Amount" value={formatCurrency(plan.amountInr)} />
+          <SectionHeader
+            title="Maintenance plan"
+            description="Change the recurring maintenance settings here. This updates the master plan for future billing cycles while leaving existing captured receipts untouched."
+          />
+          <View style={styles.choiceRow}>
+            <ChoiceChip
+              label="Monthly"
+              selected={planFrequency === 'monthly'}
+              onPress={() => setPlanFrequency('monthly')}
+            />
+            <ChoiceChip
+              label="Quarterly"
+              selected={planFrequency === 'quarterly'}
+              onPress={() => setPlanFrequency('quarterly')}
+            />
+          </View>
+          <View style={styles.formGrid}>
+            <View style={styles.formField}>
+              <InputField
+                label="Due day"
+                value={planDueDay}
+                onChangeText={setPlanDueDay}
+                keyboardType="numeric"
+                placeholder="10"
+              />
+            </View>
+            <View style={styles.formField}>
+              <InputField
+                label="Amount (INR)"
+                value={planAmountInr}
+                onChangeText={setPlanAmountInr}
+                keyboardType="numeric"
+                placeholder="6500"
+              />
+            </View>
+            <View style={styles.formField}>
+              <InputField
+                label="Receipt prefix"
+                value={receiptPrefix}
+                onChangeText={setReceiptPrefix}
+                autoCapitalize="characters"
+                placeholder="GVA"
+              />
+            </View>
+          </View>
+          <ActionButton
+            label={state.isSyncing ? 'Saving...' : 'Save maintenance plan'}
+            onPress={handleSavePlanSettings}
+            disabled={state.isSyncing}
+          />
+          <View style={styles.inlineSection}>
+            <Text style={styles.inlineTitle}>UPI billing setup</Text>
+            <Caption>Configure the receiver details once so residents can pay through GPay, PhonePe, Paytm, or any other UPI app. You can also add an experimental UPI mobile number if that receiver account supports phone-number payments.</Caption>
+            <View style={styles.formGrid}>
+              <View style={styles.formField}>
+                <InputField
+                  label="UPI ID"
+                  value={upiId}
+                  onChangeText={setUpiId}
+                  autoCapitalize="none"
+                  placeholder="society@upi"
+                />
+              </View>
+              <View style={styles.formField}>
+                <InputField
+                  label="UPI mobile number"
+                  value={upiMobileNumber}
+                  onChangeText={setUpiMobileNumber}
+                  keyboardType="phone-pad"
+                  placeholder="9876543210"
+                />
+              </View>
+              <View style={styles.formField}>
+                <InputField
+                  label="Receiver name"
+                  value={upiPayeeName}
+                  onChangeText={setUpiPayeeName}
+                  placeholder="Society billing desk"
+                />
+              </View>
+            </View>
+            <View style={styles.inlineSection}>
+              <Text style={styles.inlineTitle}>UPI QR code</Text>
+              <Caption>Upload a QR image so residents can scan it directly from their billing screen.</Caption>
+              <View style={styles.heroActions}>
+                <ActionButton
+                  label={upiQrCodeDataUrl ? 'Replace QR image' : 'Upload QR image'}
+                  onPress={handleQrCodeUpload}
+                  variant="secondary"
+                  disabled={state.isSyncing}
+                />
+                {upiQrCodeDataUrl ? (
+                  <ActionButton
+                    label="Remove QR image"
+                    onPress={() => {
+                      setUpiQrCodeDataUrl('');
+                      setUpiQrPayload('');
+                      setQrUploadMessage('QR image removed. Save the billing setup to update residents.');
+                    }}
+                    variant="secondary"
+                    disabled={state.isSyncing}
+                  />
+                ) : null}
+              </View>
+              {Platform.OS !== 'web' ? (
+                <Caption>QR upload is available from the web workspace right now.</Caption>
+              ) : null}
+              {upiQrCodeDataUrl ? (
+                <View style={styles.qrPreviewPanel}>
+                  <Image source={{ uri: upiQrCodeDataUrl }} style={styles.qrPreviewImage} />
+                </View>
+              ) : null}
+              {qrUploadMessage ? <Caption>{qrUploadMessage}</Caption> : null}
+              {upiQrPayload ? <Caption>Decoded QR payload is ready and will be used for direct app-open payments.</Caption> : null}
+            </View>
+            <ActionButton
+              label={state.isSyncing ? 'Saving...' : 'Save UPI billing setup'}
+              onPress={handleSaveBillingConfig}
+              disabled={state.isSyncing}
+            />
+          </View>
         </SurfaceCard>
       ) : null}
 
       <SurfaceCard>
         <SectionHeader
-          title="Collection control"
-          description="Resident payment flags, unpaid invoices, and reminder history now flow through one shared billing module."
+          title="Record manual payment"
+          description="Use this for cash collection or any offline payment that the billing desk wants to capture directly without waiting for a resident review request."
         />
-        <View style={styles.metricGrid}>
-          <MetricCard label="Outstanding dues" value={formatCurrency(totalOutstanding)} tone="accent" />
-          <MetricCard label="Pending payment flags" value={String(pendingPaymentFlags.length)} tone="primary" />
-          <MetricCard label="Collected" value={formatCurrency(totalCaptured)} tone="blue" />
-        </View>
+        {unpaidInvoices.length > 0 ? (
+          <>
+            <View style={styles.choiceRow}>
+              {unpaidInvoices.map(({ invoice, unit }) => (
+                <ChoiceChip
+                  key={invoice.id}
+                  label={`${unit?.code ?? 'Unit'} - ${invoice.periodLabel}`}
+                  selected={selectedManualInvoice?.invoice.id === invoice.id}
+                  onPress={() => setManualInvoiceId(invoice.id)}
+                />
+              ))}
+            </View>
+            {selectedManualInvoice ? (
+              <View style={styles.inlineSection}>
+                <Caption>
+                  {selectedManualInvoice.unit?.code ?? 'Unit'} - {selectedManualInvoice.invoice.periodLabel} - {formatCurrency(selectedManualInvoice.invoice.amountInr)}
+                </Caption>
+                <View style={styles.choiceRow}>
+                  {paymentMethodOptions.map((option) => (
+                    <ChoiceChip
+                      key={option.key}
+                      label={option.label}
+                      selected={manualPaymentMethod === option.key}
+                      onPress={() => setManualPaymentMethod(option.key)}
+                    />
+                  ))}
+                </View>
+                <View style={styles.formGrid}>
+                  <View style={styles.formField}>
+                    <InputField label="Paid on" value={manualPaidAt} onChangeText={setManualPaidAt} placeholder="2026-03-21T10:00" />
+                  </View>
+                  <View style={styles.formField}>
+                    <InputField
+                      label="Reference / note"
+                      value={manualReferenceNote}
+                      onChangeText={setManualReferenceNote}
+                      placeholder="Cash collected at desk, UPI ref, or bank note"
+                    />
+                  </View>
+                </View>
+                <ActionButton
+                  label={state.isSyncing ? 'Saving...' : 'Mark payment as paid'}
+                  onPress={handleManualPaymentCapture}
+                  disabled={state.isSyncing || pendingPaymentInvoiceIds.has(selectedManualInvoice.invoice.id)}
+                />
+                {pendingPaymentInvoiceIds.has(selectedManualInvoice.invoice.id) ? (
+                  <Caption>A resident payment flag is already waiting for review on this invoice. Approve or reject that request first.</Caption>
+                ) : null}
+              </View>
+            ) : null}
+          </>
+        ) : (
+          <Caption>No unpaid invoices are available for manual capture.</Caption>
+        )}
       </SurfaceCard>
-
-      <SurfaceCard>
-        <SectionHeader
-          title="Remind unpaid residents"
-          description="Send one billing reminder to every unit with unpaid maintenance, or trigger it unit by unit from the collection tracker below."
-        />
-        <InputField
-          label="Reminder message"
-          value={reminderMessage}
-          onChangeText={setReminderMessage}
-          multiline
-          placeholder="March maintenance is still pending. Please flag the payment in resident billing or contact the chairman if already settled."
-        />
-        <ActionButton
-          label={state.isSyncing ? 'Sending...' : 'Remind all unpaid residents'}
-          onPress={() => handleReminder(unpaidInvoices.map(({ invoice }) => invoice.id))}
-          disabled={state.isSyncing || unpaidInvoices.length === 0}
-        />
-      </SurfaceCard>
-
-      <SectionHeader title="Pending resident payment flags" />
-      {pendingPaymentFlags.length > 0 ? pendingPaymentFlags.map(({ payment, invoice, unit, submitter }) => (
-        <SurfaceCard key={payment.id}>
-          <View style={styles.rowBetween}>
-            <Text style={styles.cardTitle}>{invoice.periodLabel}</Text>
-            <Pill label="Pending review" tone="warning" />
-          </View>
-          <Caption>{unit?.code ?? 'Unit'} - {formatCurrency(payment.amountInr)} via {humanizePaymentMethod(payment.method)}</Caption>
-          <Caption>Submitted by {submitter?.name ?? 'Resident'} on {formatLongDate(payment.paidAt)}</Caption>
-          {payment.referenceNote ? <Caption>Reference: {payment.referenceNote}</Caption> : null}
-          <View style={styles.heroActions}>
-            <ActionButton
-              label={state.isSyncing ? 'Processing...' : 'Approve payment'}
-              onPress={() => actions.reviewResidentPayment(societyId, payment.id, 'approve')}
-              disabled={state.isSyncing}
-            />
-            <ActionButton
-              label={state.isSyncing ? 'Processing...' : 'Reject payment'}
-              onPress={() => actions.reviewResidentPayment(societyId, payment.id, 'reject')}
-              disabled={state.isSyncing}
-              variant="secondary"
-            />
-          </View>
-        </SurfaceCard>
-      )) : (
-        <SurfaceCard><Caption>No resident payment confirmations are waiting right now.</Caption></SurfaceCard>
-      )}
-
-      <SectionHeader title="Resident maintenance tracker" />
-      {invoiceCollection.map(({ invoice, unit, residents, latestPayment, latestReminder }) => (
-        <SurfaceCard key={invoice.id}>
-          <View style={styles.rowBetween}>
-            <Text style={styles.cardTitle}>{invoice.periodLabel}</Text>
-            <Pill label={humanizeInvoiceStatus(invoice.status)} tone={getInvoiceStatusTone(invoice.status)} />
-          </View>
-          <Caption>{unit?.code ?? 'Unit'} - {formatCurrency(invoice.amountInr)} due on {formatLongDate(invoice.dueDate)}</Caption>
-          <Caption>Residents: {residents.map((resident) => resident.name).join(', ') || 'No resident linked yet'}</Caption>
-          <Caption>
-            Latest payment: {latestPayment
-              ? `${humanizePaymentStatus(latestPayment.status)} via ${humanizePaymentMethod(latestPayment.method)}`
-              : 'No payment submitted'}
-          </Caption>
-          <Caption>
-            Latest reminder: {latestReminder
-              ? formatLongDate(latestReminder.reminder.sentAt)
-              : 'No reminder sent'}
-          </Caption>
-          {invoice.status !== 'paid' ? (
-            <ActionButton
-              label={state.isSyncing ? 'Sending...' : `Remind ${unit?.code ?? 'unit'}`}
-              onPress={() => handleReminder([invoice.id])}
-              disabled={state.isSyncing}
-              variant="secondary"
-            />
-          ) : null}
-        </SurfaceCard>
-      ))}
 
       <SurfaceCard>
         <SectionHeader title="Record expense" description="Log maintenance and ad hoc spending from this module." />
@@ -604,6 +1104,528 @@ function AdminBilling({ societyId }: { societyId: string }) {
       )) : (
         <SurfaceCard><Caption>No expense records yet.</Caption></SurfaceCard>
       )}
+    </>
+  );
+}
+
+function AdminCollections({ societyId }: { societyId: string }) {
+  const { state, actions } = useApp();
+  const [reminderMessage, setReminderMessage] = useState('');
+  const [selectedOfficeUnitId, setSelectedOfficeUnitId] = useState<string | null>(null);
+  const [trackerFilter, setTrackerFilter] = useState<'all' | 'pending' | 'overdue' | 'paid'>('all');
+  const [receiptActionMessage, setReceiptActionMessage] = useState('');
+  const [pendingReceiptRequest, setPendingReceiptRequest] = useState<{
+    paymentId: string;
+    mode: 'pdf' | 'whatsappBundle';
+  } | null>(null);
+  const society = getSelectedSociety(state.data, societyId);
+  const plan = state.data.maintenancePlans.find((item) => item.societyId === societyId);
+  const payments = getPaymentsForSociety(state.data, societyId);
+  const invoiceCollection = getInvoiceCollectionDirectory(state.data, societyId);
+  const residentsDirectory = getResidentsDirectory(state.data, societyId);
+  const paymentReminders = getPaymentRemindersForSociety(state.data, societyId);
+  const pendingPaymentFlags = payments
+    .filter((payment) => payment.status === 'pending')
+    .map((payment) => {
+      const invoice = state.data.invoices.find((invoiceRecord) => invoiceRecord.id === payment.invoiceId);
+      const unit = invoice ? state.data.units.find((unitRecord) => unitRecord.id === invoice.unitId) : undefined;
+      const submitter = payment.submittedByUserId ? getCurrentUser(state.data, payment.submittedByUserId) : undefined;
+
+      if (!invoice) {
+        return undefined;
+      }
+
+      return {
+        payment,
+        invoice,
+        unit,
+        submitter,
+      };
+    })
+    .filter(Boolean) as Array<{
+    payment: typeof payments[number];
+    invoice: typeof state.data.invoices[number];
+    unit?: typeof state.data.units[number];
+    submitter?: typeof state.data.users[number];
+  }>;
+  const unpaidInvoices = invoiceCollection.filter(({ invoice }) => invoice.status !== 'paid');
+  type ResidentDirectoryEntry = ReturnType<typeof getResidentsDirectory>[number];
+  type InvoiceCollectionEntry = (typeof invoiceCollection)[number];
+  type OfficeMaintenanceEntry = ResidentDirectoryEntry & {
+    maintenanceEntries: InvoiceCollectionEntry[];
+    unpaidEntries: InvoiceCollectionEntry[];
+    latestReminderDate?: string;
+    maintenanceState: OfficeMaintenanceState;
+  };
+  const officeMaintenanceCollection = residentsDirectory
+    .filter(({ unit }) => unit.unitType === 'office')
+    .map((entry): OfficeMaintenanceEntry => {
+      const maintenanceEntries = invoiceCollection
+        .filter(({ unit }) => unit?.id === entry.unit.id)
+        .sort((left, right) => Date.parse(right.invoice.dueDate) - Date.parse(left.invoice.dueDate));
+      const unpaidEntries = maintenanceEntries.filter(({ invoice }) => invoice.status !== 'paid');
+      const latestReminderDate = maintenanceEntries
+        .map(({ latestReminder }) => latestReminder?.reminder.sentAt)
+        .filter((sentAt): sentAt is string => Boolean(sentAt))
+        .sort((left, right) => Date.parse(right) - Date.parse(left))[0];
+      let maintenanceState: OfficeMaintenanceState = 'unbilled';
+
+      if (maintenanceEntries.some(({ invoice }) => invoice.status === 'overdue')) {
+        maintenanceState = 'overdue';
+      } else if (unpaidEntries.length > 0) {
+        maintenanceState = 'pending';
+      } else if (maintenanceEntries.length > 0) {
+        maintenanceState = 'paid';
+      }
+
+      return {
+        ...entry,
+        maintenanceEntries,
+        unpaidEntries,
+        latestReminderDate,
+        maintenanceState,
+      };
+    })
+    .sort((left, right) => {
+      const buildingOrder =
+        (left.building?.sortOrder ?? Number.MAX_SAFE_INTEGER) -
+        (right.building?.sortOrder ?? Number.MAX_SAFE_INTEGER);
+
+      if (buildingOrder !== 0) {
+        return buildingOrder;
+      }
+
+      return left.unit.code.localeCompare(right.unit.code);
+    });
+  const isOfficeSociety = society ? societySupportsOfficeSpaces(society) : false;
+  const contactLabel = isOfficeSociety ? 'Contacts' : 'Residents';
+  const reminderAudienceLabel = isOfficeSociety ? 'offices' : 'residents';
+  const rolloverAudienceLabel = isOfficeSociety ? 'offices' : 'residences';
+  const totalOutstanding = unpaidInvoices.reduce((sum, entry) => sum + entry.invoice.amountInr, 0);
+  const totalCaptured = payments
+    .filter((payment) => payment.status === 'captured')
+    .reduce((sum, payment) => sum + payment.amountInr, 0);
+  const filteredInvoiceCollection = invoiceCollection.filter(({ invoice }) =>
+    trackerFilter === 'all' ? true : invoice.status === trackerFilter,
+  );
+  const nextBillingCycle = plan ? getNextBillingCycleSummary(plan) : null;
+  const selectedOfficeEntry = officeMaintenanceCollection.find(
+    (entry) => entry.unit.id === selectedOfficeUnitId,
+  );
+  const bulkReminderUnitIds = isOfficeSociety
+    ? officeMaintenanceCollection
+      .filter((entry) => entry.maintenanceState !== 'paid')
+      .map((entry) => entry.unit.id)
+    : [];
+  const hasBulkReminderTargets = unpaidInvoices.length > 0 || bulkReminderUnitIds.length > 0;
+
+  useEffect(() => {
+    if (selectedOfficeUnitId && !officeMaintenanceCollection.some((entry) => entry.unit.id === selectedOfficeUnitId)) {
+      setSelectedOfficeUnitId(null);
+    }
+  }, [officeMaintenanceCollection, selectedOfficeUnitId]);
+
+  useEffect(() => {
+    if (!pendingReceiptRequest) {
+      return;
+    }
+
+    const receipt = buildMaintenanceReceiptDetails(state.data, pendingReceiptRequest.paymentId);
+
+    if (!receipt || receipt.paymentStatus !== 'captured') {
+      return;
+    }
+
+    const pendingAction =
+      pendingReceiptRequest.mode === 'whatsappBundle'
+        ? prepareReceiptWhatsappBundle(receipt).then((message) => {
+            setReceiptActionMessage(message);
+          })
+        : openMaintenanceReceiptPdf(receipt).then((opened) => {
+            setReceiptActionMessage(
+              opened
+                ? `PDF-ready receipt opened for ${receipt.residentLabel}.`
+                : 'Could not open the PDF receipt on this device. Use the button again from the payment ledger.',
+            );
+          });
+
+    void pendingAction.finally(() => {
+      setPendingReceiptRequest(null);
+    });
+  }, [pendingReceiptRequest, state.data]);
+
+  async function handleReminder({
+    invoiceIds,
+    unitIds = [],
+  }: {
+    invoiceIds: string[];
+    unitIds?: string[];
+  }) {
+    const sent = await actions.sendMaintenanceReminder(societyId, {
+      invoiceIds,
+      unitIds,
+      message: reminderMessage,
+    });
+
+    if (sent) {
+      setReminderMessage('');
+    }
+  }
+
+  async function handleApproveAndOpenReceipt(paymentId: string) {
+    setReceiptActionMessage('');
+    setPendingReceiptRequest({ paymentId, mode: 'pdf' });
+    const saved = await actions.reviewResidentPayment(societyId, paymentId, 'approve');
+
+    if (!saved) {
+      setPendingReceiptRequest(null);
+    }
+  }
+
+  async function handleApproveAndWhatsappReceipt(paymentId: string) {
+    setReceiptActionMessage('');
+    setPendingReceiptRequest({ paymentId, mode: 'whatsappBundle' });
+    const saved = await actions.reviewResidentPayment(societyId, paymentId, 'approve');
+
+    if (!saved) {
+      setPendingReceiptRequest(null);
+    }
+  }
+
+  async function handleOpenReceiptPdf(paymentId: string) {
+    setReceiptActionMessage('');
+    const receipt = buildMaintenanceReceiptDetails(state.data, paymentId);
+
+    if (!receipt) {
+      setReceiptActionMessage('Receipt details are not available for this payment yet.');
+      return;
+    }
+
+    const opened = await openMaintenanceReceiptPdf(receipt);
+
+    setReceiptActionMessage(
+      opened
+        ? `PDF-ready receipt opened for ${receipt.residentLabel}.`
+        : 'Could not open the PDF receipt on this device.',
+    );
+  }
+
+  async function handlePrepareReceiptForWhatsapp(paymentId: string) {
+    setReceiptActionMessage('');
+    const receipt = buildMaintenanceReceiptDetails(state.data, paymentId);
+
+    if (!receipt) {
+      setReceiptActionMessage('Receipt details are not available for this payment yet.');
+      return;
+    }
+
+    setReceiptActionMessage(await prepareReceiptWhatsappBundle(receipt));
+  }
+
+  return (
+    <>
+      <SurfaceCard>
+        <SectionHeader
+          title="Collections desk"
+          description="Track unpaid maintenance, review resident payment proofs, and keep the collection cycle moving from one dedicated page."
+        />
+        <View style={styles.metricGrid}>
+          <MetricCard label="Outstanding dues" value={formatCurrency(totalOutstanding)} tone="accent" />
+          <MetricCard label="Pending approvals" value={String(pendingPaymentFlags.length)} tone="primary" />
+          <MetricCard label="Open maintenance entries" value={String(unpaidInvoices.length)} tone="blue" />
+          <MetricCard label="Collected" value={formatCurrency(totalCaptured)} />
+        </View>
+      </SurfaceCard>
+
+      {nextBillingCycle ? (
+        <SurfaceCard>
+          <SectionHeader
+            title="Next billing cycle"
+            description="This shows when the next maintenance cycle will be opened automatically for the whole society."
+          />
+          <Text style={styles.cardTitle}>{nextBillingCycle.periodLabel} will auto-open as unpaid</Text>
+          <Caption>
+            All {rolloverAudienceLabel} will receive the next maintenance entry automatically on{' '}
+            {formatLongDate(nextBillingCycle.rolloverDate)}.
+          </Caption>
+          <View style={styles.detailPanel}>
+            <DetailRow
+              label="Frequency"
+              value={nextBillingCycle.frequency === 'quarterly' ? 'Quarterly' : 'Monthly'}
+            />
+            <DetailRow label="Auto-create date" value={formatLongDate(nextBillingCycle.rolloverDate)} />
+            <DetailRow label="Due date" value={formatLongDate(nextBillingCycle.dueDate)} />
+            <DetailRow label="Amount" value={formatCurrency(nextBillingCycle.amountInr)} />
+          </View>
+        </SurfaceCard>
+      ) : null}
+
+      <SurfaceCard>
+        <SectionHeader
+          title={isOfficeSociety ? 'Remind unpaid offices' : 'Remind unpaid residents'}
+          description={
+            isOfficeSociety
+              ? 'Send one billing reminder to every office with unpaid maintenance, or trigger it office by office from the tracker below.'
+              : 'Send one billing reminder to every unit with unpaid maintenance, or trigger it unit by unit from the tracker below.'
+          }
+        />
+        <InputField
+          label="Reminder message"
+          value={reminderMessage}
+          onChangeText={setReminderMessage}
+          multiline
+          placeholder={
+            isOfficeSociety
+              ? 'March maintenance is still pending. Please share the payment proof in office billing or contact the chairman if already settled.'
+              : 'March maintenance is still pending. Please share the payment proof in resident billing or contact the chairman if already settled.'
+          }
+        />
+        <ActionButton
+          label={state.isSyncing ? 'Sending...' : `Remind all unpaid ${reminderAudienceLabel}`}
+          onPress={() => handleReminder({
+            invoiceIds: unpaidInvoices.map(({ invoice }) => invoice.id),
+            unitIds: bulkReminderUnitIds,
+          })}
+          disabled={state.isSyncing || !hasBulkReminderTargets}
+        />
+      </SurfaceCard>
+
+      {isOfficeSociety ? (
+        <SurfaceCard>
+          <SectionHeader
+            title="Office maintenance status"
+            description="Click any office number to open occupancy, billing, and contact details. Paid offices show in green and unpaid offices show in red."
+          />
+          {officeMaintenanceCollection.length > 0 ? (
+            <>
+              <Caption>Green office numbers are paid. Red office numbers still need maintenance action and can be reminded immediately.</Caption>
+              <View style={styles.officeStatusChipGrid}>
+                {officeMaintenanceCollection.map((entry) => {
+                  const isSelected = entry.unit.id === selectedOfficeUnitId;
+                  const chipPalette = getOfficeStatusChipPalette(entry.maintenanceState);
+
+                  return (
+                    <Pressable
+                      key={entry.unit.id}
+                      onPress={() => setSelectedOfficeUnitId(isSelected ? null : entry.unit.id)}
+                      style={({ pressed }) => [
+                        styles.officeStatusChip,
+                        {
+                          borderColor: isSelected ? chipPalette.selectedBackground : chipPalette.borderColor,
+                          backgroundColor: isSelected ? chipPalette.selectedBackground : chipPalette.backgroundColor,
+                        },
+                        pressed ? styles.officeStatusChipPressed : null,
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.officeStatusChipLabel,
+                          { color: isSelected ? palette.white : chipPalette.textColor },
+                        ]}
+                      >
+                        {entry.unit.code}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              {selectedOfficeEntry ? (
+                <View style={styles.detailStack}>
+                  <View style={styles.detailPanel}>
+                    <View style={styles.rowBetween}>
+                      <Text style={styles.detailTitle}>{selectedOfficeEntry.unit.code}</Text>
+                      <Pill
+                        label={getOfficeMaintenanceBadgeLabel(
+                          selectedOfficeEntry.maintenanceState,
+                          selectedOfficeEntry.unpaidEntries.length,
+                        )}
+                        tone={getOfficeMaintenanceBadgeTone(selectedOfficeEntry.maintenanceState)}
+                      />
+                    </View>
+                    <DetailRow label="Building / block" value={selectedOfficeEntry.building?.name ?? 'Direct office mapping'} />
+                    <DetailRow
+                      label="Maintenance status"
+                      value={humanizeOfficeMaintenanceState(selectedOfficeEntry.maintenanceState)}
+                    />
+                    <DetailRow
+                      label="Outstanding dues"
+                      value={selectedOfficeEntry.outstandingAmount > 0 ? formatCurrency(selectedOfficeEntry.outstandingAmount) : 'None'}
+                    />
+                    <DetailRow
+                      label="Latest cycle"
+                      value={selectedOfficeEntry.maintenanceEntries[0]?.invoice.periodLabel ?? 'No invoice yet'}
+                    />
+                    <DetailRow
+                      label="Last payment"
+                      value={selectedOfficeEntry.latestPayment ? formatLongDate(selectedOfficeEntry.latestPayment.paidAt) : 'No payment recorded'}
+                    />
+                    <DetailRow
+                      label="Last reminder"
+                      value={selectedOfficeEntry.latestReminderDate ? formatLongDate(selectedOfficeEntry.latestReminderDate) : 'No reminder sent'}
+                    />
+                  </View>
+
+                  <View style={styles.detailPanel}>
+                    <Text style={styles.detailTitle}>Occupancy detail</Text>
+                    {selectedOfficeEntry.residents.length > 0 ? (
+                      selectedOfficeEntry.residents.map((resident) => (
+                        <View key={`${selectedOfficeEntry.unit.id}-${resident.user.id}`} style={styles.inlineSection}>
+                          <Text style={styles.inlineTitle}>{resident.user.name}</Text>
+                          <Caption>
+                            {resident.category}
+                            {resident.roles.length > 0 ? ` - ${resident.roles.map(humanizeRole).join(', ')}` : ''}
+                          </Caption>
+                          <Caption>{resident.user.phone}</Caption>
+                          <Caption>{resident.user.email}</Caption>
+                          <Caption>Started on {formatLongDate(resident.startDate)}</Caption>
+                        </View>
+                      ))
+                    ) : (
+                      <Caption>No office contact details are linked yet.</Caption>
+                    )}
+                  </View>
+
+                  <View style={styles.detailPanel}>
+                    <Text style={styles.detailTitle}>Maintenance cycles</Text>
+                    {selectedOfficeEntry.maintenanceEntries.length > 0 ? selectedOfficeEntry.maintenanceEntries.map(({ invoice, latestPayment, latestReminder }) => (
+                      <View key={invoice.id} style={styles.inlineSection}>
+                        <View style={styles.rowBetween}>
+                          <Text style={styles.inlineTitle}>{invoice.periodLabel}</Text>
+                          <Pill
+                            label={humanizeInvoiceStatus(invoice.status)}
+                            tone={getInvoiceStatusTone(invoice.status)}
+                          />
+                        </View>
+                        <Caption>{formatCurrency(invoice.amountInr)} due on {formatLongDate(invoice.dueDate)}</Caption>
+                        <Caption>
+                          Latest payment: {latestPayment
+                            ? `${humanizePaymentStatus(latestPayment.status)} via ${humanizePaymentMethod(latestPayment.method)}`
+                            : 'No payment submitted'}
+                        </Caption>
+                        <Caption>
+                          Latest reminder: {latestReminder
+                            ? formatLongDate(latestReminder.reminder.sentAt)
+                            : 'No reminder sent'}
+                        </Caption>
+                      </View>
+                    )) : (
+                      <Caption>No maintenance cycles have been opened for this office yet.</Caption>
+                    )}
+                    {selectedOfficeEntry.maintenanceState !== 'paid' ? (
+                      <ActionButton
+                        label={state.isSyncing ? 'Sending...' : `Remind ${selectedOfficeEntry.unit.code}`}
+                        onPress={() => handleReminder({
+                          invoiceIds: selectedOfficeEntry.unpaidEntries.map(({ invoice }) => invoice.id),
+                          unitIds: [selectedOfficeEntry.unit.id],
+                        })}
+                        disabled={state.isSyncing}
+                        variant="secondary"
+                      />
+                    ) : selectedOfficeEntry.maintenanceEntries.length > 0 ? (
+                      <Caption>All maintenance cycles for this office are paid right now.</Caption>
+                    ) : null}
+                  </View>
+                </View>
+              ) : (
+                <Caption>Select an office number to open its details.</Caption>
+              )}
+            </>
+          ) : (
+            <Caption>No office numbers are linked to this society yet.</Caption>
+          )}
+        </SurfaceCard>
+      ) : null}
+
+      <SectionHeader
+        title={isOfficeSociety ? 'Office maintenance approvals' : 'Resident maintenance approvals'}
+        description="Every maintenance proof submitted from the resident workspace lands here for approval or rejection."
+      />
+      {receiptActionMessage ? <Caption>{receiptActionMessage}</Caption> : null}
+      {pendingPaymentFlags.length > 0 ? pendingPaymentFlags.map(({ payment, invoice, unit, submitter }) => (
+        <SurfaceCard key={payment.id}>
+          <View style={styles.rowBetween}>
+            <Text style={styles.cardTitle}>{invoice.periodLabel}</Text>
+            <Pill label="Pending review" tone="warning" />
+          </View>
+          <Caption>{unit?.code ?? 'Unit'} - {formatCurrency(payment.amountInr)} via {humanizePaymentMethod(payment.method)}</Caption>
+          <Caption>Submitted by {submitter?.name ?? 'Resident'} on {formatLongDate(payment.paidAt)}</Caption>
+          {payment.referenceNote ? <Caption>Reference: {payment.referenceNote}</Caption> : null}
+          {payment.proofImageDataUrl ? (
+            <View style={styles.proofCard}>
+              <Image source={{ uri: payment.proofImageDataUrl }} style={styles.proofImage} />
+            </View>
+          ) : null}
+          <View style={styles.heroActions}>
+            <ActionButton
+              label={state.isSyncing ? 'Processing...' : 'Approve + PDF + WhatsApp'}
+              onPress={() => handleApproveAndWhatsappReceipt(payment.id)}
+              disabled={state.isSyncing}
+            />
+            <ActionButton
+              label={state.isSyncing ? 'Processing...' : 'Approve + Open PDF'}
+              onPress={() => handleApproveAndOpenReceipt(payment.id)}
+              disabled={state.isSyncing}
+              variant="secondary"
+            />
+            <ActionButton
+              label={state.isSyncing ? 'Processing...' : 'Reject payment'}
+              onPress={() => actions.reviewResidentPayment(societyId, payment.id, 'reject')}
+              disabled={state.isSyncing}
+              variant="secondary"
+            />
+          </View>
+        </SurfaceCard>
+      )) : (
+        <SurfaceCard><Caption>No maintenance payment confirmations are waiting right now.</Caption></SurfaceCard>
+      )}
+
+      <SurfaceCard>
+        <SectionHeader
+          title={isOfficeSociety ? 'Office maintenance tracker' : 'Resident maintenance tracker'}
+          description="Filter and review every maintenance invoice with its latest payment and reminder status."
+        />
+        <View style={styles.choiceRow}>
+          <ChoiceChip label="All" selected={trackerFilter === 'all'} onPress={() => setTrackerFilter('all')} />
+          <ChoiceChip label="Pending" selected={trackerFilter === 'pending'} onPress={() => setTrackerFilter('pending')} />
+          <ChoiceChip label="Overdue" selected={trackerFilter === 'overdue'} onPress={() => setTrackerFilter('overdue')} />
+          <ChoiceChip label="Paid" selected={trackerFilter === 'paid'} onPress={() => setTrackerFilter('paid')} />
+        </View>
+        <Caption>
+          Showing {filteredInvoiceCollection.length} {filteredInvoiceCollection.length === 1 ? 'entry' : 'entries'} in the current view.
+        </Caption>
+      </SurfaceCard>
+      {filteredInvoiceCollection.map(({ invoice, unit, residents, latestPayment, latestReminder }) => (
+        <SurfaceCard key={invoice.id}>
+          <View style={styles.rowBetween}>
+            <Text style={styles.cardTitle}>{invoice.periodLabel}</Text>
+            <Pill label={humanizeInvoiceStatus(invoice.status)} tone={getInvoiceStatusTone(invoice.status)} />
+          </View>
+          <Caption>{unit?.code ?? 'Unit'} - {formatCurrency(invoice.amountInr)} due on {formatLongDate(invoice.dueDate)}</Caption>
+          <Caption>{contactLabel}: {residents.map((resident) => resident.name).join(', ') || 'No resident linked yet'}</Caption>
+          <Caption>
+            Latest payment: {latestPayment
+              ? `${humanizePaymentStatus(latestPayment.status)} via ${humanizePaymentMethod(latestPayment.method)}`
+              : 'No payment submitted'}
+          </Caption>
+          <Caption>
+            Latest reminder: {latestReminder
+              ? formatLongDate(latestReminder.reminder.sentAt)
+              : 'No reminder sent'}
+          </Caption>
+          {invoice.status !== 'paid' ? (
+            <ActionButton
+              label={state.isSyncing ? 'Sending...' : `Remind ${unit?.code ?? 'unit'}`}
+              onPress={() => handleReminder({ invoiceIds: [invoice.id] })}
+              disabled={state.isSyncing}
+              variant="secondary"
+            />
+          ) : null}
+        </SurfaceCard>
+      ))}
+      {filteredInvoiceCollection.length === 0 ? (
+        <SurfaceCard><Caption>No maintenance entries match this filter right now.</Caption></SurfaceCard>
+      ) : null}
 
       <SectionHeader title="Payment reminders sent" />
       {paymentReminders.length > 0 ? paymentReminders.map(({ reminder, units, sentBy }) => (
@@ -617,10 +1639,95 @@ function AdminBilling({ societyId }: { societyId: string }) {
         <SurfaceCard><Caption>No maintenance reminders have been sent yet.</Caption></SurfaceCard>
       )}
 
-      <SectionHeader title="Payment ledger" />
-      {payments.length > 0 ? payments.map((payment) => {
+    </>
+  );
+}
+
+function AdminPaymentLedger({ societyId }: { societyId: string }) {
+  const { state } = useApp();
+  const [paymentFilter, setPaymentFilter] = useState<'all' | 'captured' | 'pending' | 'rejected'>('all');
+  const [receiptActionMessage, setReceiptActionMessage] = useState('');
+  const payments = getPaymentsForSociety(state.data, societyId);
+  const filteredPayments = payments.filter((payment) =>
+    paymentFilter === 'all' ? true : payment.status === paymentFilter,
+  );
+  const capturedPayments = payments.filter((payment) => payment.status === 'captured');
+  const pendingPayments = payments.filter((payment) => payment.status === 'pending');
+  const rejectedPayments = payments.filter((payment) => payment.status === 'rejected');
+  const receiptReadyCount = payments.filter((payment) =>
+    state.data.receipts.some((receipt) => receipt.paymentId === payment.id),
+  ).length;
+
+  async function handleOpenReceiptPdf(paymentId: string) {
+    setReceiptActionMessage('');
+    const receipt = buildMaintenanceReceiptDetails(state.data, paymentId);
+
+    if (!receipt) {
+      setReceiptActionMessage('Receipt details are not available for this payment yet.');
+      return;
+    }
+
+    const opened = await openMaintenanceReceiptPdf(receipt);
+
+    setReceiptActionMessage(
+      opened
+        ? `PDF-ready receipt opened for ${receipt.residentLabel}.`
+        : 'Could not open the PDF receipt on this device.',
+    );
+  }
+
+  async function handlePrepareReceiptForWhatsapp(paymentId: string) {
+    setReceiptActionMessage('');
+    const receipt = buildMaintenanceReceiptDetails(state.data, paymentId);
+
+    if (!receipt) {
+      setReceiptActionMessage('Receipt details are not available for this payment yet.');
+      return;
+    }
+
+    setReceiptActionMessage(await prepareReceiptWhatsappBundle(receipt));
+  }
+
+  return (
+    <>
+      <SurfaceCard>
+        <SectionHeader
+          title="Payment ledger"
+          description="Keep receipt-ready payment history separate from collections follow-up, with one place to open PDFs and share receipts."
+        />
+        <View style={styles.metricGrid}>
+          <MetricCard label="Total payments" value={String(payments.length)} />
+          <MetricCard label="Captured" value={String(capturedPayments.length)} tone="primary" />
+          <MetricCard label="Pending review" value={String(pendingPayments.length)} tone="accent" />
+          <MetricCard label="Receipts ready" value={String(receiptReadyCount)} tone="blue" />
+        </View>
+        {rejectedPayments.length > 0 ? (
+          <Caption>{rejectedPayments.length} payment {rejectedPayments.length === 1 ? 'entry is' : 'entries are'} currently rejected.</Caption>
+        ) : null}
+      </SurfaceCard>
+
+      <SurfaceCard>
+        <SectionHeader
+          title="Ledger filters"
+          description="Review all payment records here without mixing them into reminders and approval follow-up."
+        />
+        <View style={styles.choiceRow}>
+          <ChoiceChip label="All" selected={paymentFilter === 'all'} onPress={() => setPaymentFilter('all')} />
+          <ChoiceChip label="Captured" selected={paymentFilter === 'captured'} onPress={() => setPaymentFilter('captured')} />
+          <ChoiceChip label="Pending" selected={paymentFilter === 'pending'} onPress={() => setPaymentFilter('pending')} />
+          <ChoiceChip label="Rejected" selected={paymentFilter === 'rejected'} onPress={() => setPaymentFilter('rejected')} />
+        </View>
+        <Caption>
+          Showing {filteredPayments.length} {filteredPayments.length === 1 ? 'payment' : 'payments'} in the current view.
+        </Caption>
+      </SurfaceCard>
+
+      {receiptActionMessage ? <Caption>{receiptActionMessage}</Caption> : null}
+      {filteredPayments.length > 0 ? filteredPayments.map((payment) => {
         const invoice = state.data.invoices.find((invoiceRecord) => invoiceRecord.id === payment.invoiceId);
         const unit = invoice ? state.data.units.find((unitRecord) => unitRecord.id === invoice.unitId) : undefined;
+        const receiptDetails = buildMaintenanceReceiptDetails(state.data, payment.id);
+
         return (
           <SurfaceCard key={payment.id}>
             <View style={styles.rowBetween}>
@@ -630,10 +1737,29 @@ function AdminBilling({ societyId }: { societyId: string }) {
             <Caption>{unit?.code ?? 'Unit'} - {formatCurrency(payment.amountInr)} via {humanizePaymentMethod(payment.method)}</Caption>
             <Caption>Paid on {formatLongDate(payment.paidAt)}</Caption>
             {payment.referenceNote ? <Caption>Reference: {payment.referenceNote}</Caption> : null}
+            {payment.proofImageDataUrl ? (
+              <View style={styles.proofCard}>
+                <Image source={{ uri: payment.proofImageDataUrl }} style={styles.proofImage} />
+              </View>
+            ) : null}
+            {receiptDetails ? (
+              <MaintenanceReceiptCard
+                receipt={receiptDetails}
+                onOpenPdf={() => {
+                  void handleOpenReceiptPdf(payment.id);
+                }}
+                whatsappLabel="Share PDF + WhatsApp"
+                onSendWhatsapp={() => {
+                  void handlePrepareReceiptForWhatsapp(payment.id);
+                }}
+              />
+            ) : payment.status === 'captured' ? (
+              <Caption>The receipt will appear here once it is synced from the billing ledger.</Caption>
+            ) : null}
           </SurfaceCard>
         );
       }) : (
-        <SurfaceCard><Caption>No payment records yet.</Caption></SurfaceCard>
+        <SurfaceCard><Caption>No payment records match this filter right now.</Caption></SurfaceCard>
       )}
     </>
   );
@@ -1034,19 +2160,174 @@ function AdminSecurity({ societyId }: { societyId: string }) {
 }
 
 function AdminAnnouncements({ societyId }: { societyId: string }) {
-  const { state } = useApp();
+  const { state, actions } = useApp();
+  const society = getSelectedSociety(state.data, societyId);
   const announcements = getAnnouncementsForSociety(state.data, societyId);
   const rules = getRulesForSociety(state.data, societyId);
+  const [selectedTemplateKey, setSelectedTemplateKey] = useState('custom');
+  const [announcementTitle, setAnnouncementTitle] = useState('');
+  const [announcementBody, setAnnouncementBody] = useState('');
+  const [announcementAudience, setAnnouncementAudience] = useState<AnnouncementAudience>('all');
+  const [announcementPriority, setAnnouncementPriority] = useState<AnnouncementPriority>('normal');
+
+  async function handleSendAnnouncement() {
+    const saved = await actions.createAnnouncement(societyId, {
+      title: announcementTitle,
+      body: announcementBody,
+      audience: announcementAudience,
+      priority: announcementPriority,
+    });
+
+    if (saved) {
+      setSelectedTemplateKey('custom');
+      setAnnouncementTitle('');
+      setAnnouncementBody('');
+      setAnnouncementAudience('all');
+      setAnnouncementPriority('normal');
+    }
+  }
+
+  function applyAnnouncementTemplate(templateKey: string) {
+    if (templateKey === 'custom') {
+      setSelectedTemplateKey('custom');
+      setAnnouncementTitle('');
+      setAnnouncementBody('');
+      setAnnouncementAudience('all');
+      setAnnouncementPriority('normal');
+      return;
+    }
+
+    const template = announcementTemplates.find((entry) => entry.key === templateKey);
+
+    if (!template) {
+      return;
+    }
+
+    setSelectedTemplateKey(template.key);
+    setAnnouncementTitle(template.title);
+    setAnnouncementBody(template.buildBody(society?.name ?? 'the society'));
+    setAnnouncementAudience(template.audience);
+    setAnnouncementPriority(template.priority);
+  }
 
   return (
     <>
-      <SectionHeader title="Targeted communications" />
-      {announcements.map((announcement) => (
+      <SectionHeader
+        title="Targeted communications"
+        description="Choose a common society announcement template or draft a custom one, then send it to the selected audience in one shot."
+      />
+      <SurfaceCard>
+        <Text style={styles.cardTitle}>Send announcement</Text>
+        <Caption>
+          Common notice templates are listed below for gated communities and housing societies. Pick one to prefill the message, then edit anything before publishing.
+        </Caption>
+        <View style={styles.choiceRow}>
+          <ChoiceChip
+            label="Custom message"
+            selected={selectedTemplateKey === 'custom'}
+            onPress={() => applyAnnouncementTemplate('custom')}
+          />
+          {announcementTemplates.map((template) => (
+            <ChoiceChip
+              key={template.key}
+              label={template.title}
+              selected={selectedTemplateKey === template.key}
+              onPress={() => applyAnnouncementTemplate(template.key)}
+            />
+          ))}
+        </View>
+        <View style={styles.templateGrid}>
+          {announcementTemplates.map((template) => (
+            <Pressable
+              key={template.key}
+              onPress={() => applyAnnouncementTemplate(template.key)}
+              style={({ pressed }) => [
+                styles.interactiveCard,
+                styles.templateCard,
+                selectedTemplateKey === template.key ? styles.interactiveCardActive : null,
+                pressed ? styles.interactiveCardPressed : null,
+              ]}
+            >
+              <Text style={styles.inlineTitle}>{template.title}</Text>
+              <Caption>{template.summary}</Caption>
+              <View style={styles.pillRow}>
+                <Pill label={humanizeAnnouncementAudience(template.audience)} tone="accent" />
+                <Pill label={humanizeAnnouncementPriority(template.priority)} tone={getAnnouncementPriorityTone(template.priority)} />
+              </View>
+            </Pressable>
+          ))}
+        </View>
+        <View style={styles.inlineSection}>
+          <Text style={styles.inlineTitle}>Audience</Text>
+          <View style={styles.choiceRow}>
+            {announcementAudienceOptions.map((option) => (
+              <ChoiceChip
+                key={option.key}
+                label={option.label}
+                selected={announcementAudience === option.key}
+                onPress={() => setAnnouncementAudience(option.key)}
+              />
+            ))}
+          </View>
+        </View>
+        <View style={styles.inlineSection}>
+          <Text style={styles.inlineTitle}>Priority</Text>
+          <View style={styles.choiceRow}>
+            {announcementPriorityOptions.map((option) => (
+              <ChoiceChip
+                key={option.key}
+                label={option.label}
+                selected={announcementPriority === option.key}
+                onPress={() => setAnnouncementPriority(option.key)}
+              />
+            ))}
+          </View>
+        </View>
+        <View style={styles.inlineSection}>
+          <View style={styles.formGrid}>
+            <View style={styles.formField}>
+              <InputField
+                label="Announcement title"
+                value={announcementTitle}
+                onChangeText={setAnnouncementTitle}
+                placeholder="Water supply shutdown"
+              />
+            </View>
+          </View>
+          <InputField
+            label="Message"
+            value={announcementBody}
+            onChangeText={setAnnouncementBody}
+            multiline
+            placeholder="Write the full announcement here. Residents will receive it in their notices section immediately."
+          />
+          <ActionButton
+            label={state.isSyncing ? 'Sending...' : 'Send announcement'}
+            onPress={handleSendAnnouncement}
+            disabled={state.isSyncing || !announcementTitle.trim() || !announcementBody.trim()}
+          />
+        </View>
+      </SurfaceCard>
+
+      {announcements.length > 0 ? announcements.map((announcement) => (
         <SurfaceCard key={announcement.id}>
-          <Text style={styles.cardTitle}>{announcement.title}</Text>
-          <Caption>Audience: {announcement.audience} - {formatShortDate(announcement.createdAt)}</Caption>
+          <View style={styles.rowBetween}>
+            <Text style={styles.cardTitle}>{announcement.title}</Text>
+            <Pill
+              label={humanizeAnnouncementPriority(announcement.priority)}
+              tone={getAnnouncementPriorityTone(announcement.priority)}
+            />
+          </View>
+          <Caption>
+            Audience: {humanizeAnnouncementAudience(announcement.audience)} - {formatShortDate(announcement.createdAt)}
+          </Caption>
+          <Caption>{announcement.body}</Caption>
         </SurfaceCard>
-      ))}
+      )) : (
+        <SurfaceCard>
+          <Caption>No announcements published yet.</Caption>
+        </SurfaceCard>
+      )}
       <SectionHeader title="Policy and rule documents" />
       {rules.map((rule) => (
         <SurfaceCard key={rule.id}>
@@ -1090,15 +2371,209 @@ const styles = StyleSheet.create({
   interactiveCard: { backgroundColor: palette.surface, borderRadius: 24, padding: spacing.lg, gap: spacing.sm, borderWidth: 1, borderColor: palette.border },
   interactiveCardActive: { borderColor: palette.primary, backgroundColor: '#F8F3EB' },
   interactiveCardPressed: { opacity: 0.9 },
+  templateGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, paddingTop: spacing.sm },
+  templateCard: { flexGrow: 1, flexBasis: 240, minWidth: 240 },
+  officeStatusChipGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  officeStatusChip: {
+    borderRadius: 999,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+    borderWidth: 1,
+    backgroundColor: palette.white,
+  },
+  officeStatusChipPressed: { opacity: 0.88 },
+  officeStatusChipLabel: { fontSize: 13, fontWeight: '700' },
   detailStack: { gap: spacing.md, paddingTop: spacing.sm },
   detailPanel: { gap: spacing.sm, padding: spacing.md, borderRadius: 20, backgroundColor: palette.white, borderWidth: 1, borderColor: '#E7DDD0' },
   detailTitle: { fontSize: 15, fontWeight: '800', color: palette.ink },
   formGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
   formField: { flexGrow: 1, flexBasis: 220 },
+  deleteZone: {
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: palette.border,
+    gap: spacing.sm,
+  },
+  deleteWarningText: {
+    color: palette.danger,
+  },
+  qrPreviewPanel: { alignSelf: 'flex-start', padding: spacing.sm, borderRadius: 18, backgroundColor: palette.white, borderWidth: 1, borderColor: '#E7DDD0' },
+  qrPreviewImage: { width: 180, height: 180, borderRadius: 14, backgroundColor: '#F4F1EB' },
+  proofCard: { alignSelf: 'flex-start', padding: spacing.xs, borderRadius: 18, backgroundColor: palette.white, borderWidth: 1, borderColor: '#E7DDD0' },
+  proofImage: { width: 180, height: 220, borderRadius: 14, backgroundColor: '#F4F1EB' },
   choiceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   inlineSection: { gap: spacing.xs, paddingTop: spacing.sm, borderTopWidth: 1, borderTopColor: '#EFE5D9' },
   inlineTitle: { fontSize: 15, fontWeight: '800', color: palette.ink },
 });
+
+function humanizeAnnouncementAudience(audience: AnnouncementAudience) {
+  switch (audience) {
+    case 'residents':
+      return 'Residents';
+    case 'owners':
+      return 'Owners';
+    case 'tenants':
+      return 'Tenants';
+    case 'committee':
+      return 'Committee';
+    case 'all':
+    default:
+      return 'All members';
+  }
+}
+
+function humanizeAnnouncementPriority(priority: AnnouncementPriority) {
+  switch (priority) {
+    case 'critical':
+      return 'Critical';
+    case 'high':
+      return 'High';
+    case 'normal':
+    default:
+      return 'Normal';
+  }
+}
+
+function getAnnouncementPriorityTone(priority: AnnouncementPriority) {
+  switch (priority) {
+    case 'critical':
+      return 'warning' as const;
+    case 'high':
+      return 'accent' as const;
+    case 'normal':
+    default:
+      return 'primary' as const;
+  }
+}
+
+async function pickWebImageAsDataUrl() {
+  if (Platform.OS !== 'web' || typeof document === 'undefined') {
+    throw new Error('QR upload is available from the web workspace right now.');
+  }
+
+  return new Promise<string | null>((resolve, reject) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/png,image/jpeg,image/webp';
+
+    input.onchange = () => {
+      const file = input.files?.[0];
+
+      if (!file) {
+        resolve(null);
+        return;
+      }
+
+      if (file.size > 2 * 1024 * 1024) {
+        reject(new Error('Choose a QR image smaller than 2 MB.'));
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+      reader.onerror = () => reject(new Error('Could not read the selected QR image.'));
+      reader.readAsDataURL(file);
+    };
+
+    input.click();
+  });
+}
+
+async function tryDecodeQrPayloadFromDataUrl(dataUrl: string) {
+  if (
+    Platform.OS !== 'web' ||
+    typeof window === 'undefined' ||
+    typeof fetch === 'undefined' ||
+    typeof createImageBitmap === 'undefined'
+  ) {
+    return null;
+  }
+
+  const windowWithBarcodeDetector = window as typeof window & {
+    BarcodeDetector?: new (options?: { formats?: string[] }) => {
+      detect: (source: ImageBitmapSource) => Promise<Array<{ rawValue?: string }>>;
+    };
+  };
+
+  if (!windowWithBarcodeDetector.BarcodeDetector) {
+    return null;
+  }
+
+  const response = await fetch(dataUrl);
+  const blob = await response.blob();
+  const bitmap = await createImageBitmap(blob);
+
+  try {
+    const detector = new windowWithBarcodeDetector.BarcodeDetector({ formats: ['qr_code'] });
+    const detectedCodes = await detector.detect(bitmap);
+    const rawValue = detectedCodes.find((code) => code.rawValue?.trim())?.rawValue?.trim();
+    return rawValue || null;
+  } finally {
+    if (typeof bitmap.close === 'function') {
+      bitmap.close();
+    }
+  }
+}
+
+async function openWhatsappReceipt(receipt: ReturnType<typeof buildMaintenanceReceiptDetails>) {
+  if (!receipt?.whatsappPhone) {
+    return false;
+  }
+
+  const whatsappUrl = `https://wa.me/${receipt.whatsappPhone}?text=${encodeURIComponent(
+    buildMaintenanceReceiptWhatsappMessage(receipt),
+  )}`;
+
+  try {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
+      return true;
+    }
+
+    await Linking.openURL(whatsappUrl);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+async function prepareReceiptWhatsappBundle(receipt: ReturnType<typeof buildMaintenanceReceiptDetails>) {
+  if (!receipt) {
+    return 'Receipt details are not available for this payment yet.';
+  }
+
+  const shareResult = await shareMaintenanceReceiptPdfWithMessage(receipt);
+
+  if (shareResult === 'shared') {
+    return `Share sheet opened for ${receipt.residentLabel}. Choose WhatsApp there to send the PDF attachment with the message together.`;
+  }
+
+  if (shareResult === 'cancelled') {
+    return 'Receipt sharing was cancelled.';
+  }
+
+  const pdfReady = await downloadMaintenanceReceiptPdf(receipt);
+  const whatsappOpened = await openWhatsappReceipt(receipt);
+
+  if (shareResult === 'unsupported' && pdfReady && whatsappOpened) {
+    return `This browser cannot attach the PDF directly to WhatsApp from the page, so the PDF was downloaded and WhatsApp text was opened separately for ${receipt.residentLabel}.`;
+  }
+
+  if (pdfReady && whatsappOpened) {
+    return `Receipt PDF downloaded and WhatsApp opened for ${receipt.residentLabel}. Attach the downloaded PDF file in the chat and send it.`;
+  }
+
+  if (pdfReady) {
+    return `Receipt PDF downloaded for ${receipt.residentLabel}, but WhatsApp could not be opened on this device.`;
+  }
+
+  if (whatsappOpened) {
+    return `WhatsApp opened for ${receipt.residentLabel}, but the PDF download could not be prepared.`;
+  }
+
+  return 'Could not prepare the PDF or open WhatsApp on this device.';
+}
 
 function todayString() {
   return new Date().toISOString().slice(0, 10);
@@ -1108,6 +2583,44 @@ function nowDateTimeString(hour: number) {
   const value = new Date();
   value.setHours(hour, 0, 0, 0);
   return value.toISOString().slice(0, 16);
+}
+
+function getNextBillingCycleSummary(plan: {
+  frequency: 'monthly' | 'quarterly';
+  dueDay: number;
+  amountInr: number;
+}) {
+  const referenceDate = new Date();
+  const cycleMonthSpan = plan.frequency === 'quarterly' ? 3 : 1;
+  const currentCycleStartMonth =
+    plan.frequency === 'quarterly'
+      ? Math.floor(referenceDate.getUTCMonth() / 3) * 3
+      : referenceDate.getUTCMonth();
+  const currentCycleStart = new Date(Date.UTC(referenceDate.getUTCFullYear(), currentCycleStartMonth, 1));
+  const nextCycleStart = new Date(
+    Date.UTC(currentCycleStart.getUTCFullYear(), currentCycleStart.getUTCMonth() + cycleMonthSpan, 1),
+  );
+  const rolloverDate = new Date(Date.UTC(nextCycleStart.getUTCFullYear(), nextCycleStart.getUTCMonth(), 0));
+  const dueDate = new Date(
+    Date.UTC(
+      nextCycleStart.getUTCFullYear(),
+      nextCycleStart.getUTCMonth(),
+      Math.min(28, Math.max(1, Number.parseInt(String(plan.dueDay ?? ''), 10) || 10)),
+    ),
+  );
+  const periodLabel = new Intl.DateTimeFormat('en-IN', {
+    month: 'long',
+    year: 'numeric',
+    timeZone: 'UTC',
+  }).format(nextCycleStart);
+
+  return {
+    frequency: plan.frequency,
+    periodLabel,
+    rolloverDate: rolloverDate.toISOString().slice(0, 10),
+    dueDate: dueDate.toISOString().slice(0, 10),
+    amountInr: plan.amountInr,
+  };
 }
 
 function parseUnitCodes(value: string) {
@@ -1159,6 +2672,74 @@ function getAssignmentSummaries(assignments: Array<{ serviceLabel: string; visit
     const visitLabel = assignment.visitsPerWeek === 1 ? 'visit' : 'visits';
     return `${assignment.serviceLabel} - ${assignment.visitsPerWeek} ${visitLabel} per week`;
   }))];
+}
+
+function isOfficeMaintenanceDue(status: OfficeMaintenanceState) {
+  return status === 'pending' || status === 'overdue';
+}
+
+function humanizeOfficeMaintenanceState(status: OfficeMaintenanceState) {
+  switch (status) {
+    case 'paid':
+      return 'Paid';
+    case 'overdue':
+      return 'Overdue';
+    case 'pending':
+      return 'Pending';
+    case 'unbilled':
+    default:
+      return 'No cycle yet';
+  }
+}
+
+function getOfficeMaintenanceBadgeLabel(status: OfficeMaintenanceState, unpaidCount: number) {
+  if (isOfficeMaintenanceDue(status)) {
+    return `${unpaidCount} unpaid ${unpaidCount === 1 ? 'invoice' : 'invoices'}`;
+  }
+
+  return humanizeOfficeMaintenanceState(status);
+}
+
+function getOfficeMaintenanceBadgeTone(status: OfficeMaintenanceState) {
+  switch (status) {
+    case 'paid':
+      return 'success' as const;
+    case 'overdue':
+      return 'warning' as const;
+    case 'pending':
+      return 'accent' as const;
+    case 'unbilled':
+    default:
+      return 'neutral' as const;
+  }
+}
+
+function getOfficeStatusChipPalette(status: OfficeMaintenanceState) {
+  switch (status) {
+    case 'paid':
+      return {
+        borderColor: '#BFDAC9',
+        backgroundColor: '#E6F4EC',
+        textColor: palette.success,
+        selectedBackground: palette.success,
+      };
+    case 'overdue':
+    case 'pending':
+    case 'unbilled':
+      return {
+        borderColor: '#E5C8C2',
+        backgroundColor: '#F8E2DE',
+        textColor: palette.danger,
+        selectedBackground: palette.danger,
+      };
+    default:
+      return {
+        borderColor: palette.border,
+        backgroundColor: palette.white,
+        textColor: palette.ink,
+        selectedBackground: palette.primary,
+      };
+  }
 }
 
 function humanizeInvoiceStatus(status: 'paid' | 'pending' | 'overdue') {
@@ -1287,10 +2868,20 @@ function getComplaintTone(status: 'open' | 'inProgress' | 'resolved') {
   }
 }
 
-function getUnitClaimLabel(society: { structure: 'apartment' | 'bungalow' | 'commercial'; commercialSpaceType?: 'shed' | 'office' | null }) {
-  if (society.structure === 'commercial') {
+function getUnitClaimLabel(society: {
+  structure: 'apartment' | 'bungalow' | 'commercial' | 'mixed';
+  commercialSpaceType?: 'shed' | 'office' | null;
+  enabledStructures?: Array<'apartment' | 'bungalow' | 'commercial'> | null;
+}) {
+  const enabledStructures = getEnabledStructures(society);
+
+  if (enabledStructures.length > 1) {
+    return 'unit or space';
+  }
+
+  if (enabledStructures[0] === 'commercial') {
     return society.commercialSpaceType === 'office' ? 'office space' : 'shed';
   }
 
-  return society.structure === 'bungalow' ? 'plot' : 'apartment';
+  return enabledStructures[0] === 'bungalow' ? 'plot' : 'apartment';
 }

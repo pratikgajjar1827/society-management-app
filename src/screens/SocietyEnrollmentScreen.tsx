@@ -22,6 +22,7 @@ import { getCountryCatalog, locationCatalog } from '../data/locationCatalog';
 import { useApp } from '../state/AppContext';
 import { palette, radius, shadow, spacing } from '../theme/tokens';
 import { SocietyWorkspace } from '../types/domain';
+import { pickWebFileAsDataUrl } from '../utils/fileUploads';
 import {
   getSocietyStructureLabel,
   getSocietyUnitCollectionLabel,
@@ -95,6 +96,10 @@ function buildCityTiles(country: string | undefined, societies: SocietyWorkspace
   return [...catalogCities, ...missingCities];
 }
 
+function todayString() {
+  return new Date().toISOString().slice(0, 10);
+}
+
 function CityTileCard({
   city,
   onPress,
@@ -159,6 +164,7 @@ function CityTileCard({
 
 export function SocietyEnrollmentScreen() {
   const { state, actions } = useApp();
+  const canCreateSociety = state.session.accountRole === 'superUser';
   const [step, setStep] = useState<EnrollmentStep>(1);
   const [selectedCountry, setSelectedCountry] = useState<string | undefined>(undefined);
   const [selectedCity, setSelectedCity] = useState<string | undefined>(undefined);
@@ -166,6 +172,38 @@ export function SocietyEnrollmentScreen() {
   const [selectedSocietyId, setSelectedSocietyId] = useState<string | undefined>(undefined);
   const [selectedUnitIds, setSelectedUnitIds] = useState<string[]>([]);
   const [residentProfile, setResidentProfile] = useState<ResidentProfile | undefined>(undefined);
+  const currentUser = state.session.userId
+    ? state.data.users.find((user) => user.id === state.session.userId)
+    : undefined;
+  const [residentFullName, setResidentFullName] = useState(() => currentUser?.name ?? '');
+  const [residentEmail, setResidentEmail] = useState(() => currentUser?.email ?? '');
+  const [hasEditedResidentFullName, setHasEditedResidentFullName] = useState(false);
+  const [hasEditedResidentEmail, setHasEditedResidentEmail] = useState(false);
+  const [alternatePhone, setAlternatePhone] = useState('');
+  const [emergencyContactName, setEmergencyContactName] = useState('');
+  const [emergencyContactPhone, setEmergencyContactPhone] = useState('');
+  const [moveInDate, setMoveInDate] = useState(todayString());
+  const [dataProtectionConsent, setDataProtectionConsent] = useState(false);
+  const [rentAgreementFileName, setRentAgreementFileName] = useState('');
+  const [rentAgreementDataUrl, setRentAgreementDataUrl] = useState('');
+  const [rentAgreementMessage, setRentAgreementMessage] = useState('');
+
+  useEffect(() => {
+    if (currentUser?.name && !hasEditedResidentFullName && !residentFullName) {
+      setResidentFullName(currentUser.name);
+    }
+
+    if (currentUser?.email && !hasEditedResidentEmail && !residentEmail) {
+      setResidentEmail(currentUser.email);
+    }
+  }, [
+    currentUser?.email,
+    currentUser?.name,
+    hasEditedResidentEmail,
+    hasEditedResidentFullName,
+    residentEmail,
+    residentFullName,
+  ]);
 
   const existingSocietyIds = new Set(
     state.data.memberships
@@ -279,18 +317,20 @@ export function SocietyEnrollmentScreen() {
           </View>
         </SurfaceCard>
 
-        <SurfaceCard>
-          <SectionHeader
-            title="Need a new society instead?"
-            description="If the society has not been created yet, use the creation flow instead of searching."
-          />
-          <ActionButton
-            label={state.isSyncing ? 'Opening creation flow...' : 'Create new society'}
-            onPress={actions.startSetup}
-            disabled={state.isSyncing}
-            variant="secondary"
-          />
-        </SurfaceCard>
+        {canCreateSociety ? (
+          <SurfaceCard>
+            <SectionHeader
+              title="Need a new society instead?"
+              description="If the society has not been created yet, use the creation flow instead of searching."
+            />
+            <ActionButton
+              label={state.isSyncing ? 'Opening creation flow...' : 'Create new society'}
+              onPress={actions.startSetup}
+              disabled={state.isSyncing}
+              variant="secondary"
+            />
+          </SurfaceCard>
+        ) : null}
       </>
     );
   }
@@ -327,8 +367,16 @@ export function SocietyEnrollmentScreen() {
       <>
         <SurfaceCard>
           <SectionHeader
-            title="Page 4. Search the society and choose the unit number"
-            description="Search by society name, then select the home, office, or shed number."
+            title={
+              canCreateSociety
+                ? 'Page 4. Search the society and open the workspace'
+                : 'Page 4. Search the society and choose the unit number'
+            }
+            description={
+              canCreateSociety
+                ? 'Super user can open any existing society directly from this list without joining it as a resident.'
+                : 'Search by society name, then select the home, office, or shed number.'
+            }
           />
           <Caption>
             {selectedCountry} / {selectedCity}
@@ -352,6 +400,7 @@ export function SocietyEnrollmentScreen() {
         {matchingSocieties.map((society) => {
           const isSelected = society.id === selectedSocietyId;
           const isAlreadyLinked = existingSocietyIds.has(society.id);
+          const canOpenDirectly = canCreateSociety || isAlreadyLinked;
 
           return (
             <SurfaceCard key={society.id}>
@@ -380,23 +429,30 @@ export function SocietyEnrollmentScreen() {
 
               <ActionButton
                 label={
-                  isSelected
-                    ? 'Selected society'
+                  canCreateSociety
+                    ? 'Open admin workspace'
                     : isAlreadyLinked
-                      ? 'Select linked society'
+                      ? 'Open linked workspace'
+                      : isSelected
+                      ? 'Selected society'
                       : 'Select society'
                 }
                 onPress={() => {
+                  if (canOpenDirectly) {
+                    actions.selectSociety(society.id);
+                    return;
+                  }
+
                   setSelectedSocietyId(society.id);
                   setSelectedUnitIds([]);
                 }}
-                variant={isSelected ? 'primary' : 'secondary'}
+                variant={canOpenDirectly || isSelected ? 'primary' : 'secondary'}
               />
             </SurfaceCard>
           );
         })}
 
-        {selectedSocietyId ? (
+        {selectedSocietyId && !existingSocietyIds.has(selectedSocietyId) && !canCreateSociety ? (
           <SurfaceCard>
             <SectionHeader
               title="Choose one or more unit or space numbers"
@@ -478,6 +534,141 @@ export function SocietyEnrollmentScreen() {
             />
           </View>
 
+          <View style={styles.inlineSection}>
+            <Text style={styles.formSectionTitle}>Minimal resident information</Text>
+            <Caption>
+              Only basic verification details are collected here for society access, emergency contact, and tenancy review.
+            </Caption>
+            <View style={styles.formGrid}>
+              <View style={styles.formField}>
+                <InputField
+                  label="Resident full name"
+                  value={residentFullName}
+                  onChangeText={(value) => {
+                    setHasEditedResidentFullName(true);
+                    setResidentFullName(value);
+                  }}
+                  placeholder="Enter full name"
+                  autoCapitalize="words"
+                />
+              </View>
+              <View style={styles.formField}>
+                <InputField
+                  label="Move-in date"
+                  value={moveInDate}
+                  onChangeText={setMoveInDate}
+                  placeholder="YYYY-MM-DD"
+                  autoCapitalize="none"
+                  nativeType="date"
+                />
+              </View>
+              <View style={styles.formField}>
+                <InputField
+                  label="Email for notices (optional)"
+                  value={residentEmail}
+                  onChangeText={(value) => {
+                    setHasEditedResidentEmail(true);
+                    setResidentEmail(value);
+                  }}
+                  placeholder="name@example.com"
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  nativeType="email"
+                />
+              </View>
+              <View style={styles.formField}>
+                <InputField
+                  label="Alternate mobile (optional)"
+                  value={alternatePhone}
+                  onChangeText={setAlternatePhone}
+                  placeholder="+91 98765 43210"
+                  keyboardType="phone-pad"
+                />
+              </View>
+              <View style={styles.formField}>
+                <InputField
+                  label="Emergency contact name (optional)"
+                  value={emergencyContactName}
+                  onChangeText={setEmergencyContactName}
+                  placeholder="Family contact"
+                  autoCapitalize="words"
+                />
+              </View>
+              <View style={styles.formField}>
+                <InputField
+                  label="Emergency contact mobile (optional)"
+                  value={emergencyContactPhone}
+                  onChangeText={setEmergencyContactPhone}
+                  placeholder="+91 98980 55555"
+                  keyboardType="phone-pad"
+                />
+              </View>
+            </View>
+            <View style={styles.summaryBlock}>
+              <Caption>Verified mobile: {currentUser?.phone ?? 'Not available'}</Caption>
+              <Caption>
+                This verified number stays linked to the account and helps avoid collecting duplicate personal data.
+              </Caption>
+            </View>
+          </View>
+
+          {residentProfile === 'tenant' ? (
+            <View style={styles.inlineSection}>
+              <Text style={styles.formSectionTitle}>Tenant rent agreement</Text>
+              <Caption>
+                Upload the current rent agreement here. You can also replace it later from the resident workspace.
+              </Caption>
+              <View style={styles.choiceWrap}>
+                <Pill label="Tenant flag enabled" tone="accent" />
+                <Pill
+                  label={rentAgreementFileName ? 'Agreement uploaded' : 'Agreement pending'}
+                  tone={rentAgreementFileName ? 'success' : 'warning'}
+                />
+              </View>
+              <ActionButton
+                label={rentAgreementFileName ? 'Replace rent agreement' : 'Upload rent agreement'}
+                onPress={async () => {
+                  try {
+                    const file = await pickWebFileAsDataUrl({
+                      accept: 'application/pdf,image/png,image/jpeg,image/webp',
+                      maxSizeInBytes: 4 * 1024 * 1024,
+                      unsupportedMessage: 'Rent agreement upload is available from the web workspace right now.',
+                      tooLargeMessage: 'Choose a rent agreement file smaller than 4 MB.',
+                      readErrorMessage: 'Could not read the selected rent agreement file.',
+                    });
+
+                    if (!file) {
+                      return;
+                    }
+
+                    setRentAgreementFileName(file.fileName);
+                    setRentAgreementDataUrl(file.dataUrl);
+                    setRentAgreementMessage(`${file.fileName} is attached.`);
+                  } catch (error) {
+                    setRentAgreementMessage(error instanceof Error ? error.message : 'Could not upload the rent agreement.');
+                  }
+                }}
+                variant="secondary"
+              />
+              {rentAgreementFileName ? <Caption>Selected file: {rentAgreementFileName}</Caption> : null}
+              {rentAgreementMessage ? <Caption>{rentAgreementMessage}</Caption> : null}
+            </View>
+          ) : null}
+
+          <View style={styles.inlineSection}>
+            <Text style={styles.formSectionTitle}>Privacy confirmation</Text>
+            <Caption>
+              Confirm that the society may use this limited data only for access control, occupancy verification, emergency contact, and tenancy review.
+            </Caption>
+            <View style={styles.choiceWrap}>
+              <ChoiceChip
+                label="Privacy notice accepted"
+                selected={dataProtectionConsent}
+                onPress={() => setDataProtectionConsent((currentValue) => !currentValue)}
+              />
+            </View>
+          </View>
+
           <Caption>
             Your claim will be sent to the society chairman for confirmation before access is granted. This supports members who own or manage multiple units or office spaces in the same society.
           </Caption>
@@ -489,9 +680,29 @@ export function SocietyEnrollmentScreen() {
                 selectedSocietyId ?? '',
                 selectedUnitIds,
                 residentProfile ?? 'owner',
+                {
+                  residentType: residentProfile ?? 'owner',
+                  fullName: residentFullName,
+                  email: residentEmail,
+                  alternatePhone,
+                  emergencyContactName,
+                  emergencyContactPhone,
+                  moveInDate,
+                  dataProtectionConsent,
+                  rentAgreementFileName: residentProfile === 'tenant' ? rentAgreementFileName : undefined,
+                  rentAgreementDataUrl: residentProfile === 'tenant' ? rentAgreementDataUrl : undefined,
+                },
               )
             }
-            disabled={state.isSyncing || !selectedSocietyId || selectedUnitIds.length === 0 || !residentProfile}
+            disabled={
+              state.isSyncing ||
+              !selectedSocietyId ||
+              selectedUnitIds.length === 0 ||
+              !residentProfile ||
+              !residentFullName.trim() ||
+              !moveInDate ||
+              !dataProtectionConsent
+            }
           />
         </SurfaceCard>
       </>
@@ -613,6 +824,26 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.sm,
+  },
+  inlineSection: {
+    gap: spacing.sm,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: '#EFE5D9',
+  },
+  formGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.md,
+  },
+  formField: {
+    flexGrow: 1,
+    flexBasis: 220,
+  },
+  formSectionTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: palette.ink,
   },
   summaryBlock: {
     gap: spacing.xs,

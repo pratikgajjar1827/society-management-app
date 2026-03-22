@@ -3,24 +3,29 @@ const http = require('node:http');
 const {
   createSocietyWorkspace,
   dbPath,
-  getSnapshot,
+  deleteSocietyWorkspace,
   initializeDatabase,
   resetDatabase,
 } = require('./db/database');
 const { countOfficeUnits, findDuplicateOfficeCodes, normalizeOfficeFloorPlan } = require('./seed/factories');
 const {
   assignChairmanResidence,
+  captureResidentUpiPayment,
+  createAnnouncement,
   createAmenityBooking,
   createComplaintTicket,
   createEntryLogRecord,
   createExpenseRecord,
   createSecurityGuard,
   createStaffVerification,
+  getSynchronizedSnapshot,
   HttpError,
   getOnboardingState,
   hasAssignedChairman,
+  markAnnouncementRead,
   requestOtp,
-  requireChairmanRole,
+  recordManualPayment,
+  requireSuperUserRole,
   requireSession,
   reviewAmenityBooking,
   reviewJoinRequest,
@@ -30,6 +35,10 @@ const {
   selectSocietyForResident,
   setPreferredRole,
   submitResidentPayment,
+  updateMaintenancePlanSettings,
+  updateMaintenanceBillingConfig,
+  updateResidenceProfile,
+  updateSocietyProfile,
   updateComplaintTicket,
   verifyOtp,
 } = require('./auth/service');
@@ -41,7 +50,7 @@ function sendJson(response, statusCode, payload) {
   response.writeHead(statusCode, {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-    'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+    'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS',
     'Content-Type': 'application/json; charset=utf-8',
   });
   response.end(JSON.stringify(payload));
@@ -78,7 +87,7 @@ function buildBootstrapPayload(currentUserId = null) {
     chairmanAssigned: hasAssignedChairman(),
     amenityLibrary,
     defaultSetupDraft,
-    data: getSnapshot(),
+    data: getSynchronizedSnapshot(),
   };
 }
 
@@ -97,6 +106,48 @@ function parseWholeNumber(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+const structureOptions = ['apartment', 'bungalow', 'commercial'];
+const commercialSpaceTypes = ['shed', 'office'];
+
+function normalizeSelections(value, allowedValues) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return [...new Set(value.filter((item) => allowedValues.includes(item)))];
+}
+
+function getEnabledStructures(draft) {
+  const enabledStructures = normalizeSelections(draft.enabledStructures, structureOptions);
+
+  if (enabledStructures.length > 0) {
+    return enabledStructures;
+  }
+
+  return structureOptions.includes(draft.structure) ? [draft.structure] : [];
+}
+
+function getEnabledCommercialSpaceTypes(draft, enabledStructures = getEnabledStructures(draft)) {
+  if (!enabledStructures.includes('commercial')) {
+    return [];
+  }
+
+  const enabledCommercialSpaceTypes = normalizeSelections(
+    draft.enabledCommercialSpaceTypes,
+    commercialSpaceTypes,
+  );
+
+  if (enabledCommercialSpaceTypes.length > 0) {
+    return enabledCommercialSpaceTypes;
+  }
+
+  return commercialSpaceTypes.includes(draft.commercialSpaceType) ? [draft.commercialSpaceType] : [];
+}
+
+function getDraftUnitCount(value, fallbackValue) {
+  return parseWholeNumber(value) ?? parseWholeNumber(fallbackValue) ?? 0;
+}
+
 function validateSocietyDraft(draft) {
   if (
     !draft?.societyName ||
@@ -112,16 +163,45 @@ function validateSocietyDraft(draft) {
     );
   }
 
-  if (!['apartment', 'bungalow', 'commercial'].includes(draft.structure)) {
-    throw new HttpError(400, 'Choose apartment, bungalow, or commercial as the society structure.');
+  const enabledStructures = getEnabledStructures(draft);
+
+  if (enabledStructures.length === 0) {
+    throw new HttpError(400, 'Choose at least one society structure before creating the workspace.');
   }
 
-  if (draft.structure === 'commercial') {
-    if (!['shed', 'office'].includes(draft.commercialSpaceType)) {
-      throw new HttpError(400, 'Choose shed or office space for the commercial structure.');
+  const enabledCommercialSpaceTypes = getEnabledCommercialSpaceTypes(draft, enabledStructures);
+  const apartmentUnitCount = enabledStructures.includes('apartment')
+    ? getDraftUnitCount(draft.apartmentUnitCount, enabledStructures.length === 1 ? draft.totalUnits : null)
+    : 0;
+  const bungalowUnitCount = enabledStructures.includes('bungalow')
+    ? getDraftUnitCount(draft.bungalowUnitCount, enabledStructures.length === 1 ? draft.totalUnits : null)
+    : 0;
+  const shedUnitCount =
+    enabledStructures.includes('commercial') && enabledCommercialSpaceTypes.includes('shed')
+      ? getDraftUnitCount(
+        draft.shedUnitCount,
+        enabledStructures.length === 1 && enabledCommercialSpaceTypes.length === 1 ? draft.totalUnits : null,
+      )
+      : 0;
+
+  if (enabledStructures.includes('apartment') && apartmentUnitCount < 1) {
+    throw new HttpError(400, 'Add at least one apartment or tower home before creating the society.');
+  }
+
+  if (enabledStructures.includes('bungalow') && bungalowUnitCount < 1) {
+    throw new HttpError(400, 'Add at least one bungalow or plot before creating the society.');
+  }
+
+  if (enabledStructures.includes('commercial')) {
+    if (enabledCommercialSpaceTypes.length === 0) {
+      throw new HttpError(400, 'Choose at least one commercial space type.');
     }
 
-    if (draft.commercialSpaceType === 'office') {
+    if (enabledCommercialSpaceTypes.includes('shed') && shedUnitCount < 1) {
+      throw new HttpError(400, 'Add at least one shed before creating the society.');
+    }
+
+    if (enabledCommercialSpaceTypes.includes('office')) {
       const officeFloorPlan = Array.isArray(draft.officeFloorPlan) ? draft.officeFloorPlan : [];
       const configuredFloors = normalizeOfficeFloorPlan(officeFloorPlan);
       const duplicateOfficeCodes = findDuplicateOfficeCodes(officeFloorPlan);
@@ -155,9 +235,12 @@ function validateSocietyDraft(draft) {
     }
   }
 
-  const totalUnits = parseWholeNumber(draft.totalUnits);
+  const officeUnitCount = enabledCommercialSpaceTypes.includes('office')
+    ? countOfficeUnits(Array.isArray(draft.officeFloorPlan) ? draft.officeFloorPlan : [])
+    : 0;
+  const totalUnits = apartmentUnitCount + bungalowUnitCount + shedUnitCount + officeUnitCount;
 
-  if (totalUnits === null || totalUnits < 1) {
+  if (totalUnits < 1) {
     throw new HttpError(400, 'Enter at least 1 unit for this society.');
   }
 }
@@ -230,12 +313,18 @@ async function requestHandler(request, response) {
       const userId = requireSession(getBearerToken(request));
       const body = await parseBody(request);
 
-      if (!body.societyId || !Array.isArray(body.unitIds) || !body.residentType) {
-        sendJson(response, 400, { error: 'Missing societyId, unitIds, or residentType.' });
+      if (!body.societyId || !Array.isArray(body.unitIds) || !body.residentType || !body.residenceProfile) {
+        sendJson(response, 400, { error: 'Missing societyId, unitIds, residentType, or residenceProfile.' });
         return;
       }
 
-      const result = selectSocietyForResident(userId, body.societyId, body.unitIds, body.residentType);
+      const result = selectSocietyForResident(
+        userId,
+        body.societyId,
+        body.unitIds,
+        body.residentType,
+        body.residenceProfile,
+      );
       sendJson(response, 200, {
         ...result,
         amenityLibrary,
@@ -289,6 +378,42 @@ async function requestHandler(request, response) {
     const expenseRouteMatch = request.method === 'POST'
       ? url.pathname.match(/^\/api\/societies\/([^/]+)\/expenses$/)
       : null;
+
+    const societyProfileRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/societies\/([^/]+)\/profile$/)
+      : null;
+
+    const residenceProfileRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/societies\/([^/]+)\/residence-profile$/)
+      : null;
+
+    if (societyProfileRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = updateSocietyProfile(userId, decodeURIComponent(societyProfileRouteMatch[1]), body);
+      sendJson(response, 200, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    if (residenceProfileRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = updateResidenceProfile(
+        userId,
+        decodeURIComponent(residenceProfileRouteMatch[1]),
+        body,
+      );
+      sendJson(response, 200, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
 
     if (expenseRouteMatch) {
       const userId = requireSession(getBearerToken(request));
@@ -382,6 +507,38 @@ async function requestHandler(request, response) {
       return;
     }
 
+    const billingPaymentCaptureRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/societies\/([^/]+)\/billing\/payments\/capture$/)
+      : null;
+
+    if (billingPaymentCaptureRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = captureResidentUpiPayment(userId, decodeURIComponent(billingPaymentCaptureRouteMatch[1]), body);
+      sendJson(response, 201, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    const billingManualPaymentRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/societies\/([^/]+)\/billing\/payments\/manual$/)
+      : null;
+
+    if (billingManualPaymentRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = recordManualPayment(userId, decodeURIComponent(billingManualPaymentRouteMatch[1]), body);
+      sendJson(response, 201, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
     const paymentReviewRouteMatch = request.method === 'POST'
       ? url.pathname.match(/^\/api\/payments\/([^/]+)\/review$/)
       : null;
@@ -402,11 +559,82 @@ async function requestHandler(request, response) {
       ? url.pathname.match(/^\/api\/societies\/([^/]+)\/billing\/reminders$/)
       : null;
 
+    const announcementCreateRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/societies\/([^/]+)\/announcements$/)
+      : null;
+
     if (billingReminderRouteMatch) {
       const userId = requireSession(getBearerToken(request));
       const body = await parseBody(request);
       const result = sendMaintenanceReminder(userId, decodeURIComponent(billingReminderRouteMatch[1]), body);
       sendJson(response, 201, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    if (announcementCreateRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = createAnnouncement(
+        userId,
+        decodeURIComponent(announcementCreateRouteMatch[1]),
+        body,
+      );
+      sendJson(response, 201, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    const announcementReadRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/announcements\/([^/]+)\/read$/)
+      : null;
+
+    if (announcementReadRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const result = markAnnouncementRead(userId, decodeURIComponent(announcementReadRouteMatch[1]));
+      sendJson(response, 200, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    const maintenanceBillingConfigRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/maintenance-plans\/([^/]+)\/billing-config$/)
+      : null;
+
+    const maintenancePlanSettingsRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/maintenance-plans\/([^/]+)\/settings$/)
+      : null;
+
+    if (maintenancePlanSettingsRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = updateMaintenancePlanSettings(
+        userId,
+        decodeURIComponent(maintenancePlanSettingsRouteMatch[1]),
+        body,
+      );
+      sendJson(response, 200, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    if (maintenanceBillingConfigRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = updateMaintenanceBillingConfig(userId, decodeURIComponent(maintenanceBillingConfigRouteMatch[1]), body);
+      sendJson(response, 200, {
         ...result,
         amenityLibrary,
         defaultSetupDraft,
@@ -485,12 +713,39 @@ async function requestHandler(request, response) {
     if (request.method === 'POST' && url.pathname === '/api/societies') {
       const userId = requireSession(getBearerToken(request));
       const body = await parseBody(request);
-      requireChairmanRole(userId);
+      requireSuperUserRole(userId);
       validateSocietyDraft(body.draft);
 
       const result = createSocietyWorkspace(userId, body.draft);
       sendJson(response, 201, {
         ...result,
+        data: getSynchronizedSnapshot(),
+        chairmanAssigned: hasAssignedChairman(),
+        onboarding: getOnboardingState(userId),
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    const societyDeleteRouteMatch = request.method === 'DELETE'
+      ? url.pathname.match(/^\/api\/societies\/([^/]+)$/)
+      : null;
+
+    if (societyDeleteRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      requireSuperUserRole(userId);
+      const societyId = decodeURIComponent(societyDeleteRouteMatch[1]);
+      const deleted = deleteSocietyWorkspace(societyId);
+
+      if (!deleted) {
+        throw new HttpError(404, 'Selected society was not found.');
+      }
+
+      sendJson(response, 200, {
+        currentUserId: userId,
+        societyId,
+        data: getSynchronizedSnapshot(),
         chairmanAssigned: hasAssignedChairman(),
         onboarding: getOnboardingState(userId),
         amenityLibrary,
@@ -500,9 +755,10 @@ async function requestHandler(request, response) {
     }
 
     if (request.method === 'POST' && url.pathname === '/api/dev/reset') {
+      resetDatabase();
       sendJson(response, 200, {
         ...buildBootstrapPayload(),
-        data: resetDatabase(),
+        data: getSynchronizedSnapshot(),
       });
       return;
     }

@@ -4,7 +4,7 @@ import {
   Building,
   CommercialSpaceType,
   OfficeFloorPlanEntry,
-  SocietyStructure,
+  SocietyStructureOption,
   Unit,
 } from '../types/domain';
 
@@ -75,7 +75,7 @@ export function findDuplicateOfficeCodes(officeFloorPlan: OfficeFloorPlanEntry[]
 
 export function createUnitStructure(
   societyId: string,
-  structure: SocietyStructure,
+  structure: SocietyStructureOption,
   totalUnits: number,
   options?: {
     commercialSpaceType?: CommercialSpaceType;
@@ -104,7 +104,7 @@ export function createUnitStructure(
         (floor) => floor.officeCodes.length > 0,
       );
       const buildings: Building[] = configuredFloors.map((floor, index) => ({
-        id: `${societyId}-building-${slugify(floor.floorLabel) || `floor-${index + 1}`}`,
+        id: `${societyId}-building-office-${slugify(floor.floorLabel) || `floor-${index + 1}`}`,
         societyId,
         name: floor.floorLabel,
         sortOrder: index + 1,
