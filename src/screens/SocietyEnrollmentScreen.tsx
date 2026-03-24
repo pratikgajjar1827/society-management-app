@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  Image,
   ImageBackground,
   Pressable,
   StyleSheet,
@@ -21,8 +22,8 @@ import {
 import { getCountryCatalog, locationCatalog } from '../data/locationCatalog';
 import { useApp } from '../state/AppContext';
 import { palette, radius, shadow, spacing } from '../theme/tokens';
-import { SocietyWorkspace } from '../types/domain';
-import { pickWebFileAsDataUrl } from '../utils/fileUploads';
+import { SocietyWorkspace, VehicleType } from '../types/domain';
+import { pickWebFileAsDataUrl, tryDetectVehicleRegistrationFromDataUrl } from '../utils/fileUploads';
 import {
   getSocietyStructureLabel,
   getSocietyUnitCollectionLabel,
@@ -31,6 +32,16 @@ import {
 type EnrollmentStep = 1 | 2 | 3 | 4;
 type ResidentProfile = 'owner' | 'tenant' | 'committee';
 type CityCard = ReturnType<typeof buildCityTiles>[number];
+type EditableVehicleDraft = {
+  id: string;
+  unitId: string;
+  registrationNumber: string;
+  vehicleType: VehicleType;
+  color: string;
+  parkingSlot: string;
+  photoDataUrl: string;
+  statusMessage: string;
+};
 
 function uniqueValues(values: string[]) {
   return [...new Set(values.filter(Boolean))].sort((left, right) =>
@@ -98,6 +109,19 @@ function buildCityTiles(country: string | undefined, societies: SocietyWorkspace
 
 function todayString() {
   return new Date().toISOString().slice(0, 10);
+}
+
+function createEditableVehicleDraft(unitId = ''): EditableVehicleDraft {
+  return {
+    id: `vehicle-draft-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    unitId,
+    registrationNumber: '',
+    vehicleType: 'car',
+    color: '',
+    parkingSlot: '',
+    photoDataUrl: '',
+    statusMessage: '',
+  };
 }
 
 function CityTileCard({
@@ -182,11 +206,14 @@ export function SocietyEnrollmentScreen() {
   const [alternatePhone, setAlternatePhone] = useState('');
   const [emergencyContactName, setEmergencyContactName] = useState('');
   const [emergencyContactPhone, setEmergencyContactPhone] = useState('');
+  const [secondaryEmergencyContactName, setSecondaryEmergencyContactName] = useState('');
+  const [secondaryEmergencyContactPhone, setSecondaryEmergencyContactPhone] = useState('');
   const [moveInDate, setMoveInDate] = useState(todayString());
   const [dataProtectionConsent, setDataProtectionConsent] = useState(false);
   const [rentAgreementFileName, setRentAgreementFileName] = useState('');
   const [rentAgreementDataUrl, setRentAgreementDataUrl] = useState('');
   const [rentAgreementMessage, setRentAgreementMessage] = useState('');
+  const [vehicles, setVehicles] = useState<EditableVehicleDraft[]>([]);
 
   useEffect(() => {
     if (currentUser?.name && !hasEditedResidentFullName && !residentFullName) {
@@ -212,6 +239,10 @@ export function SocietyEnrollmentScreen() {
   );
 
   const societyPool = state.data.societies;
+  const selectedUnits = useMemo(
+    () => state.data.units.filter((unit) => selectedUnitIds.includes(unit.id)),
+    [state.data.units, selectedUnitIds],
+  );
 
   const countryOptions = useMemo(() => buildCountryOptions(societyPool), [societyPool]);
   const cityTiles = useMemo(
@@ -254,6 +285,74 @@ export function SocietyEnrollmentScreen() {
 
   const selectedSociety = matchingSocieties.find((society) => society.id === selectedSocietyId);
   const hasMemberships = Boolean(state.onboarding?.membershipsCount);
+  const hasIncompleteVehicle = vehicles.some(
+    (vehicle) =>
+      (vehicle.registrationNumber.trim() ||
+        vehicle.photoDataUrl ||
+        vehicle.color.trim() ||
+        vehicle.parkingSlot.trim()) &&
+      (!vehicle.registrationNumber.trim() || !vehicle.unitId),
+  );
+
+  function updateVehicleDraft(vehicleId: string, updates: Partial<EditableVehicleDraft>) {
+    setVehicles((currentVehicles) =>
+      currentVehicles.map((vehicle) =>
+        vehicle.id === vehicleId
+          ? {
+              ...vehicle,
+              ...updates,
+            }
+          : vehicle,
+      ),
+    );
+  }
+
+  function addVehicleDraft() {
+    setVehicles((currentVehicles) => [
+      ...currentVehicles,
+      createEditableVehicleDraft(selectedUnitIds[0] ?? ''),
+    ]);
+  }
+
+  function removeVehicleDraft(vehicleId: string) {
+    setVehicles((currentVehicles) =>
+      currentVehicles.filter((vehicle) => vehicle.id !== vehicleId),
+    );
+  }
+
+  async function attachVehiclePhoto(vehicleId: string, capture?: 'user' | 'environment') {
+    try {
+      const file = await pickWebFileAsDataUrl({
+        accept: 'image/png,image/jpeg,image/webp',
+        capture,
+        maxSizeInBytes: 4 * 1024 * 1024,
+        unsupportedMessage: 'Vehicle photo capture is available from the web workspace right now.',
+        tooLargeMessage: 'Choose a vehicle photo smaller than 4 MB.',
+        readErrorMessage: 'Could not read the selected vehicle photo.',
+      });
+
+      if (!file) {
+        return;
+      }
+
+      const currentVehicle = vehicles.find((vehicle) => vehicle.id === vehicleId);
+      const detectedRegistrationNumber = await tryDetectVehicleRegistrationFromDataUrl(file.dataUrl);
+
+      updateVehicleDraft(vehicleId, {
+        photoDataUrl: file.dataUrl,
+        registrationNumber:
+          detectedRegistrationNumber ?? currentVehicle?.registrationNumber ?? '',
+        statusMessage: detectedRegistrationNumber
+          ? `Vehicle number ${detectedRegistrationNumber} detected from the photo.`
+          : 'Photo attached. Enter the vehicle number manually if it was not detected.',
+      });
+    } catch (error) {
+      updateVehicleDraft(vehicleId, {
+        statusMessage:
+          error instanceof Error ? error.message : 'Could not attach the vehicle photo.',
+      });
+    }
+  }
 
   function goBack() {
     if (step === 1) {
@@ -585,9 +684,24 @@ export function SocietyEnrollmentScreen() {
                   keyboardType="phone-pad"
                 />
               </View>
+            </View>
+            <View style={styles.summaryBlock}>
+              <Caption>Verified mobile: {currentUser?.phone ?? 'Not available'}</Caption>
+              <Caption>
+                This verified number stays linked to the account and helps avoid collecting duplicate personal data.
+              </Caption>
+            </View>
+          </View>
+
+          <View style={styles.inlineSection}>
+            <Text style={styles.formSectionTitle}>Emergency contacts</Text>
+            <Caption>
+              Add one or two people the society can reach during medical, access, or household emergencies.
+            </Caption>
+            <View style={styles.formGrid}>
               <View style={styles.formField}>
                 <InputField
-                  label="Emergency contact name (optional)"
+                  label="Primary emergency contact name"
                   value={emergencyContactName}
                   onChangeText={setEmergencyContactName}
                   placeholder="Family contact"
@@ -596,20 +710,135 @@ export function SocietyEnrollmentScreen() {
               </View>
               <View style={styles.formField}>
                 <InputField
-                  label="Emergency contact mobile (optional)"
+                  label="Primary emergency contact mobile"
                   value={emergencyContactPhone}
                   onChangeText={setEmergencyContactPhone}
                   placeholder="+91 98980 55555"
                   keyboardType="phone-pad"
                 />
               </View>
+              <View style={styles.formField}>
+                <InputField
+                  label="Secondary emergency contact name (optional)"
+                  value={secondaryEmergencyContactName}
+                  onChangeText={setSecondaryEmergencyContactName}
+                  placeholder="Neighbour or relative"
+                  autoCapitalize="words"
+                />
+              </View>
+              <View style={styles.formField}>
+                <InputField
+                  label="Secondary emergency contact mobile (optional)"
+                  value={secondaryEmergencyContactPhone}
+                  onChangeText={setSecondaryEmergencyContactPhone}
+                  placeholder="+91 98980 66666"
+                  keyboardType="phone-pad"
+                />
+              </View>
             </View>
-            <View style={styles.summaryBlock}>
-              <Caption>Verified mobile: {currentUser?.phone ?? 'Not available'}</Caption>
-              <Caption>
-                This verified number stays linked to the account and helps avoid collecting duplicate personal data.
-              </Caption>
+          </View>
+
+          <View style={styles.inlineSection}>
+            <Text style={styles.formSectionTitle}>Vehicle details</Text>
+            <Caption>
+              Add resident vehicles now so security and the society directory can stay in sync. You can take a picture and we will try to read the number automatically.
+            </Caption>
+            <View style={styles.heroActions}>
+              <ActionButton label="Add vehicle" onPress={addVehicleDraft} variant="secondary" />
             </View>
+            {vehicles.length > 0 ? vehicles.map((vehicle, index) => (
+              <View key={vehicle.id} style={styles.vehicleCard}>
+                <View style={styles.rowBetween}>
+                  <Text style={styles.formSectionTitle}>Vehicle {index + 1}</Text>
+                  <ActionButton
+                    label="Remove"
+                    variant="danger"
+                    onPress={() => removeVehicleDraft(vehicle.id)}
+                  />
+                </View>
+                <View style={styles.choiceWrap}>
+                  {([
+                    { key: 'car' as const, label: 'Car' },
+                    { key: 'bike' as const, label: 'Bike' },
+                    { key: 'scooter' as const, label: 'Scooter' },
+                  ]).map((option) => (
+                    <ChoiceChip
+                      key={`${vehicle.id}-${option.key}`}
+                      label={option.label}
+                      selected={vehicle.vehicleType === option.key}
+                      onPress={() => updateVehicleDraft(vehicle.id, { vehicleType: option.key })}
+                    />
+                  ))}
+                </View>
+                {selectedUnits.length > 0 ? (
+                  <View style={styles.choiceWrap}>
+                    {selectedUnits.map((unit) => (
+                      <ChoiceChip
+                        key={`${vehicle.id}-${unit.id}`}
+                        label={unit.code}
+                        selected={vehicle.unitId === unit.id}
+                        onPress={() => updateVehicleDraft(vehicle.id, { unitId: unit.id })}
+                      />
+                    ))}
+                  </View>
+                ) : null}
+                <View style={styles.formGrid}>
+                  <View style={styles.formField}>
+                    <InputField
+                      label="Vehicle number"
+                      value={vehicle.registrationNumber}
+                      onChangeText={(value) =>
+                        updateVehicleDraft(vehicle.id, {
+                          registrationNumber: value.toUpperCase(),
+                          statusMessage: '',
+                        })}
+                      placeholder="GJ01AB1234"
+                      autoCapitalize="characters"
+                    />
+                  </View>
+                  <View style={styles.formField}>
+                    <InputField
+                      label="Color (optional)"
+                      value={vehicle.color}
+                      onChangeText={(value) => updateVehicleDraft(vehicle.id, { color: value })}
+                      placeholder="Pearl white"
+                    />
+                  </View>
+                  <View style={styles.formField}>
+                    <InputField
+                      label="Parking slot (optional)"
+                      value={vehicle.parkingSlot}
+                      onChangeText={(value) => updateVehicleDraft(vehicle.id, { parkingSlot: value })}
+                      placeholder="Basement P1-12"
+                    />
+                  </View>
+                </View>
+                <View style={styles.heroActions}>
+                  <ActionButton
+                    label="Take vehicle photo"
+                    onPress={() => {
+                      void attachVehiclePhoto(vehicle.id, 'environment');
+                    }}
+                    variant="secondary"
+                  />
+                  <ActionButton
+                    label={vehicle.photoDataUrl ? 'Replace photo' : 'Upload photo'}
+                    onPress={() => {
+                      void attachVehiclePhoto(vehicle.id);
+                    }}
+                    variant="secondary"
+                  />
+                </View>
+                {vehicle.statusMessage ? <Caption>{vehicle.statusMessage}</Caption> : null}
+                {vehicle.photoDataUrl ? (
+                  <View style={styles.vehiclePhotoCard}>
+                    <Image source={{ uri: vehicle.photoDataUrl }} style={styles.vehiclePhoto} />
+                  </View>
+                ) : null}
+              </View>
+            )) : (
+              <Caption>No vehicle added yet. You can still continue and add it later.</Caption>
+            )}
           </View>
 
           {residentProfile === 'tenant' ? (
@@ -687,6 +916,24 @@ export function SocietyEnrollmentScreen() {
                   alternatePhone,
                   emergencyContactName,
                   emergencyContactPhone,
+                  secondaryEmergencyContactName,
+                  secondaryEmergencyContactPhone,
+                  vehicles: vehicles
+                    .filter(
+                      (vehicle) =>
+                        vehicle.registrationNumber.trim() ||
+                        vehicle.photoDataUrl ||
+                        vehicle.color.trim() ||
+                        vehicle.parkingSlot.trim(),
+                    )
+                    .map((vehicle) => ({
+                      unitId: vehicle.unitId,
+                      registrationNumber: vehicle.registrationNumber,
+                      vehicleType: vehicle.vehicleType,
+                      color: vehicle.color,
+                      parkingSlot: vehicle.parkingSlot,
+                      photoDataUrl: vehicle.photoDataUrl || undefined,
+                    })),
                   moveInDate,
                   dataProtectionConsent,
                   rentAgreementFileName: residentProfile === 'tenant' ? rentAgreementFileName : undefined,
@@ -701,6 +948,7 @@ export function SocietyEnrollmentScreen() {
               !residentProfile ||
               !residentFullName.trim() ||
               !moveInDate ||
+              hasIncompleteVehicle ||
               !dataProtectionConsent
             }
           />
@@ -845,10 +1093,38 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: palette.ink,
   },
+  rowBetween: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
   summaryBlock: {
     gap: spacing.xs,
     padding: spacing.md,
     borderRadius: radius.md,
     backgroundColor: palette.surfaceMuted,
+  },
+  vehicleCard: {
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: palette.border,
+    backgroundColor: palette.surfaceMuted,
+  },
+  vehiclePhotoCard: {
+    alignSelf: 'flex-start',
+    padding: spacing.xs,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: palette.border,
+    backgroundColor: palette.white,
+  },
+  vehiclePhoto: {
+    width: 200,
+    height: 150,
+    borderRadius: radius.md,
+    backgroundColor: '#F4F1EB',
   },
 });

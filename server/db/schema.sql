@@ -90,6 +90,8 @@ CREATE TABLE IF NOT EXISTS residenceProfiles (
   alternatePhone TEXT,
   emergencyContactName TEXT,
   emergencyContactPhone TEXT,
+  secondaryEmergencyContactName TEXT,
+  secondaryEmergencyContactPhone TEXT,
   moveInDate TEXT NOT NULL,
   dataProtectionConsentAt TEXT NOT NULL,
   rentAgreementFileName TEXT,
@@ -114,11 +116,39 @@ CREATE TABLE IF NOT EXISTS occupancy (
   FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS vehicleRegistrations (
+  id TEXT PRIMARY KEY,
+  societyId TEXT NOT NULL,
+  userId TEXT NOT NULL,
+  unitId TEXT NOT NULL,
+  registrationNumber TEXT NOT NULL,
+  vehicleType TEXT NOT NULL,
+  color TEXT,
+  parkingSlot TEXT,
+  photoDataUrl TEXT,
+  FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE,
+  FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (unitId) REFERENCES units(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS importantContacts (
+  id TEXT PRIMARY KEY,
+  societyId TEXT NOT NULL,
+  category TEXT NOT NULL,
+  name TEXT NOT NULL,
+  roleLabel TEXT NOT NULL,
+  phone TEXT NOT NULL,
+  availability TEXT,
+  notes TEXT,
+  FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS announcements (
   id TEXT PRIMARY KEY,
   societyId TEXT NOT NULL,
   title TEXT NOT NULL,
   body TEXT NOT NULL,
+  photoDataUrl TEXT,
   audience TEXT NOT NULL,
   createdAt TEXT NOT NULL,
   priority TEXT NOT NULL,
@@ -277,6 +307,21 @@ CREATE TABLE IF NOT EXISTS complaints (
   assignedTo TEXT,
   FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE,
   FOREIGN KEY (unitId) REFERENCES units(id) ON DELETE CASCADE,
+  FOREIGN KEY (createdByUserId) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS complaintUpdates (
+  id TEXT PRIMARY KEY,
+  complaintId TEXT NOT NULL,
+  societyId TEXT NOT NULL,
+  createdByUserId TEXT NOT NULL,
+  status TEXT NOT NULL,
+  assignedTo TEXT,
+  message TEXT,
+  photoDataUrl TEXT,
+  createdAt TEXT NOT NULL,
+  FOREIGN KEY (complaintId) REFERENCES complaints(id) ON DELETE CASCADE,
+  FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE,
   FOREIGN KEY (createdByUserId) REFERENCES users(id) ON DELETE CASCADE
 );
 

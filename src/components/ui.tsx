@@ -77,9 +77,9 @@ export function HeroCard({
 
   return (
     <View style={[styles.heroCard, { backgroundColor: toneStyle.backgroundColor }]}>
-      <View style={styles.heroAura} />
-      <View style={[styles.heroOrbLarge, { backgroundColor: toneStyle.highlight }]} />
-      <View style={styles.heroOrbSmall} />
+      <View pointerEvents="none" style={styles.heroAura} />
+      <View pointerEvents="none" style={[styles.heroOrbLarge, { backgroundColor: toneStyle.highlight }]} />
+      <View pointerEvents="none" style={styles.heroOrbSmall} />
       <Text style={[styles.eyebrow, { color: toneStyle.subtitleColor }]}>{eyebrow}</Text>
       <Text style={[styles.heroTitle, { color: toneStyle.textColor }]}>{title}</Text>
       <Text style={[styles.heroSubtitle, { color: toneStyle.subtitleColor }]}>{subtitle}</Text>

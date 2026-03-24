@@ -37,6 +37,13 @@ export type StaffCategory = 'domesticHelp' | 'driver' | 'cook' | 'vendor';
 export type VerificationState = 'pending' | 'verified' | 'expired';
 export type EntrySubjectType = 'staff' | 'visitor' | 'delivery';
 export type EntryStatus = 'inside' | 'exited';
+export type VehicleType = 'car' | 'bike' | 'scooter';
+export type ImportantContactCategory =
+  | 'management'
+  | 'security'
+  | 'maintenance'
+  | 'emergency'
+  | 'amenity';
 
 export interface OfficeFloorPlanEntry {
   floorLabel: string;
@@ -127,11 +134,35 @@ export interface UnitOccupancy {
   endDate?: string;
 }
 
+export interface VehicleRegistration {
+  id: string;
+  societyId: string;
+  userId: string;
+  unitId: string;
+  registrationNumber: string;
+  vehicleType: VehicleType;
+  color?: string;
+  parkingSlot?: string;
+  photoDataUrl?: string;
+}
+
+export interface ImportantContact {
+  id: string;
+  societyId: string;
+  category: ImportantContactCategory;
+  name: string;
+  roleLabel: string;
+  phone: string;
+  availability?: string;
+  notes?: string;
+}
+
 export interface Announcement {
   id: string;
   societyId: string;
   title: string;
   body: string;
+  photoDataUrl?: string | null;
   audience: AnnouncementAudience;
   createdAt: string;
   priority: AnnouncementPriority;
@@ -258,6 +289,18 @@ export interface ComplaintTicket {
   assignedTo?: string;
 }
 
+export interface ComplaintUpdate {
+  id: string;
+  complaintId: string;
+  societyId: string;
+  createdByUserId: string;
+  status: ComplaintStatus;
+  assignedTo?: string;
+  message?: string;
+  photoDataUrl?: string;
+  createdAt: string;
+}
+
 export interface PaymentReminder {
   id: string;
   societyId: string;
@@ -344,6 +387,8 @@ export interface ResidenceProfile {
   alternatePhone?: string;
   emergencyContactName?: string;
   emergencyContactPhone?: string;
+  secondaryEmergencyContactName?: string;
+  secondaryEmergencyContactPhone?: string;
   moveInDate: string;
   dataProtectionConsentAt: string;
   rentAgreementFileName?: string;
@@ -382,6 +427,8 @@ export interface SeedData {
   memberships: Membership[];
   joinRequests: JoinRequest[];
   occupancy: UnitOccupancy[];
+  vehicleRegistrations: VehicleRegistration[];
+  importantContacts: ImportantContact[];
   announcements: Announcement[];
   rules: RuleDocument[];
   amenities: Amenity[];
@@ -394,6 +441,7 @@ export interface SeedData {
   paymentReminders: PaymentReminder[];
   receipts: Receipt[];
   complaints: ComplaintTicket[];
+  complaintUpdates: ComplaintUpdate[];
   residenceProfiles: ResidenceProfile[];
   staffProfiles: StaffProfile[];
   staffAssignments: StaffAssignment[];

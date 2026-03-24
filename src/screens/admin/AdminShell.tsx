@@ -18,6 +18,7 @@ import {
 import { MaintenanceReceiptCard } from '../../components/MaintenanceReceiptCard';
 import { useApp } from '../../state/AppContext';
 import { palette, spacing } from '../../theme/tokens';
+import { pickWebFileAsDataUrl } from '../../utils/fileUploads';
 import {
   buildMaintenanceReceiptDetails,
   buildMaintenanceReceiptWhatsappMessage,
@@ -36,6 +37,7 @@ import {
   getAnnouncementsForSociety,
   getAuditEvents,
   getBookingsForSociety,
+  getComplaintUpdatesForComplaint,
   getComplaintsForSociety,
   getCurrentUser,
   getEntryLogsForSociety,
@@ -267,7 +269,12 @@ export function AdminShell() {
         <View style={styles.metricGrid}>
           <MetricCard label="Collection rate" value={`${overview.collectionRate}%`} />
           <MetricCard label="Pending approvals" value={String(overview.pendingApprovals)} tone="accent" />
-          <MetricCard label="Open complaints" value={String(overview.openComplaints)} tone="blue" />
+          <MetricCard
+            label="Open complaints"
+            value={String(overview.openComplaints)}
+            tone="blue"
+            onPress={() => setActiveTab('helpdesk')}
+          />
         </View>
       </HeroCard>
 
@@ -1835,7 +1842,12 @@ function AdminHelpdesk({ societyId }: { societyId: string }) {
   const openComplaints = complaints.filter(({ complaint }) => complaint.status === 'open');
   const inProgressComplaints = complaints.filter(({ complaint }) => complaint.status === 'inProgress');
   const resolvedComplaints = complaints.filter(({ complaint }) => complaint.status === 'resolved');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'open' | 'inProgress' | 'resolved'>('all');
   const [assignmentDrafts, setAssignmentDrafts] = useState<Record<string, string>>({});
+  const [updateMessageDrafts, setUpdateMessageDrafts] = useState<Record<string, string>>({});
+  const [updatePhotoDrafts, setUpdatePhotoDrafts] = useState<Record<string, string>>({});
+  const [updatePhotoMessages, setUpdatePhotoMessages] = useState<Record<string, string>>({});
+  const visibleComplaints = complaints.filter(({ complaint }) => statusFilter === 'all' || complaint.status === statusFilter);
 
   function getAssignedValue(complaintId: string, currentAssignedTo?: string) {
     return assignmentDrafts[complaintId] ?? currentAssignedTo ?? '';
@@ -1848,20 +1860,79 @@ function AdminHelpdesk({ societyId }: { societyId: string }) {
     }));
   }
 
+  function getUpdateMessageValue(complaintId: string) {
+    return updateMessageDrafts[complaintId] ?? '';
+  }
+
+  function setUpdateMessageValue(complaintId: string, value: string) {
+    setUpdateMessageDrafts((currentDrafts) => ({
+      ...currentDrafts,
+      [complaintId]: value,
+    }));
+  }
+
+  async function attachComplaintUpdatePhoto(complaintId: string, capture?: 'user' | 'environment') {
+    try {
+      const file = await pickWebFileAsDataUrl({
+        accept: 'image/png,image/jpeg,image/webp',
+        capture,
+        maxSizeInBytes: 4 * 1024 * 1024,
+        unsupportedMessage: 'Helpdesk update photo capture is available from the web workspace right now.',
+        tooLargeMessage: 'Choose a helpdesk update photo smaller than 4 MB.',
+        readErrorMessage: 'Could not read the selected helpdesk update photo.',
+      });
+
+      if (!file) {
+        return;
+      }
+
+      setUpdatePhotoDrafts((currentDrafts) => ({
+        ...currentDrafts,
+        [complaintId]: file.dataUrl,
+      }));
+      setUpdatePhotoMessages((currentDrafts) => ({
+        ...currentDrafts,
+        [complaintId]: 'Photo attached. Post the update to publish it to the resident.',
+      }));
+    } catch (error) {
+      setUpdatePhotoMessages((currentDrafts) => ({
+        ...currentDrafts,
+        [complaintId]:
+          error instanceof Error ? error.message : 'Could not attach the helpdesk update photo.',
+      }));
+    }
+  }
+
   async function updateComplaint(
     complaintId: string,
     status: 'open' | 'inProgress' | 'resolved',
     assignedTo?: string,
   ) {
+    const message = getUpdateMessageValue(complaintId).trim();
+    const photoDataUrl = updatePhotoDrafts[complaintId];
     const saved = await actions.updateComplaintTicket(societyId, complaintId, {
       status,
       assignedTo,
+      message: message || undefined,
+      photoDataUrl: photoDataUrl || undefined,
     });
 
     if (saved) {
       setAssignmentDrafts((currentDrafts) => ({
         ...currentDrafts,
         [complaintId]: assignedTo ?? '',
+      }));
+      setUpdateMessageDrafts((currentDrafts) => ({
+        ...currentDrafts,
+        [complaintId]: '',
+      }));
+      setUpdatePhotoDrafts((currentDrafts) => ({
+        ...currentDrafts,
+        [complaintId]: '',
+      }));
+      setUpdatePhotoMessages((currentDrafts) => ({
+        ...currentDrafts,
+        [complaintId]: '',
       }));
     }
   }
@@ -1874,15 +1945,40 @@ function AdminHelpdesk({ societyId }: { societyId: string }) {
           description="Resident tickets now land here directly from the resident workspace. Assign ownership and move them through open, in progress, and resolved states."
         />
         <View style={styles.metricGrid}>
-          <MetricCard label="Open tickets" value={String(openComplaints.length)} tone="accent" />
-          <MetricCard label="In progress" value={String(inProgressComplaints.length)} tone="primary" />
-          <MetricCard label="Resolved" value={String(resolvedComplaints.length)} tone="blue" />
+          <MetricCard
+            label={statusFilter === 'open' ? 'Open tickets - selected' : 'Open tickets'}
+            value={String(openComplaints.length)}
+            tone="accent"
+            onPress={() => setStatusFilter((current) => (current === 'open' ? 'all' : 'open'))}
+          />
+          <MetricCard
+            label={statusFilter === 'inProgress' ? 'In progress - selected' : 'In progress'}
+            value={String(inProgressComplaints.length)}
+            tone="primary"
+            onPress={() => setStatusFilter((current) => (current === 'inProgress' ? 'all' : 'inProgress'))}
+          />
+          <MetricCard
+            label={statusFilter === 'resolved' ? 'Resolved - selected' : 'Resolved'}
+            value={String(resolvedComplaints.length)}
+            tone="blue"
+            onPress={() => setStatusFilter((current) => (current === 'resolved' ? 'all' : 'resolved'))}
+          />
         </View>
       </SurfaceCard>
 
-      <SectionHeader title="Resident helpdesk queue" />
-      {complaints.length > 0 ? complaints.map(({ complaint, unit, user }) => {
+      <SectionHeader
+        title="Resident helpdesk queue"
+        description={
+          statusFilter === 'all'
+            ? `Showing all ${complaints.length} tickets. Tap a status card above to filter the queue.`
+            : `Showing ${visibleComplaints.length} ${humanizeComplaintStatus(statusFilter).toLowerCase()} ticket${visibleComplaints.length === 1 ? '' : 's'}. Tap the selected status card again to show all tickets.`
+        }
+      />
+      {visibleComplaints.length > 0 ? visibleComplaints.map(({ complaint, unit, user }) => {
         const assignedTo = getAssignedValue(complaint.id, complaint.assignedTo);
+        const updates = getComplaintUpdatesForComplaint(state.data, complaint.id);
+        const updatePhotoDataUrl = updatePhotoDrafts[complaint.id];
+        const updatePhotoMessage = updatePhotoMessages[complaint.id];
 
         return (
           <SurfaceCard key={complaint.id}>
@@ -1903,6 +1999,54 @@ function AdminHelpdesk({ societyId }: { societyId: string }) {
                 />
               </View>
             </View>
+            <View style={styles.inlineSection}>
+              <Text style={styles.inlineTitle}>Interim update</Text>
+              <InputField
+                label="Progress note"
+                value={getUpdateMessageValue(complaint.id)}
+                onChangeText={(value) => setUpdateMessageValue(complaint.id, value)}
+                multiline
+                placeholder="Share what was checked, what is pending, expected next step, or what the resident should know."
+              />
+              <View style={styles.heroActions}>
+                <ActionButton
+                  label="Take photo"
+                  variant="secondary"
+                  onPress={() => {
+                    void attachComplaintUpdatePhoto(complaint.id, 'environment');
+                  }}
+                />
+                <ActionButton
+                  label={updatePhotoDataUrl ? 'Replace photo' : 'Upload photo'}
+                  variant="secondary"
+                  onPress={() => {
+                    void attachComplaintUpdatePhoto(complaint.id);
+                  }}
+                />
+                {updatePhotoDataUrl ? (
+                  <ActionButton
+                    label="Remove photo"
+                    variant="danger"
+                    onPress={() => {
+                      setUpdatePhotoDrafts((currentDrafts) => ({
+                        ...currentDrafts,
+                        [complaint.id]: '',
+                      }));
+                      setUpdatePhotoMessages((currentDrafts) => ({
+                        ...currentDrafts,
+                        [complaint.id]: '',
+                      }));
+                    }}
+                  />
+                ) : null}
+              </View>
+              {updatePhotoMessage ? <Caption>{updatePhotoMessage}</Caption> : null}
+              {updatePhotoDataUrl ? (
+                <View style={styles.proofCard}>
+                  <Image source={{ uri: updatePhotoDataUrl }} style={styles.helpdeskUpdateImage} />
+                </View>
+              ) : null}
+            </View>
             <View style={styles.heroActions}>
               <ActionButton
                 label={state.isSyncing ? 'Saving...' : complaint.status === 'open' ? 'Start work' : 'Reopen'}
@@ -1917,7 +2061,7 @@ function AdminHelpdesk({ societyId }: { societyId: string }) {
                 variant="secondary"
               />
               <ActionButton
-                label={state.isSyncing ? 'Saving...' : 'Save owner'}
+                label={state.isSyncing ? 'Saving...' : 'Post update'}
                 onPress={() => updateComplaint(complaint.id, complaint.status, assignedTo.trim() || undefined)}
                 disabled={state.isSyncing}
                 variant="secondary"
@@ -1928,10 +2072,33 @@ function AdminHelpdesk({ societyId }: { societyId: string }) {
                 disabled={state.isSyncing}
               />
             </View>
+            <View style={styles.inlineSection}>
+              <Text style={styles.inlineTitle}>Timeline</Text>
+              {updates.length > 0 ? updates.map(({ update, user: updateUser }) => (
+                <View key={update.id} style={styles.inlineSection}>
+                  <View style={styles.rowBetween}>
+                    <Caption>{updateUser?.name ?? 'Society team'} · {formatLongDate(update.createdAt)}</Caption>
+                    <Pill
+                      label={humanizeComplaintStatus(update.status)}
+                      tone={getComplaintTone(update.status)}
+                    />
+                  </View>
+                  {update.assignedTo ? <Caption>Assigned to: {update.assignedTo}</Caption> : null}
+                  {update.message ? <Caption>{update.message}</Caption> : null}
+                  {update.photoDataUrl ? (
+                    <View style={styles.proofCard}>
+                      <Image source={{ uri: update.photoDataUrl }} style={styles.helpdeskUpdateImage} />
+                    </View>
+                  ) : null}
+                </View>
+              )) : <Caption>No updates posted yet.</Caption>}
+            </View>
           </SurfaceCard>
         );
       }) : (
-        <SurfaceCard><Caption>No helpdesk tickets have been raised yet.</Caption></SurfaceCard>
+        <SurfaceCard>
+          <Caption>{statusFilter === 'all' ? 'No helpdesk tickets have been raised yet.' : 'No helpdesk tickets match the selected status right now.'}</Caption>
+        </SurfaceCard>
       )}
     </>
   );
@@ -2167,6 +2334,8 @@ function AdminAnnouncements({ societyId }: { societyId: string }) {
   const [selectedTemplateKey, setSelectedTemplateKey] = useState('custom');
   const [announcementTitle, setAnnouncementTitle] = useState('');
   const [announcementBody, setAnnouncementBody] = useState('');
+  const [announcementPhotoDataUrl, setAnnouncementPhotoDataUrl] = useState('');
+  const [announcementPhotoMessage, setAnnouncementPhotoMessage] = useState('');
   const [announcementAudience, setAnnouncementAudience] = useState<AnnouncementAudience>('all');
   const [announcementPriority, setAnnouncementPriority] = useState<AnnouncementPriority>('normal');
 
@@ -2174,6 +2343,7 @@ function AdminAnnouncements({ societyId }: { societyId: string }) {
     const saved = await actions.createAnnouncement(societyId, {
       title: announcementTitle,
       body: announcementBody,
+      photoDataUrl: announcementPhotoDataUrl || undefined,
       audience: announcementAudience,
       priority: announcementPriority,
     });
@@ -2182,8 +2352,38 @@ function AdminAnnouncements({ societyId }: { societyId: string }) {
       setSelectedTemplateKey('custom');
       setAnnouncementTitle('');
       setAnnouncementBody('');
+      setAnnouncementPhotoDataUrl('');
+      setAnnouncementPhotoMessage('');
       setAnnouncementAudience('all');
       setAnnouncementPriority('normal');
+    }
+  }
+
+  async function handleAnnouncementPhotoSelection(capture?: 'user' | 'environment') {
+    try {
+      const selectedPhoto = await pickWebFileAsDataUrl({
+        accept: 'image/png,image/jpeg,image/webp',
+        capture,
+        maxSizeInBytes: 4 * 1024 * 1024,
+        unsupportedMessage: 'Announcement photo capture is available from the web workspace right now.',
+        tooLargeMessage: 'Choose an announcement photo smaller than 4 MB.',
+        readErrorMessage: 'Could not read the selected announcement photo.',
+      });
+
+      if (!selectedPhoto) {
+        return;
+      }
+
+      setAnnouncementPhotoDataUrl(selectedPhoto.dataUrl);
+      setAnnouncementPhotoMessage(
+        capture
+          ? 'Photo attached. Publish the announcement to share it with residents.'
+          : 'Image attached. Publish the announcement to share it with residents.',
+      );
+    } catch (error) {
+      setAnnouncementPhotoMessage(
+        error instanceof Error ? error.message : 'Could not attach the announcement photo.',
+      );
     }
   }
 
@@ -2192,6 +2392,7 @@ function AdminAnnouncements({ societyId }: { societyId: string }) {
       setSelectedTemplateKey('custom');
       setAnnouncementTitle('');
       setAnnouncementBody('');
+      setAnnouncementPhotoMessage('');
       setAnnouncementAudience('all');
       setAnnouncementPriority('normal');
       return;
@@ -2301,6 +2502,44 @@ function AdminAnnouncements({ societyId }: { societyId: string }) {
             multiline
             placeholder="Write the full announcement here. Residents will receive it in their notices section immediately."
           />
+          <View style={styles.inlineSection}>
+            <Text style={styles.inlineTitle}>Photo (optional)</Text>
+            <Caption>
+              Take a fresh picture from the device camera or attach one from the gallery. Residents will see the same photo with this notice.
+            </Caption>
+            <View style={styles.choiceRow}>
+              <ActionButton
+                label="Take photo"
+                variant="secondary"
+                onPress={() => {
+                  void handleAnnouncementPhotoSelection('environment');
+                }}
+              />
+              <ActionButton
+                label={announcementPhotoDataUrl ? 'Replace photo' : 'Upload photo'}
+                variant="secondary"
+                onPress={() => {
+                  void handleAnnouncementPhotoSelection();
+                }}
+              />
+              {announcementPhotoDataUrl ? (
+                <ActionButton
+                  label="Remove photo"
+                  variant="danger"
+                  onPress={() => {
+                    setAnnouncementPhotoDataUrl('');
+                    setAnnouncementPhotoMessage('');
+                  }}
+                />
+              ) : null}
+            </View>
+            {announcementPhotoMessage ? <Caption>{announcementPhotoMessage}</Caption> : null}
+            {announcementPhotoDataUrl ? (
+              <View style={styles.announcementMediaCard}>
+                <Image source={{ uri: announcementPhotoDataUrl }} style={styles.announcementMediaImage} />
+              </View>
+            ) : null}
+          </View>
           <ActionButton
             label={state.isSyncing ? 'Sending...' : 'Send announcement'}
             onPress={handleSendAnnouncement}
@@ -2322,6 +2561,11 @@ function AdminAnnouncements({ societyId }: { societyId: string }) {
             Audience: {humanizeAnnouncementAudience(announcement.audience)} - {formatShortDate(announcement.createdAt)}
           </Caption>
           <Caption>{announcement.body}</Caption>
+          {announcement.photoDataUrl ? (
+            <View style={styles.announcementMediaCard}>
+              <Image source={{ uri: announcement.photoDataUrl }} style={styles.announcementMediaImage} />
+            </View>
+          ) : null}
         </SurfaceCard>
       )) : (
         <SurfaceCard>
@@ -2402,6 +2646,9 @@ const styles = StyleSheet.create({
   qrPreviewImage: { width: 180, height: 180, borderRadius: 14, backgroundColor: '#F4F1EB' },
   proofCard: { alignSelf: 'flex-start', padding: spacing.xs, borderRadius: 18, backgroundColor: palette.white, borderWidth: 1, borderColor: '#E7DDD0' },
   proofImage: { width: 180, height: 220, borderRadius: 14, backgroundColor: '#F4F1EB' },
+  helpdeskUpdateImage: { width: 220, height: 160, borderRadius: 14, backgroundColor: '#F4F1EB' },
+  announcementMediaCard: { marginTop: spacing.sm, alignSelf: 'stretch', maxWidth: 420, padding: spacing.xs, borderRadius: 18, backgroundColor: palette.white, borderWidth: 1, borderColor: '#E7DDD0' },
+  announcementMediaImage: { width: '100%', height: 220, borderRadius: 14, backgroundColor: '#F4F1EB' },
   choiceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   inlineSection: { gap: spacing.xs, paddingTop: spacing.sm, borderTopWidth: 1, borderTopColor: '#EFE5D9' },
   inlineTitle: { fontSize: 15, fontWeight: '800', color: palette.ink },

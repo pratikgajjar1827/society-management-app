@@ -24,6 +24,8 @@ const tableConfigs = [
   ['joinRequests', ['unitIds']],
   ['residenceProfiles'],
   ['occupancy'],
+  ['vehicleRegistrations'],
+  ['importantContacts'],
   ['announcements', ['readByUserIds']],
   ['rules', ['acknowledgedByUserIds']],
   ['amenities'],
@@ -36,6 +38,7 @@ const tableConfigs = [
   ['paymentReminders', ['invoiceIds', 'unitIds']],
   ['receipts'],
   ['complaints'],
+  ['complaintUpdates'],
   ['staffProfiles', ['employerUnitIds']],
   ['staffAssignments'],
   ['securityGuards'],
@@ -114,6 +117,18 @@ function ensureSchema() {
     db.exec(`ALTER TABLE staffProfiles ADD COLUMN ${columnName} ${definition}`);
   }
 
+  const residenceProfileColumns = new Set(
+    db.prepare("PRAGMA table_info('residenceProfiles')").all().map((column) => column.name),
+  );
+  const missingResidenceProfileColumns = [
+    ['secondaryEmergencyContactName', 'TEXT'],
+    ['secondaryEmergencyContactPhone', 'TEXT'],
+  ].filter(([columnName]) => !residenceProfileColumns.has(columnName));
+
+  for (const [columnName, definition] of missingResidenceProfileColumns) {
+    db.exec(`ALTER TABLE residenceProfiles ADD COLUMN ${columnName} ${definition}`);
+  }
+
   const paymentColumns = new Set(
     db.prepare("PRAGMA table_info('payments')").all().map((column) => column.name),
   );
@@ -153,6 +168,28 @@ function ensureSchema() {
 
   for (const [columnName, definition] of missingComplaintColumns) {
     db.exec(`ALTER TABLE complaints ADD COLUMN ${columnName} ${definition}`);
+  }
+
+  const announcementColumns = new Set(
+    db.prepare("PRAGMA table_info('announcements')").all().map((column) => column.name),
+  );
+  const missingAnnouncementColumns = [
+    ['photoDataUrl', 'TEXT'],
+  ].filter(([columnName]) => !announcementColumns.has(columnName));
+
+  for (const [columnName, definition] of missingAnnouncementColumns) {
+    db.exec(`ALTER TABLE announcements ADD COLUMN ${columnName} ${definition}`);
+  }
+
+  const vehicleColumns = new Set(
+    db.prepare("PRAGMA table_info('vehicleRegistrations')").all().map((column) => column.name),
+  );
+  const missingVehicleColumns = [
+    ['photoDataUrl', 'TEXT'],
+  ].filter(([columnName]) => !vehicleColumns.has(columnName));
+
+  for (const [columnName, definition] of missingVehicleColumns) {
+    db.exec(`ALTER TABLE vehicleRegistrations ADD COLUMN ${columnName} ${definition}`);
   }
 }
 
@@ -211,6 +248,18 @@ function ensureSuperUserAccount() {
     now,
     now,
   );
+}
+
+function ensureSupplementalSeedRows() {
+  const supplementalTables = ['vehicleRegistrations', 'importantContacts', 'complaintUpdates'];
+
+  for (const tableName of supplementalTables) {
+    const row = db.prepare(`SELECT COUNT(*) AS count FROM ${tableName}`).get();
+
+    if (Number(row.count) === 0) {
+      insertMany(tableName, seedData[tableName]);
+    }
+  }
 }
 
 function listAll(tableName) {
@@ -766,6 +815,7 @@ function initializeDatabase() {
     seedDatabase(seedData);
   }
   ensureSuperUserAccount();
+  ensureSupplementalSeedRows();
 }
 
 module.exports = {

@@ -23,6 +23,7 @@ const ENTRY_SUBJECT_TYPES = new Set(['staff', 'visitor', 'delivery']);
 const ENTRY_STATUSES = new Set(['inside', 'exited']);
 const STAFF_REVIEW_STATES = new Set(['verified', 'expired']);
 const MAINTENANCE_FREQUENCIES = new Set(['monthly', 'quarterly']);
+const VEHICLE_TYPES = new Set(['car', 'bike', 'scooter']);
 
 class HttpError extends Error {
   constructor(statusCode, message) {
@@ -215,7 +216,108 @@ function normalizeRentAgreementAttachment(fileNameInput, dataUrlInput) {
   };
 }
 
-function normalizeResidenceProfileInput(input, residentType) {
+function normalizeAnnouncementPhotoDataUrl(dataUrlInput) {
+  const dataUrl = String(dataUrlInput ?? '').trim();
+
+  if (!dataUrl) {
+    return null;
+  }
+
+  if (!/^data:(image\/png|image\/jpeg|image\/webp);base64,/i.test(dataUrl)) {
+    throw new HttpError(400, 'Upload the announcement photo as a PNG, JPG, or WEBP image.');
+  }
+
+  if (dataUrl.length > 5_500_000) {
+    throw new HttpError(400, 'Choose an announcement photo smaller than 4 MB.');
+  }
+
+  return dataUrl;
+}
+
+function normalizeVehiclePhotoDataUrl(dataUrlInput) {
+  const dataUrl = String(dataUrlInput ?? '').trim();
+
+  if (!dataUrl) {
+    return null;
+  }
+
+  if (!/^data:(image\/png|image\/jpeg|image\/webp);base64,/i.test(dataUrl)) {
+    throw new HttpError(400, 'Upload the vehicle photo as a PNG, JPG, or WEBP image.');
+  }
+
+  if (dataUrl.length > 5_500_000) {
+    throw new HttpError(400, 'Choose a vehicle photo smaller than 4 MB.');
+  }
+
+  return dataUrl;
+}
+
+function normalizeComplaintUpdatePhotoDataUrl(dataUrlInput) {
+  const dataUrl = String(dataUrlInput ?? '').trim();
+
+  if (!dataUrl) {
+    return null;
+  }
+
+  if (!/^data:(image\/png|image\/jpeg|image\/webp);base64,/i.test(dataUrl)) {
+    throw new HttpError(400, 'Upload the helpdesk update photo as a PNG, JPG, or WEBP image.');
+  }
+
+  if (dataUrl.length > 5_500_000) {
+    throw new HttpError(400, 'Choose a helpdesk update photo smaller than 4 MB.');
+  }
+
+  return dataUrl;
+}
+
+function normalizeVehicleRegistrationNumber(value) {
+  const normalized = String(value ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+  if (!normalized) {
+    throw new HttpError(400, 'Enter the vehicle number for each saved vehicle.');
+  }
+
+  if (normalized.length < 6 || normalized.length > 13) {
+    throw new HttpError(400, 'Enter a valid vehicle number.');
+  }
+
+  return normalized;
+}
+
+function normalizeResidenceVehicles(vehicleInputs, allowedUnitIds) {
+  if (!Array.isArray(vehicleInputs) || vehicleInputs.length === 0) {
+    return [];
+  }
+
+  if (vehicleInputs.length > 4) {
+    throw new HttpError(400, 'You can save up to 4 vehicles in one profile.');
+  }
+
+  return vehicleInputs.map((vehicleInput, index) => {
+    const unitId = String(vehicleInput?.unitId ?? '').trim();
+
+    if (!unitId || !allowedUnitIds.includes(unitId)) {
+      throw new HttpError(400, `Choose a valid linked unit for vehicle ${index + 1}.`);
+    }
+
+    const vehicleType = String(vehicleInput?.vehicleType ?? '').trim();
+
+    if (!VEHICLE_TYPES.has(vehicleType)) {
+      throw new HttpError(400, 'Choose car, bike, or scooter for each vehicle.');
+    }
+
+    return {
+      unitId,
+      registrationNumber: normalizeVehicleRegistrationNumber(vehicleInput?.registrationNumber),
+      vehicleType,
+      color: normalizeOptionalText(vehicleInput?.color, 40),
+      parkingSlot: normalizeOptionalText(vehicleInput?.parkingSlot, 40),
+      photoDataUrl: normalizeVehiclePhotoDataUrl(vehicleInput?.photoDataUrl),
+    };
+  });
+}
+
+function normalizeResidenceProfileInput(input, residentType, allowedUnitIds = []) {
   if (!input || typeof input !== 'object') {
     throw new HttpError(400, 'Fill the residence profile before continuing.');
   }
@@ -241,6 +343,12 @@ function normalizeResidenceProfileInput(input, residentType) {
       input.emergencyContactPhone,
       'emergency contact mobile number',
     ),
+    secondaryEmergencyContactName: normalizeOptionalText(input.secondaryEmergencyContactName),
+    secondaryEmergencyContactPhone: normalizeOptionalPhoneNumber(
+      input.secondaryEmergencyContactPhone,
+      'secondary emergency contact mobile number',
+    ),
+    vehicles: normalizeResidenceVehicles(input.vehicles, allowedUnitIds),
     moveInDate: normalizeDateOnlyInput(input.moveInDate, 'the move-in date'),
     dataProtectionConsentAt: nowIso(),
     rentAgreement:
@@ -515,7 +623,7 @@ function getInvoice(invoiceId) {
 
 function getAnnouncement(announcementId) {
   return db
-    .prepare('SELECT id, societyId, title, body, audience, createdAt, priority, readByUserIds FROM announcements WHERE id = ?')
+    .prepare('SELECT id, societyId, title, body, photoDataUrl, audience, createdAt, priority, readByUserIds FROM announcements WHERE id = ?')
     .get(announcementId);
 }
 
@@ -563,6 +671,60 @@ function getComplaint(complaintId) {
       'SELECT id, societyId, unitId, createdByUserId, category, title, description, status, createdAt, assignedTo FROM complaints WHERE id = ?',
     )
     .get(complaintId);
+}
+
+function buildComplaintUpdateMessage(previousComplaint, nextStatus, nextAssignedTo, inputMessage) {
+  const explicitMessage = normalizeOptionalText(inputMessage, 240);
+
+  if (explicitMessage) {
+    return explicitMessage;
+  }
+
+  const changes = [];
+
+  if (previousComplaint.status !== nextStatus) {
+    changes.push(`Status moved to ${nextStatus}.`);
+  }
+
+  if ((previousComplaint.assignedTo ?? '') !== (nextAssignedTo ?? '')) {
+    changes.push(nextAssignedTo ? `Assigned to ${nextAssignedTo}.` : 'Assignment cleared.');
+  }
+
+  return changes.length > 0 ? changes.join(' ') : null;
+}
+
+function insertComplaintUpdate({
+  complaintId,
+  societyId,
+  createdByUserId,
+  status,
+  assignedTo,
+  message,
+  photoDataUrl = null,
+}) {
+  db.prepare(
+    `INSERT INTO complaintUpdates (
+      id,
+      complaintId,
+      societyId,
+      createdByUserId,
+      status,
+      assignedTo,
+      message,
+      photoDataUrl,
+      createdAt
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    nextId('complaint-update'),
+    complaintId,
+    societyId,
+    createdByUserId,
+    status,
+    assignedTo || null,
+    message || null,
+    photoDataUrl || null,
+    nowIso(),
+  );
 }
 
 function syncUserContact(userId, channel, destination) {
@@ -888,14 +1050,58 @@ function requireSocietyAnnouncementPublisher(userId, societyId) {
   }
 }
 
-function saveResidenceProfile(userId, societyId, residentType, input) {
+function syncResidenceVehicles(userId, societyId, allowedUnitIds, vehicles) {
+  db.prepare('DELETE FROM vehicleRegistrations WHERE userId = ? AND societyId = ?').run(
+    userId,
+    societyId,
+  );
+
+  if (!vehicles.length) {
+    return;
+  }
+
+  const validUnitIds = new Set(allowedUnitIds);
+  const insertVehicle = db.prepare(
+    `INSERT INTO vehicleRegistrations (
+      id,
+      societyId,
+      userId,
+      unitId,
+      registrationNumber,
+      vehicleType,
+      color,
+      parkingSlot,
+      photoDataUrl
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+
+  for (const vehicle of vehicles) {
+    if (!validUnitIds.has(vehicle.unitId)) {
+      throw new HttpError(400, 'One or more vehicle entries are linked to an invalid unit.');
+    }
+
+    insertVehicle.run(
+      nextId('vehicle'),
+      societyId,
+      userId,
+      vehicle.unitId,
+      vehicle.registrationNumber,
+      vehicle.vehicleType,
+      vehicle.color,
+      vehicle.parkingSlot,
+      vehicle.photoDataUrl,
+    );
+  }
+}
+
+function saveResidenceProfile(userId, societyId, residentType, input, allowedUnitIds = []) {
   const user = getUserById(userId);
 
   if (!user) {
     throw new HttpError(404, 'Resident account not found.');
   }
 
-  const normalized = normalizeResidenceProfileInput(input, residentType);
+  const normalized = normalizeResidenceProfileInput(input, residentType, allowedUnitIds);
   const existingProfile = getResidenceProfileRecord(userId, societyId);
   const rentAgreementFileName =
     residentType === 'tenant'
@@ -924,13 +1130,15 @@ function saveResidenceProfile(userId, societyId, residentType, input) {
       alternatePhone,
       emergencyContactName,
       emergencyContactPhone,
+      secondaryEmergencyContactName,
+      secondaryEmergencyContactPhone,
       moveInDate,
       dataProtectionConsentAt,
       rentAgreementFileName,
       rentAgreementDataUrl,
       rentAgreementUploadedAt,
       updatedAt
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(societyId, userId) DO UPDATE SET
       residentType = excluded.residentType,
       fullName = excluded.fullName,
@@ -939,6 +1147,8 @@ function saveResidenceProfile(userId, societyId, residentType, input) {
       alternatePhone = excluded.alternatePhone,
       emergencyContactName = excluded.emergencyContactName,
       emergencyContactPhone = excluded.emergencyContactPhone,
+      secondaryEmergencyContactName = excluded.secondaryEmergencyContactName,
+      secondaryEmergencyContactPhone = excluded.secondaryEmergencyContactPhone,
       moveInDate = excluded.moveInDate,
       dataProtectionConsentAt = excluded.dataProtectionConsentAt,
       rentAgreementFileName = excluded.rentAgreementFileName,
@@ -956,6 +1166,8 @@ function saveResidenceProfile(userId, societyId, residentType, input) {
     normalized.alternatePhone,
     normalized.emergencyContactName,
     normalized.emergencyContactPhone,
+    normalized.secondaryEmergencyContactName,
+    normalized.secondaryEmergencyContactPhone,
     normalized.moveInDate,
     normalized.dataProtectionConsentAt,
     rentAgreementFileName,
@@ -963,6 +1175,8 @@ function saveResidenceProfile(userId, societyId, residentType, input) {
     rentAgreementUploadedAt,
     updatedAt,
   );
+
+  syncResidenceVehicles(userId, societyId, allowedUnitIds, normalized.vehicles);
 
   if (normalized.email) {
     db.prepare('UPDATE users SET name = ?, email = ?, avatarInitials = ? WHERE id = ?').run(
@@ -1042,7 +1256,7 @@ function selectSocietyForResident(userId, societyId, unitIdsInput, residentType,
   const now = nowIso();
 
   runTransaction(() => {
-    saveResidenceProfile(userId, societyId, residentType, residenceProfileInput);
+    saveResidenceProfile(userId, societyId, residentType, residenceProfileInput, unitIds);
 
     db.prepare(
       `INSERT INTO userProfiles (userId, preferredRole, createdAt, updatedAt)
@@ -1110,10 +1324,14 @@ function updateResidenceProfile(userId, societyId, input) {
   }
 
   runTransaction(() => {
+    const allowedUnitIds = membership
+      ? normalizeRequestedUnitIds(parseStoredJson(membership.unitIds))
+      : normalizeRequestedUnitIds(parseStoredJson(latestJoinRequest?.unitIds));
+
     saveResidenceProfile(userId, societyId, residentType, {
       ...input,
       residentType,
-    });
+    }, allowedUnitIds);
   });
 
   return buildSocietyMutationPayload(userId, societyId);
@@ -2142,21 +2360,33 @@ function createComplaintTicket(userId, societyId, input) {
 
   const title = requireText(input?.title, 'Enter a short title for the ticket.');
   const description = requireText(input?.description, 'Add a few details so the chairman can act on this ticket.');
+  const complaintId = nextId('complaint');
 
-  db.prepare(
-    'INSERT INTO complaints (id, societyId, unitId, createdByUserId, category, title, description, status, createdAt, assignedTo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-  ).run(
-    nextId('complaint'),
-    societyId,
-    unitId,
-    userId,
-    category,
-    title,
-    description,
-    'open',
-    nowIso(),
-    null,
-  );
+  runTransaction(() => {
+    db.prepare(
+      'INSERT INTO complaints (id, societyId, unitId, createdByUserId, category, title, description, status, createdAt, assignedTo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(
+      complaintId,
+      societyId,
+      unitId,
+      userId,
+      category,
+      title,
+      description,
+      'open',
+      nowIso(),
+      null,
+    );
+
+    insertComplaintUpdate({
+      complaintId,
+      societyId,
+      createdByUserId: userId,
+      status: 'open',
+      assignedTo: null,
+      message: description,
+    });
+  });
 
   return buildSocietyMutationPayload(userId, societyId);
 }
@@ -2171,18 +2401,36 @@ function updateComplaintTicket(userId, complaintId, input) {
   requireSocietyChairman(userId, complaint.societyId);
 
   const status = String(input?.status ?? '').trim();
+  const photoDataUrl = normalizeComplaintUpdatePhotoDataUrl(input?.photoDataUrl);
 
   if (!COMPLAINT_STATUSES.has(status)) {
     throw new HttpError(400, 'Choose open, inProgress, or resolved as the complaint status.');
   }
 
   const assignedTo = String(input?.assignedTo ?? '').trim();
+  const message = buildComplaintUpdateMessage(complaint, status, assignedTo || null, input?.message);
 
-  db.prepare('UPDATE complaints SET status = ?, assignedTo = ? WHERE id = ?').run(
-    status,
-    assignedTo || null,
-    complaint.id,
-  );
+  if (!message && !photoDataUrl && complaint.status === status && (complaint.assignedTo ?? '') === assignedTo) {
+    return buildSocietyMutationPayload(userId, complaint.societyId);
+  }
+
+  runTransaction(() => {
+    db.prepare('UPDATE complaints SET status = ?, assignedTo = ? WHERE id = ?').run(
+      status,
+      assignedTo || null,
+      complaint.id,
+    );
+
+    insertComplaintUpdate({
+      complaintId: complaint.id,
+      societyId: complaint.societyId,
+      createdByUserId: userId,
+      status,
+      assignedTo,
+      message,
+      photoDataUrl,
+    });
+  });
 
   return buildSocietyMutationPayload(userId, complaint.societyId);
 }
@@ -2192,6 +2440,7 @@ function createAnnouncement(userId, societyId, input) {
 
   const title = requireText(input?.title, 'Enter an announcement title.');
   const body = requireText(input?.body, 'Enter the announcement message.');
+  const photoDataUrl = normalizeAnnouncementPhotoDataUrl(input?.photoDataUrl);
   const audience = String(input?.audience ?? '').trim();
   const priority = String(input?.priority ?? '').trim();
 
@@ -2204,12 +2453,13 @@ function createAnnouncement(userId, societyId, input) {
   }
 
   db.prepare(
-    'INSERT INTO announcements (id, societyId, title, body, audience, createdAt, priority, readByUserIds) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    'INSERT INTO announcements (id, societyId, title, body, photoDataUrl, audience, createdAt, priority, readByUserIds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
   ).run(
     nextId('announcement'),
     societyId,
     title,
     body,
+    photoDataUrl,
     audience,
     nowIso(),
     priority,

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import {
@@ -17,7 +17,11 @@ import {
 import { MaintenanceReceiptCard } from '../../components/MaintenanceReceiptCard';
 import { useApp } from '../../state/AppContext';
 import { palette, spacing } from '../../theme/tokens';
-import { openWebDataUrlInNewTab, pickWebFileAsDataUrl } from '../../utils/fileUploads';
+import {
+  openWebDataUrlInNewTab,
+  pickWebFileAsDataUrl,
+  tryDetectVehicleRegistrationFromDataUrl,
+} from '../../utils/fileUploads';
 import { buildMaintenanceReceiptDetails, openMaintenanceReceiptPdf } from '../../utils/receipts';
 import {
   deriveProfiles,
@@ -27,10 +31,13 @@ import {
   getAmenitiesForSociety,
   getAnnouncementsForSociety,
   getBookingsForUserSociety,
+  getComplaintUpdatesForComplaint,
   getComplaintsForUserSociety,
+  getCommunityMembersForSociety,
   getCurrentUser,
   getEntryLogsForSociety,
   getGuardRosterForSociety,
+  getImportantContactsForSociety,
   getMembershipForSociety,
   getPaymentRemindersForUser,
   getPaymentsForUserSociety,
@@ -40,20 +47,59 @@ import {
   getSelectedSociety,
   getStaffVerificationDirectory,
   getUnitsForSociety,
+  getVehicleDirectoryForSociety,
   humanizeRole,
 } from '../../utils/selectors';
-import { ComplaintCategory, PaymentMethod, SeedData } from '../../types/domain';
+import {
+  ComplaintCategory,
+  ImportantContactCategory,
+  PaymentMethod,
+  SeedData,
+  VehicleType,
+} from '../../types/domain';
 
-type ResidentTab = 'home' | 'billing' | 'notices' | 'bookings' | 'helpdesk' | 'profile';
+type ResidentTab = 'home' | 'community' | 'billing' | 'notices' | 'bookings' | 'helpdesk' | 'profile';
+type ResidentCommunitySection = 'members' | 'vehicles' | 'contacts' | 'staff';
+type EditableVehicleDraft = {
+  id: string;
+  unitId: string;
+  registrationNumber: string;
+  vehicleType: VehicleType;
+  color: string;
+  parkingSlot: string;
+  photoDataUrl: string;
+  statusMessage: string;
+};
 
 const residentTabs: Array<{ key: ResidentTab; label: string }> = [
   { key: 'home', label: 'Home' },
+  { key: 'community', label: 'Community' },
   { key: 'billing', label: 'Billing' },
   { key: 'notices', label: 'Notices' },
   { key: 'bookings', label: 'Bookings' },
   { key: 'helpdesk', label: 'Helpdesk' },
   { key: 'profile', label: 'Profile' },
 ];
+
+const residentCommunitySections: Array<{ key: ResidentCommunitySection; label: string }> = [
+  { key: 'members', label: 'Members' },
+  { key: 'vehicles', label: 'Vehicles' },
+  { key: 'contacts', label: 'Important contacts' },
+  { key: 'staff', label: 'Staff and security' },
+];
+
+function createEditableVehicleDraft(unitId = ''): EditableVehicleDraft {
+  return {
+    id: `vehicle-draft-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    unitId,
+    registrationNumber: '',
+    vehicleType: 'car',
+    color: '',
+    parkingSlot: '',
+    photoDataUrl: '',
+    statusMessage: '',
+  };
+}
 
 const staffCategories = [
   { key: 'domesticHelp' as const, label: 'Domestic help' },
@@ -322,6 +368,7 @@ export function ResidentShell() {
           <MetricCard
             label="Open tickets"
             value={String(overview.myComplaints.filter((item) => item.status !== 'resolved').length)}
+            onPress={() => setActiveTab('helpdesk')}
           />
         </View>
       </HeroCard>
@@ -329,6 +376,7 @@ export function ResidentShell() {
       <NavigationStrip items={residentTabs} activeKey={activeTab} onChange={setActiveTab} />
 
       {activeTab === 'home' ? <ResidentHome societyId={society.id} userId={user.id} onOpenTab={setActiveTab} /> : null}
+      {activeTab === 'community' ? <ResidentCommunity societyId={society.id} userId={user.id} /> : null}
       {activeTab === 'billing' ? <ResidentBilling societyId={society.id} userId={user.id} /> : null}
       {activeTab === 'notices' ? <ResidentNotices societyId={society.id} userId={user.id} /> : null}
       {activeTab === 'bookings' ? <ResidentBookings societyId={society.id} userId={user.id} /> : null}
@@ -361,6 +409,7 @@ function ResidentHome({
       <SurfaceCard>
         <SectionHeader title="Quick actions" />
         <View style={styles.heroActions}>
+          <ActionButton label="Community" onPress={() => onOpenTab('community')} variant="secondary" />
           <ActionButton label="Pay maintenance" onPress={() => onOpenTab('billing')} variant="secondary" />
           <ActionButton label="Book amenity" onPress={() => onOpenTab('bookings')} variant="secondary" />
           <ActionButton label="Raise complaint" onPress={() => onOpenTab('helpdesk')} variant="secondary" />
@@ -399,6 +448,165 @@ function ResidentHome({
           <Caption>No recent unit-level entry records yet.</Caption>
         )}
       </SurfaceCard>
+    </>
+  );
+}
+
+function ResidentCommunity({ societyId, userId }: { societyId: string; userId: string }) {
+  const { state } = useApp();
+  const [activeSection, setActiveSection] = useState<ResidentCommunitySection>('members');
+  const members = getCommunityMembersForSociety(state.data, societyId);
+  const vehicles = getVehicleDirectoryForSociety(state.data, societyId);
+  const contacts = getImportantContactsForSociety(state.data, societyId);
+  const guards = getGuardRosterForSociety(state.data, societyId);
+  const staffDirectory = getStaffVerificationDirectory(state.data, societyId);
+  const myMembership = getMembershipForSociety(state.data, userId, societyId);
+
+  return (
+    <>
+      <SectionHeader
+        title="Community hub"
+        description="Browse resident contacts, registered vehicles, important society numbers, and staff coverage from one place."
+      />
+      <SurfaceCard>
+        <View style={styles.metricGrid}>
+          <MetricCard label="Members" value={String(members.length)} />
+          <MetricCard label="Vehicles" value={String(vehicles.length)} tone="accent" />
+          <MetricCard label="Important contacts" value={String(contacts.length)} tone="blue" />
+          <MetricCard label="Staff and guards" value={String(staffDirectory.length + guards.length)} />
+        </View>
+        <View style={styles.inlineSection}>
+          <Text style={styles.compactTitle}>Browse sections</Text>
+          <View style={styles.choiceRow}>
+            {residentCommunitySections.map((section) => (
+              <ChoiceChip
+                key={section.key}
+                label={section.label}
+                selected={activeSection === section.key}
+                onPress={() => setActiveSection(section.key)}
+              />
+            ))}
+          </View>
+          <Caption>
+            Your access is based on the current society membership for {myMembership?.unitIds.length ? 'linked units and shared society records.' : 'shared society records.'}
+          </Caption>
+        </View>
+      </SurfaceCard>
+
+      {activeSection === 'members' ? (
+        members.length > 0 ? (
+          members.map((member) => (
+            <SurfaceCard key={member.membership.id}>
+              <View style={styles.rowBetween}>
+                <Text style={styles.cardTitle}>{member.user.name}</Text>
+                <Pill
+                  label={member.units.map((unit) => unit.code).join(', ') || 'Unit pending'}
+                  tone="accent"
+                />
+              </View>
+              <View style={styles.pillRow}>
+                {member.membership.roles.map((role) => (
+                  <Pill key={`${member.membership.id}-${role}`} label={humanizeRole(role)} tone="primary" />
+                ))}
+              </View>
+              <Caption>{member.user.phone}</Caption>
+              <Caption>{member.residenceProfile?.email ?? member.user.email}</Caption>
+              {member.residenceProfile?.alternatePhone ? (
+                <Caption>Alternate mobile: {member.residenceProfile.alternatePhone}</Caption>
+              ) : null}
+            </SurfaceCard>
+          ))
+        ) : (
+          <SurfaceCard>
+            <Caption>No resident directory entries are available yet.</Caption>
+          </SurfaceCard>
+        )
+      ) : null}
+
+      {activeSection === 'vehicles' ? (
+        vehicles.length > 0 ? (
+          vehicles.map(({ vehicle, user, unit }) => (
+            <SurfaceCard key={vehicle.id}>
+              <View style={styles.rowBetween}>
+                <Text style={styles.cardTitle}>{vehicle.registrationNumber}</Text>
+                <Pill label={humanizeVehicleType(vehicle.vehicleType)} tone="primary" />
+              </View>
+              <Caption>{user?.name ?? 'Resident not linked'}{unit ? ` · ${unit.code}` : ''}</Caption>
+              <Caption>{vehicle.color ?? 'Color not recorded'}{vehicle.parkingSlot ? ` · ${vehicle.parkingSlot}` : ''}</Caption>
+            </SurfaceCard>
+          ))
+        ) : (
+          <SurfaceCard>
+            <Caption>No vehicle details are registered for this society yet.</Caption>
+          </SurfaceCard>
+        )
+      ) : null}
+
+      {activeSection === 'contacts' ? (
+        contacts.length > 0 ? (
+          contacts.map((contact) => (
+            <SurfaceCard key={contact.id}>
+              <View style={styles.rowBetween}>
+                <Text style={styles.cardTitle}>{contact.name}</Text>
+                <Pill
+                  label={humanizeImportantContactCategory(contact.category)}
+                  tone={getImportantContactTone(contact.category)}
+                />
+              </View>
+              <Caption>{contact.roleLabel}</Caption>
+              <Caption>{contact.phone}</Caption>
+              {contact.availability ? <Caption>{contact.availability}</Caption> : null}
+              {contact.notes ? <Caption>{contact.notes}</Caption> : null}
+            </SurfaceCard>
+          ))
+        ) : (
+          <SurfaceCard>
+            <Caption>No important contacts have been published yet.</Caption>
+          </SurfaceCard>
+        )
+      ) : null}
+
+      {activeSection === 'staff' ? (
+        <>
+          <SurfaceCard>
+            <Text style={styles.cardTitle}>Security roster</Text>
+            {guards.length > 0 ? guards.map(({ guard, latestShift }) => (
+              <View key={guard.id} style={styles.inlineSection}>
+                <View style={styles.rowBetween}>
+                  <Text style={styles.inlineTitle}>{guard.name}</Text>
+                  <Pill label={guard.shiftLabel} tone="warning" />
+                </View>
+                <Caption>{guard.phone}</Caption>
+                <Caption>{guard.vendorName ? `${guard.vendorName} · ` : ''}{latestShift?.gate ?? 'Gate not assigned'}</Caption>
+                {latestShift ? <Caption>Latest shift: {formatLongDate(latestShift.start)}</Caption> : null}
+              </View>
+            )) : <Caption>No security roster has been shared yet.</Caption>}
+          </SurfaceCard>
+          <SurfaceCard>
+            <Text style={styles.cardTitle}>Domestic staff and vendors</Text>
+            {staffDirectory.length > 0 ? staffDirectory.map(({ staff, assignments, employerUnits }) => (
+              <View key={staff.id} style={styles.inlineSection}>
+                <View style={styles.rowBetween}>
+                  <Text style={styles.inlineTitle}>{staff.name}</Text>
+                  <Pill
+                    label={humanizeVerificationState(staff.verificationState)}
+                    tone={getVerificationTone(staff.verificationState)}
+                  />
+                </View>
+                <Caption>{humanizeStaffCategory(staff.category)} · {staff.phone}</Caption>
+                {employerUnits.length > 0 ? (
+                  <Caption>Serving: {employerUnits.map((unit) => unit.code).join(', ')}</Caption>
+                ) : null}
+                {assignments.map((assignment) => (
+                  <Caption key={`${staff.id}-${assignment.id}`}>
+                    {assignment.serviceLabel} · {assignment.visitsPerWeek} visits/week
+                  </Caption>
+                ))}
+              </View>
+            )) : <Caption>No society staff records are available yet.</Caption>}
+          </SurfaceCard>
+        </>
+      ) : null}
     </>
   );
 }
@@ -825,6 +1033,11 @@ function ResidentNotices({ societyId, userId }: { societyId: string; userId: str
               <Pill label={announcement.priority} tone={announcement.priority === 'high' ? 'warning' : 'primary'} />
             </View>
             <Caption>{announcement.body}</Caption>
+            {announcement.photoDataUrl ? (
+              <View style={styles.announcementMediaCard}>
+                <Image source={{ uri: announcement.photoDataUrl }} style={styles.announcementMediaImage} />
+              </View>
+            ) : null}
             <Caption>{isUnread ? 'Unread - tap to mark read' : 'Read'} · {formatShortDate(announcement.createdAt)}</Caption>
           </Pressable>
         );
@@ -1107,6 +1320,45 @@ function ResidentHelpdesk({ societyId, userId }: { societyId: string; userId: st
           </Caption>
           {complaint.description ? <Caption>{complaint.description}</Caption> : null}
           <Caption>Assigned to: {complaint.assignedTo ?? 'Awaiting assignment'}</Caption>
+          <View style={styles.inlineSection}>
+            <Text style={styles.inlineTitle}>Progress updates</Text>
+            {getComplaintUpdatesForComplaint(state.data, complaint.id).length > 0 ? (
+              getComplaintUpdatesForComplaint(state.data, complaint.id).map(({ update, user: updateUser }, index) => (
+                <View
+                  key={update.id}
+                  style={[styles.helpdeskUpdateCard, index === 0 ? styles.helpdeskLatestUpdateCard : null]}
+                >
+                  <View style={styles.rowBetween}>
+                    <Caption>{updateUser?.name ?? 'Society team'} · {formatLongDate(update.createdAt)}</Caption>
+                    <View style={styles.helpdeskUpdateHeader}>
+                      {index === 0 ? <Text style={styles.helpdeskLatestUpdateLabel}>Latest update</Text> : null}
+                      <Pill
+                        label={humanizeComplaintStatus(update.status)}
+                        tone={getComplaintTone(update.status)}
+                      />
+                    </View>
+                  </View>
+                  {update.assignedTo ? <Caption>Assigned to: {update.assignedTo}</Caption> : null}
+                  {update.message ? (
+                    index === 0 ? (
+                      <View style={styles.helpdeskLatestMessageCard}>
+                        <Text style={styles.helpdeskLatestMessageText}>{update.message}</Text>
+                      </View>
+                    ) : (
+                      <Caption>{update.message}</Caption>
+                    )
+                  ) : null}
+                  {update.photoDataUrl ? (
+                    <View style={styles.proofCard}>
+                      <Image source={{ uri: update.photoDataUrl }} style={styles.helpdeskUpdateImage} />
+                    </View>
+                  ) : null}
+                </View>
+              ))
+            ) : (
+              <Caption>No progress updates shared yet.</Caption>
+            )}
+          </View>
         </SurfaceCard>
       )) : (
         <SurfaceCard><Caption>No helpdesk tickets raised yet.</Caption></SurfaceCard>
@@ -1121,6 +1373,13 @@ function ResidentProfile({ societyId, userId }: { societyId: string; userId: str
   const membership = getMembershipForSociety(state.data, userId, societyId);
   const residenceProfile = getResidenceProfileForUserSociety(state.data, userId, societyId);
   const units = getUnitsForSociety(state.data, societyId).filter((unit) => membership?.unitIds.includes(unit.id));
+  const userVehicles = useMemo(
+    () =>
+      state.data.vehicleRegistrations.filter(
+        (vehicle) => vehicle.societyId === societyId && vehicle.userId === userId,
+      ),
+    [societyId, state.data.vehicleRegistrations, userId],
+  );
   const allowedUnitIds = new Set(units.map((unit) => unit.id));
   const staff = getStaffVerificationDirectory(state.data, societyId).filter(
     ({ staff, employerUnits }) =>
@@ -1151,6 +1410,12 @@ function ResidentProfile({ societyId, userId }: { societyId: string; userId: str
   const [profileEmergencyContactPhone, setProfileEmergencyContactPhone] = useState(
     residenceProfile?.emergencyContactPhone ?? '',
   );
+  const [profileSecondaryEmergencyContactName, setProfileSecondaryEmergencyContactName] = useState(
+    residenceProfile?.secondaryEmergencyContactName ?? '',
+  );
+  const [profileSecondaryEmergencyContactPhone, setProfileSecondaryEmergencyContactPhone] = useState(
+    residenceProfile?.secondaryEmergencyContactPhone ?? '',
+  );
   const [profileMoveInDate, setProfileMoveInDate] = useState(
     residenceProfile?.moveInDate ?? todayString(),
   );
@@ -1161,7 +1426,29 @@ function ResidentProfile({ societyId, userId }: { societyId: string; userId: str
   const [rentAgreementDataUrl, setRentAgreementDataUrl] = useState(
     residenceProfile?.rentAgreementDataUrl ?? '',
   );
+  const [profileVehicles, setProfileVehicles] = useState<EditableVehicleDraft[]>(() =>
+    userVehicles.length > 0
+      ? userVehicles.map((vehicle) => ({
+          id: vehicle.id,
+          unitId: vehicle.unitId,
+          registrationNumber: vehicle.registrationNumber,
+          vehicleType: vehicle.vehicleType,
+          color: vehicle.color ?? '',
+          parkingSlot: vehicle.parkingSlot ?? '',
+          photoDataUrl: vehicle.photoDataUrl ?? '',
+          statusMessage: '',
+        }))
+      : [],
+  );
   const [profileActionMessage, setProfileActionMessage] = useState('');
+  const hasIncompleteProfileVehicle = profileVehicles.some(
+    (vehicle) =>
+      (vehicle.registrationNumber.trim() ||
+        vehicle.photoDataUrl ||
+        vehicle.color.trim() ||
+        vehicle.parkingSlot.trim()) &&
+      (!vehicle.registrationNumber.trim() || !vehicle.unitId),
+  );
 
   useEffect(() => {
     setProfileFullName(residenceProfile?.fullName ?? currentUser?.name ?? '');
@@ -1169,10 +1456,26 @@ function ResidentProfile({ societyId, userId }: { societyId: string; userId: str
     setProfileAlternatePhone(residenceProfile?.alternatePhone ?? '');
     setProfileEmergencyContactName(residenceProfile?.emergencyContactName ?? '');
     setProfileEmergencyContactPhone(residenceProfile?.emergencyContactPhone ?? '');
+    setProfileSecondaryEmergencyContactName(residenceProfile?.secondaryEmergencyContactName ?? '');
+    setProfileSecondaryEmergencyContactPhone(residenceProfile?.secondaryEmergencyContactPhone ?? '');
     setProfileMoveInDate(residenceProfile?.moveInDate ?? todayString());
     setProfileConsent(Boolean(residenceProfile?.dataProtectionConsentAt));
     setRentAgreementFileName(residenceProfile?.rentAgreementFileName ?? '');
     setRentAgreementDataUrl(residenceProfile?.rentAgreementDataUrl ?? '');
+    setProfileVehicles(
+      userVehicles.length > 0
+        ? userVehicles.map((vehicle) => ({
+            id: vehicle.id,
+            unitId: vehicle.unitId,
+            registrationNumber: vehicle.registrationNumber,
+            vehicleType: vehicle.vehicleType,
+            color: vehicle.color ?? '',
+            parkingSlot: vehicle.parkingSlot ?? '',
+            photoDataUrl: vehicle.photoDataUrl ?? '',
+            statusMessage: '',
+          }))
+        : [],
+    );
   }, [
     currentUser?.email,
     currentUser?.name,
@@ -1185,6 +1488,9 @@ function ResidentProfile({ societyId, userId }: { societyId: string; userId: str
     residenceProfile?.moveInDate,
     residenceProfile?.rentAgreementDataUrl,
     residenceProfile?.rentAgreementFileName,
+    residenceProfile?.secondaryEmergencyContactName,
+    residenceProfile?.secondaryEmergencyContactPhone,
+    userVehicles,
   ]);
 
   function toggleUnitCode(unitCode: string) {
@@ -1193,6 +1499,66 @@ function ResidentProfile({ societyId, userId }: { societyId: string; userId: str
         ? currentSelection.filter((code) => code !== unitCode)
         : [...currentSelection, unitCode],
     );
+  }
+
+  function updateProfileVehicle(vehicleId: string, updates: Partial<EditableVehicleDraft>) {
+    setProfileVehicles((currentVehicles) =>
+      currentVehicles.map((vehicle) =>
+        vehicle.id === vehicleId
+          ? {
+              ...vehicle,
+              ...updates,
+            }
+          : vehicle,
+      ),
+    );
+  }
+
+  function addProfileVehicle() {
+    setProfileVehicles((currentVehicles) => [
+      ...currentVehicles,
+      createEditableVehicleDraft(units[0]?.id ?? ''),
+    ]);
+  }
+
+  function removeProfileVehicle(vehicleId: string) {
+    setProfileVehicles((currentVehicles) =>
+      currentVehicles.filter((vehicle) => vehicle.id !== vehicleId),
+    );
+  }
+
+  async function attachProfileVehiclePhoto(vehicleId: string, capture?: 'user' | 'environment') {
+    try {
+      const file = await pickWebFileAsDataUrl({
+        accept: 'image/png,image/jpeg,image/webp',
+        capture,
+        maxSizeInBytes: 4 * 1024 * 1024,
+        unsupportedMessage: 'Vehicle photo capture is available from the web workspace right now.',
+        tooLargeMessage: 'Choose a vehicle photo smaller than 4 MB.',
+        readErrorMessage: 'Could not read the selected vehicle photo.',
+      });
+
+      if (!file) {
+        return;
+      }
+
+      const currentVehicle = profileVehicles.find((vehicle) => vehicle.id === vehicleId);
+      const detectedRegistrationNumber = await tryDetectVehicleRegistrationFromDataUrl(file.dataUrl);
+
+      updateProfileVehicle(vehicleId, {
+        photoDataUrl: file.dataUrl,
+        registrationNumber:
+          detectedRegistrationNumber ?? currentVehicle?.registrationNumber ?? '',
+        statusMessage: detectedRegistrationNumber
+          ? `Vehicle number ${detectedRegistrationNumber} detected from the photo.`
+          : 'Photo attached. Enter the vehicle number manually if it was not detected.',
+      });
+    } catch (error) {
+      updateProfileVehicle(vehicleId, {
+        statusMessage:
+          error instanceof Error ? error.message : 'Could not attach the vehicle photo.',
+      });
+    }
   }
 
   async function handleSubmitStaffRequest() {
@@ -1245,6 +1611,24 @@ function ResidentProfile({ societyId, userId }: { societyId: string; userId: str
       alternatePhone: profileAlternatePhone,
       emergencyContactName: profileEmergencyContactName,
       emergencyContactPhone: profileEmergencyContactPhone,
+      secondaryEmergencyContactName: profileSecondaryEmergencyContactName,
+      secondaryEmergencyContactPhone: profileSecondaryEmergencyContactPhone,
+      vehicles: profileVehicles
+        .filter(
+          (vehicle) =>
+            vehicle.registrationNumber.trim() ||
+            vehicle.photoDataUrl ||
+            vehicle.color.trim() ||
+            vehicle.parkingSlot.trim(),
+        )
+        .map((vehicle) => ({
+          unitId: vehicle.unitId,
+          registrationNumber: vehicle.registrationNumber,
+          vehicleType: vehicle.vehicleType,
+          color: vehicle.color,
+          parkingSlot: vehicle.parkingSlot,
+          photoDataUrl: vehicle.photoDataUrl || undefined,
+        })),
       moveInDate: profileMoveInDate,
       dataProtectionConsent: profileConsent,
       rentAgreementFileName: residentType === 'tenant' ? rentAgreementFileName : undefined,
@@ -1326,9 +1710,12 @@ function ResidentProfile({ societyId, userId }: { societyId: string; userId: str
                 keyboardType="phone-pad"
               />
             </View>
+          </View>
+          <Text style={styles.compactTitle}>Emergency contacts</Text>
+          <View style={styles.formGrid}>
             <View style={styles.formField}>
               <InputField
-                label="Emergency contact name (optional)"
+                label="Primary emergency contact name"
                 value={profileEmergencyContactName}
                 onChangeText={setProfileEmergencyContactName}
                 placeholder="Family contact"
@@ -1337,13 +1724,131 @@ function ResidentProfile({ societyId, userId }: { societyId: string; userId: str
             </View>
             <View style={styles.formField}>
               <InputField
-                label="Emergency contact mobile (optional)"
+                label="Primary emergency contact mobile"
                 value={profileEmergencyContactPhone}
                 onChangeText={setProfileEmergencyContactPhone}
                 placeholder="+91 98980 55555"
                 keyboardType="phone-pad"
               />
             </View>
+            <View style={styles.formField}>
+              <InputField
+                label="Secondary emergency contact name (optional)"
+                value={profileSecondaryEmergencyContactName}
+                onChangeText={setProfileSecondaryEmergencyContactName}
+                placeholder="Neighbour or relative"
+                autoCapitalize="words"
+              />
+            </View>
+            <View style={styles.formField}>
+              <InputField
+                label="Secondary emergency contact mobile (optional)"
+                value={profileSecondaryEmergencyContactPhone}
+                onChangeText={setProfileSecondaryEmergencyContactPhone}
+                placeholder="+91 98980 66666"
+                keyboardType="phone-pad"
+              />
+            </View>
+          </View>
+          <View style={styles.inlineSection}>
+            <Text style={styles.compactTitle}>Vehicle details</Text>
+            <Caption>
+              Keep your registered vehicles current for society security, gate visibility, and the resident directory.
+            </Caption>
+            <View style={styles.heroActions}>
+              <ActionButton label="Add vehicle" onPress={addProfileVehicle} variant="secondary" />
+            </View>
+            {profileVehicles.length > 0 ? profileVehicles.map((vehicle, index) => (
+              <View key={vehicle.id} style={styles.profileVehicleCard}>
+                <View style={styles.rowBetween}>
+                  <Text style={styles.inlineTitle}>Vehicle {index + 1}</Text>
+                  <ActionButton
+                    label="Remove"
+                    variant="danger"
+                    onPress={() => removeProfileVehicle(vehicle.id)}
+                  />
+                </View>
+                <View style={styles.choiceRow}>
+                  {([
+                    { key: 'car' as const, label: 'Car' },
+                    { key: 'bike' as const, label: 'Bike' },
+                    { key: 'scooter' as const, label: 'Scooter' },
+                  ]).map((option) => (
+                    <ChoiceChip
+                      key={`${vehicle.id}-${option.key}`}
+                      label={option.label}
+                      selected={vehicle.vehicleType === option.key}
+                      onPress={() => updateProfileVehicle(vehicle.id, { vehicleType: option.key })}
+                    />
+                  ))}
+                </View>
+                <View style={styles.choiceRow}>
+                  {units.map((unit) => (
+                    <ChoiceChip
+                      key={`${vehicle.id}-${unit.id}`}
+                      label={unit.code}
+                      selected={vehicle.unitId === unit.id}
+                      onPress={() => updateProfileVehicle(vehicle.id, { unitId: unit.id })}
+                    />
+                  ))}
+                </View>
+                <View style={styles.formGrid}>
+                  <View style={styles.formField}>
+                    <InputField
+                      label="Vehicle number"
+                      value={vehicle.registrationNumber}
+                      onChangeText={(value) =>
+                        updateProfileVehicle(vehicle.id, {
+                          registrationNumber: value.toUpperCase(),
+                          statusMessage: '',
+                        })}
+                      placeholder="GJ01AB1234"
+                      autoCapitalize="characters"
+                    />
+                  </View>
+                  <View style={styles.formField}>
+                    <InputField
+                      label="Color (optional)"
+                      value={vehicle.color}
+                      onChangeText={(value) => updateProfileVehicle(vehicle.id, { color: value })}
+                      placeholder="Pearl white"
+                    />
+                  </View>
+                  <View style={styles.formField}>
+                    <InputField
+                      label="Parking slot (optional)"
+                      value={vehicle.parkingSlot}
+                      onChangeText={(value) => updateProfileVehicle(vehicle.id, { parkingSlot: value })}
+                      placeholder="Basement P1-12"
+                    />
+                  </View>
+                </View>
+                <View style={styles.heroActions}>
+                  <ActionButton
+                    label="Take vehicle photo"
+                    onPress={() => {
+                      void attachProfileVehiclePhoto(vehicle.id, 'environment');
+                    }}
+                    variant="secondary"
+                  />
+                  <ActionButton
+                    label={vehicle.photoDataUrl ? 'Replace photo' : 'Upload photo'}
+                    onPress={() => {
+                      void attachProfileVehiclePhoto(vehicle.id);
+                    }}
+                    variant="secondary"
+                  />
+                </View>
+                {vehicle.statusMessage ? <Caption>{vehicle.statusMessage}</Caption> : null}
+                {vehicle.photoDataUrl ? (
+                  <View style={styles.proofCard}>
+                    <Image source={{ uri: vehicle.photoDataUrl }} style={styles.profileVehicleImage} />
+                  </View>
+                ) : null}
+              </View>
+            )) : (
+              <Caption>No vehicle saved in your profile yet.</Caption>
+            )}
           </View>
           <Text style={styles.compactTitle}>Privacy confirmation</Text>
           <Caption>
@@ -1389,7 +1894,13 @@ function ResidentProfile({ societyId, userId }: { societyId: string; userId: str
           <ActionButton
             label={state.isSyncing ? 'Saving...' : 'Save residence profile'}
             onPress={handleSaveResidenceProfile}
-            disabled={state.isSyncing || !profileFullName.trim() || !profileMoveInDate || !profileConsent}
+            disabled={
+              state.isSyncing ||
+              !profileFullName.trim() ||
+              !profileMoveInDate ||
+              hasIncompleteProfileVehicle ||
+              !profileConsent
+            }
           />
         </View>
       </SurfaceCard>
@@ -1546,6 +2057,11 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: palette.ink,
   },
+  inlineTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: palette.ink,
+  },
   inlineSection: {
     gap: spacing.sm,
     paddingTop: spacing.sm,
@@ -1597,6 +2113,81 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     backgroundColor: '#F4F1EB',
   },
+  helpdeskUpdateHeader: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  helpdeskUpdateCard: {
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#E6DED2',
+    backgroundColor: '#FCFAF6',
+  },
+  helpdeskLatestUpdateCard: {
+    borderColor: '#F2B66C',
+    backgroundColor: '#FFF4DF',
+  },
+  helpdeskLatestUpdateLabel: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#A65A00',
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+  },
+  helpdeskLatestMessageCard: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    borderRadius: 14,
+    backgroundColor: '#FFD89A',
+    borderWidth: 1,
+    borderColor: '#F2B66C',
+  },
+  helpdeskLatestMessageText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#5F3400',
+  },
+  helpdeskUpdateImage: {
+    width: 220,
+    height: 160,
+    borderRadius: 14,
+    backgroundColor: '#F4F1EB',
+  },
+  profileVehicleCard: {
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: palette.border,
+    backgroundColor: palette.surfaceMuted,
+  },
+  profileVehicleImage: {
+    width: 200,
+    height: 150,
+    borderRadius: 14,
+    backgroundColor: '#F4F1EB',
+  },
+  announcementMediaCard: {
+    marginTop: spacing.sm,
+    alignSelf: 'stretch',
+    maxWidth: 420,
+    padding: spacing.xs,
+    borderRadius: 18,
+    backgroundColor: palette.white,
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  announcementMediaImage: {
+    width: '100%',
+    height: 220,
+    borderRadius: 14,
+    backgroundColor: '#F4F1EB',
+  },
 });
 
 function humanizeStaffCategory(category: 'domesticHelp' | 'cook' | 'driver' | 'vendor') {
@@ -1611,6 +2202,49 @@ function humanizeStaffCategory(category: 'domesticHelp' | 'cook' | 'driver' | 'v
       return 'Vendor';
     default:
       return category;
+  }
+}
+
+function humanizeVehicleType(vehicleType: VehicleType) {
+  switch (vehicleType) {
+    case 'bike':
+      return 'Bike';
+    case 'scooter':
+      return 'Scooter';
+    case 'car':
+    default:
+      return 'Car';
+  }
+}
+
+function humanizeImportantContactCategory(category: ImportantContactCategory) {
+  switch (category) {
+    case 'management':
+      return 'Management';
+    case 'security':
+      return 'Security';
+    case 'maintenance':
+      return 'Maintenance';
+    case 'emergency':
+      return 'Emergency';
+    case 'amenity':
+    default:
+      return 'Amenity';
+  }
+}
+
+function getImportantContactTone(category: ImportantContactCategory) {
+  switch (category) {
+    case 'security':
+      return 'warning' as const;
+    case 'emergency':
+      return 'accent' as const;
+    case 'maintenance':
+      return 'success' as const;
+    case 'management':
+    case 'amenity':
+    default:
+      return 'primary' as const;
   }
 }
 

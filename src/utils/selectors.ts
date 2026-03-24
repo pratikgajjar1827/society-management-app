@@ -762,6 +762,16 @@ export function getComplaintsForUserSociety(data: SeedData, userId: string, soci
     .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt));
 }
 
+export function getComplaintUpdatesForComplaint(data: SeedData, complaintId: string) {
+  return [...(Array.isArray(data.complaintUpdates) ? data.complaintUpdates : [])]
+    .filter((update) => update.complaintId === complaintId)
+    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
+    .map((update) => ({
+      update,
+      user: getCurrentUser(data, update.createdByUserId),
+    }));
+}
+
 export function getBookingsForSociety(data: SeedData, societyId: string) {
   return [...data.bookings]
     .filter((booking) => booking.societyId === societyId)
@@ -979,6 +989,84 @@ export function getResidentsDirectory(data: SeedData, societyId: string) {
       unitStaffRecords,
     };
   });
+}
+
+export function getCommunityMembersForSociety(data: SeedData, societyId: string) {
+  return data.memberships
+    .filter((membership) => membership.societyId === societyId)
+    .map((membership) => {
+      const user = getCurrentUser(data, membership.userId);
+
+      if (!user) {
+        return undefined;
+      }
+
+      const units = membership.unitIds
+        .map((unitId) => data.units.find((unit) => unit.id === unitId))
+        .filter((unit): unit is SeedData['units'][number] => Boolean(unit));
+      const residenceProfile = data.residenceProfiles.find(
+        (profile) => profile.userId === membership.userId && profile.societyId === societyId,
+      );
+
+      return {
+        membership,
+        user,
+        units,
+        residenceProfile,
+      };
+    })
+    .filter(Boolean)
+    .sort((left, right) => {
+      const leftMember = left as NonNullable<typeof left>;
+      const rightMember = right as NonNullable<typeof right>;
+      const leftUnitCode = leftMember.units[0]?.code ?? 'ZZZ';
+      const rightUnitCode = rightMember.units[0]?.code ?? 'ZZZ';
+
+      if (leftUnitCode !== rightUnitCode) {
+        return leftUnitCode.localeCompare(rightUnitCode);
+      }
+
+      return leftMember.user.name.localeCompare(rightMember.user.name);
+    }) as Array<{
+    membership: Membership;
+    user: UserProfile;
+    units: SeedData['units'];
+    residenceProfile?: ResidenceProfile;
+  }>;
+}
+
+export function getVehicleDirectoryForSociety(data: SeedData, societyId: string) {
+  return [...(Array.isArray(data.vehicleRegistrations) ? data.vehicleRegistrations : [])]
+    .filter((vehicle) => vehicle.societyId === societyId)
+    .map((vehicle) => ({
+      vehicle,
+      user: getCurrentUser(data, vehicle.userId),
+      unit: data.units.find((unit) => unit.id === vehicle.unitId),
+    }))
+    .sort((left, right) => left.vehicle.registrationNumber.localeCompare(right.vehicle.registrationNumber));
+}
+
+export function getImportantContactsForSociety(data: SeedData, societyId: string) {
+  const categoryOrder = {
+    management: 1,
+    security: 2,
+    maintenance: 3,
+    amenity: 4,
+    emergency: 5,
+  } as const;
+
+  return [...(Array.isArray(data.importantContacts) ? data.importantContacts : [])]
+    .filter((contact) => contact.societyId === societyId)
+    .sort((left, right) => {
+      const leftRank = categoryOrder[left.category] ?? 99;
+      const rightRank = categoryOrder[right.category] ?? 99;
+
+      if (leftRank !== rightRank) {
+        return leftRank - rightRank;
+      }
+
+      return left.name.localeCompare(right.name);
+    });
 }
 
 export function getGuardRosterForSociety(data: SeedData, societyId: string) {

@@ -139,6 +139,7 @@ interface SocietyProfileInput {
 interface AnnouncementPublishInput {
   title: string;
   body: string;
+  photoDataUrl?: string;
   audience: AnnouncementAudience;
   priority: AnnouncementPriority;
 }
@@ -153,6 +154,8 @@ interface ComplaintTicketInput {
 interface ComplaintTicketUpdateInput {
   status: 'open' | 'inProgress' | 'resolved';
   assignedTo?: string;
+  message?: string;
+  photoDataUrl?: string;
 }
 
 interface GuardRecordInput {
@@ -1116,11 +1119,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       runSocietyMutation(
         societyId,
         (sessionToken) => updateComplaintTicketRequest(sessionToken, complaintId, input),
-        input.status === 'resolved'
-          ? 'Helpdesk ticket marked resolved.'
-          : input.status === 'inProgress'
-            ? 'Helpdesk ticket moved to in progress.'
-            : 'Helpdesk ticket reopened.',
+        input.message?.trim() || input.photoDataUrl
+          ? 'Helpdesk update posted.'
+          : input.status === 'resolved'
+            ? 'Helpdesk ticket marked resolved.'
+            : input.status === 'inProgress'
+              ? 'Helpdesk ticket moved to in progress.'
+              : 'Helpdesk ticket reopened.',
       ),
     sendMaintenanceReminder: async (societyId, input) =>
       runSocietyMutation(

@@ -21,6 +21,7 @@ import {
   SocietySetupDraft,
   StaffCategory,
   UserProfile,
+  VehicleType,
   VerificationState,
 } from '../types/domain';
 
@@ -69,6 +70,15 @@ type SocietyAdminMutationResponse = AuthenticatedResponse & {
   societyId: string;
 };
 
+export interface ResidenceVehicleInput {
+  unitId: string;
+  registrationNumber: string;
+  vehicleType: VehicleType;
+  color?: string;
+  parkingSlot?: string;
+  photoDataUrl?: string;
+}
+
 export interface ResidenceProfileInput {
   residentType: JoinRequestRole;
   fullName: string;
@@ -76,6 +86,9 @@ export interface ResidenceProfileInput {
   alternatePhone?: string;
   emergencyContactName?: string;
   emergencyContactPhone?: string;
+  secondaryEmergencyContactName?: string;
+  secondaryEmergencyContactPhone?: string;
+  vehicles?: ResidenceVehicleInput[];
   moveInDate: string;
   dataProtectionConsent: boolean;
   rentAgreementFileName?: string;
@@ -85,6 +98,7 @@ export interface ResidenceProfileInput {
 export interface AnnouncementCreateInput {
   title: string;
   body: string;
+  photoDataUrl?: string;
   audience: AnnouncementAudience;
   priority: AnnouncementPriority;
 }
@@ -96,11 +110,19 @@ function normalizeSeedDataSnapshot(data: unknown) {
     return data;
   }
 
-  const snapshot = data as SeedData & { residenceProfiles?: unknown };
+  const snapshot = data as SeedData & {
+    residenceProfiles?: unknown;
+    vehicleRegistrations?: unknown;
+    importantContacts?: unknown;
+    complaintUpdates?: unknown;
+  };
 
   return {
     ...snapshot,
     residenceProfiles: Array.isArray(snapshot.residenceProfiles) ? snapshot.residenceProfiles : [],
+    vehicleRegistrations: Array.isArray(snapshot.vehicleRegistrations) ? snapshot.vehicleRegistrations : [],
+    importantContacts: Array.isArray(snapshot.importantContacts) ? snapshot.importantContacts : [],
+    complaintUpdates: Array.isArray(snapshot.complaintUpdates) ? snapshot.complaintUpdates : [],
   };
 }
 
@@ -554,6 +576,8 @@ export async function updateComplaintTicket(
   complaint: {
     status: 'open' | 'inProgress' | 'resolved';
     assignedTo?: string;
+    message?: string;
+    photoDataUrl?: string;
   },
 ) {
   return requestJson<SocietyAdminMutationResponse>(
