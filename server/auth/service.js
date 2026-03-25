@@ -457,6 +457,10 @@ function getTwilioConfig() {
   return { serviceSid, username, password };
 }
 
+function isOtpDeliveryConfigured() {
+  return Boolean(getTwilioConfig());
+}
+
 async function parseTwilioResponse(response) {
   const text = await response.text();
 
@@ -3781,6 +3785,7 @@ module.exports = {
   createComplaintTicket,
   getOnboardingState,
   hasAssignedChairman,
+  isOtpDeliveryConfigured,
   markAnnouncementRead,
   normalizeAuthChannel,
   normalizeAuthIntent,

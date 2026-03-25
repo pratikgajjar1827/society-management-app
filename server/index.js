@@ -22,6 +22,7 @@ const {
   createStaffVerification,
   createVisitorPass,
   getSynchronizedSnapshot,
+  isOtpDeliveryConfigured,
   HttpError,
   getOnboardingState,
   hasAssignedChairman,
@@ -998,6 +999,11 @@ if (require.main === module) {
   server.on('listening', () => {
     console.log(`SocietyOS backend running on http://0.0.0.0:${DEFAULT_PORT}`);
     console.log(`SQLite database: ${dbPath}`);
+    console.log(
+      isOtpDeliveryConfigured()
+        ? 'OTP delivery mode: Twilio Verify is configured. SMS OTP requests will be sent through Twilio.'
+        : 'OTP delivery mode: local development fallback. No SMS will be sent until Twilio Verify environment variables are configured.',
+    );
   });
 }
 

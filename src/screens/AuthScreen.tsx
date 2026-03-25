@@ -34,7 +34,6 @@ export function AuthScreen() {
   const { state, actions } = useApp();
   const [destination, setDestination] = useState('');
   const [code, setCode] = useState('');
-  const [isDevOtpVisible, setIsDevOtpVisible] = useState(false);
   const { width } = useWindowDimensions();
   const isCompact = width < 768;
   const heroOpacity = useRef(new Animated.Value(0)).current;
@@ -104,7 +103,6 @@ export function AuthScreen() {
 
   useEffect(() => {
     setCode('');
-    setIsDevOtpVisible(false);
   }, [challenge?.challengeId]);
 
   useEffect(() => {
@@ -116,7 +114,6 @@ export function AuthScreen() {
   useEffect(() => {
     setDestination('');
     setCode('');
-    setIsDevOtpVisible(false);
   }, [state.screen]);
 
   return (
@@ -280,6 +277,20 @@ export function AuthScreen() {
                     keyboardType="numeric"
                   />
 
+                  {state.noticeMessage ? (
+                    <View style={styles.noticeCard}>
+                      <Text style={styles.noticeTitle}>OTP delivery update</Text>
+                      <Caption style={styles.noticeText}>{state.noticeMessage}</Caption>
+                    </View>
+                  ) : null}
+
+                  {state.apiError ? (
+                    <View style={styles.errorCard}>
+                      <Text style={styles.errorTitle}>Could not request or verify OTP</Text>
+                      <Caption style={styles.errorText}>{state.apiError}</Caption>
+                    </View>
+                  ) : null}
+
                   {challenge?.provider === 'development' && code ? (
                     <Caption style={styles.devAutoFillHint}>
                       Development backend detected. The OTP has been auto-filled for this request.
@@ -311,21 +322,14 @@ export function AuthScreen() {
                         SMS is not configured on this server, so use this generated code to continue login.
                       </Caption>
                       <View style={styles.devOtpActionStack}>
-                        <ActionButton
-                          label={isDevOtpVisible ? 'Hide local OTP' : 'Show local OTP'}
-                          onPress={() => setIsDevOtpVisible((currentValue) => !currentValue)}
-                          variant="secondary"
-                        />
-                        {isDevOtpVisible ? (
-                          <View style={styles.devOtpRow}>
-                            <Text style={styles.devOtpValue}>{challenge.developmentCode}</Text>
-                            <ActionButton
-                              label="Use this OTP"
-                              onPress={() => setCode(challenge.developmentCode ?? '')}
-                              variant="secondary"
-                            />
-                          </View>
-                        ) : null}
+                        <View style={styles.devOtpRow}>
+                          <Text style={styles.devOtpValue}>{challenge.developmentCode}</Text>
+                          <ActionButton
+                            label="Use this OTP"
+                            onPress={() => setCode(challenge.developmentCode ?? '')}
+                            variant="secondary"
+                          />
+                        </View>
                       </View>
                     </View>
                   ) : null}
@@ -733,6 +737,42 @@ const styles = StyleSheet.create({
     borderColor: '#E9DDCF',
     backgroundColor: '#FFF9F1',
     gap: 4,
+  },
+  noticeCard: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#E2D4B7',
+    backgroundColor: '#FFF7E8',
+    gap: 4,
+  },
+  noticeTitle: {
+    color: '#7B4C06',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  noticeText: {
+    color: '#7B4C06',
+    fontWeight: '700',
+  },
+  errorCard: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#E7B8B2',
+    backgroundColor: '#FFF1EF',
+    gap: 4,
+  },
+  errorTitle: {
+    color: palette.danger,
+    fontSize: 14,
+    fontWeight: '800',
+  },
+  errorText: {
+    color: palette.danger,
+    fontWeight: '700',
   },
   statusTitle: {
     color: palette.ink,
