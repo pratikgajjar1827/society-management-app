@@ -270,6 +270,7 @@ interface AppContextValue {
   state: AppState;
   actions: {
     requestOtp: (destination: string) => Promise<void>;
+    loginWithDevelopmentOtp: (destination: string) => Promise<void>;
     verifyOtp: (code: string) => Promise<void>;
     retryBackendConnection: () => Promise<boolean>;
     saveApiBaseUrl: (value: string) => Promise<boolean>;
@@ -733,11 +734,79 @@ export function AppProvider({ children }: { children: ReactNode }) {
           isSyncing: false,
           pendingChallenge: challenge,
           apiError: undefined,
-          noticeMessage: undefined,
+          noticeMessage:
+            challenge.provider === 'development'
+              ? 'SMS delivery is not configured on this backend yet. Use the local development OTP shown on the login screen.'
+              : undefined,
           session: {
             ...currentState.session,
             authChannel: challenge.channel,
             verifiedDestination: undefined,
+          },
+        }));
+      } catch (error) {
+        setState((currentState) => ({
+          ...currentState,
+          isSyncing: false,
+          apiError: getErrorMessage(error),
+          noticeMessage: undefined,
+        }));
+      }
+    },
+    loginWithDevelopmentOtp: async (destination) => {
+      setState((currentState) => ({
+        ...currentState,
+        isSyncing: true,
+        apiError: undefined,
+        noticeMessage: undefined,
+        pendingChallenge: undefined,
+      }));
+
+      try {
+        const challenge = await requestOtpRequest('auto', 'sms', destination);
+
+        if (challenge.provider !== 'development' || !challenge.developmentCode) {
+          setState((currentState) => ({
+            ...currentState,
+            isSyncing: false,
+            pendingChallenge: challenge,
+            apiError: undefined,
+            noticeMessage:
+              challenge.provider === 'development'
+                ? 'Development OTP is unavailable for this request. Use the regular OTP flow.'
+                : 'This backend is using real OTP delivery. Use the regular OTP flow to continue.',
+            session: {
+              ...currentState.session,
+              authChannel: challenge.channel,
+              verifiedDestination: undefined,
+            },
+          }));
+          return;
+        }
+
+        const response = await verifyOtpRequest('auto', challenge.challengeId, challenge.developmentCode);
+
+        setState((currentState) => ({
+          ...currentState,
+          data: response.data,
+          chairmanAssigned: response.chairmanAssigned,
+          amenityLibrary: response.amenityLibrary,
+          defaultSetupDraft: response.defaultSetupDraft,
+          pendingChallenge: undefined,
+          onboarding: response.onboarding,
+          screen: resolveScreen(response.onboarding),
+          isSyncing: false,
+          apiError: undefined,
+          noticeMessage: 'Logged in with the backend development OTP shortcut.',
+          dataSource: 'remote',
+          session: {
+            userId: response.currentUserId,
+            sessionToken: response.sessionToken,
+            authChannel: response.verifiedChannel,
+            verifiedDestination: response.verifiedDestination,
+            accountRole: response.onboarding.preferredRole ?? undefined,
+            selectedSocietyId: undefined,
+            selectedProfile: undefined,
           },
         }));
       } catch (error) {

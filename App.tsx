@@ -34,8 +34,8 @@ function BackendConnectionPanel() {
     }
   }, [state.apiError]);
 
-  const showExpandedMeta = !isCompact || isExpanded;
-  const showCompactControls = !isCompact || isExpanded;
+  const showExpandedMeta = isExpanded;
+  const showCompactControls = isExpanded;
 
   return (
     <View style={[styles.connectionPanel, isCompact ? styles.connectionPanelCompact : null]}>
@@ -242,18 +242,18 @@ const styles = StyleSheet.create({
     borderBottomColor: '#E6D7C3',
     borderBottomWidth: 1,
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+    gap: spacing.xs,
   },
   connectionPanelCompact: {
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingVertical: spacing.xs,
     gap: spacing.xs,
   },
   connectionHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     gap: spacing.md,
     flexWrap: 'wrap',
   },
@@ -262,7 +262,7 @@ const styles = StyleSheet.create({
   },
   connectionCopy: {
     flex: 1,
-    gap: spacing.xs,
+    gap: 2,
     minWidth: 240,
   },
   connectionCopyCompact: {
@@ -270,25 +270,25 @@ const styles = StyleSheet.create({
   },
   connectionEyebrow: {
     color: '#795A2B',
-    fontSize: 12,
+    fontSize: 11,
     fontWeight: '800',
     letterSpacing: 0.6,
     textTransform: 'uppercase',
   },
   connectionUrl: {
     color: palette.ink,
-    fontSize: 15,
-    lineHeight: 21,
+    fontSize: 14,
+    lineHeight: 18,
     fontWeight: '800',
   },
   connectionUrlCompact: {
-    fontSize: 14,
-    lineHeight: 18,
+    fontSize: 13,
+    lineHeight: 17,
   },
   connectionHint: {
     color: palette.mutedInk,
-    fontSize: 12,
-    lineHeight: 17,
+    fontSize: 11,
+    lineHeight: 15,
   },
   connectionStatusPill: {
     borderRadius: 999,
@@ -331,6 +331,7 @@ const styles = StyleSheet.create({
   },
   connectionEditor: {
     gap: spacing.sm,
+    paddingTop: spacing.xs,
   },
   connectionEditorCompact: {
     paddingTop: spacing.xs,

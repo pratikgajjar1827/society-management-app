@@ -2338,7 +2338,7 @@ function ResidentBookings({
   }, [preferredSection]);
 
   const pendingBookings = bookings.filter((booking) => booking.status === 'pending').length;
-  const approvedBookings = bookings.filter((booking) => booking.status === 'approved').length;
+  const confirmedBookings = bookings.filter((booking) => booking.status === 'confirmed').length;
 
   async function handleCreateBooking() {
     if (!selectedAmenity) {
@@ -2370,7 +2370,7 @@ function ResidentBookings({
           <MetricCard label="Bookable amenities" value={String(bookableAmenities.length)} tone="accent" />
           <MetricCard label="My bookings" value={String(bookings.length)} tone="primary" />
           <MetricCard label="Pending" value={String(pendingBookings)} tone="blue" />
-          <MetricCard label="Approved" value={String(approvedBookings)} tone="primary" />
+          <MetricCard label="Confirmed" value={String(confirmedBookings)} tone="primary" />
         </View>
         <View style={styles.choiceRow}>
           {residentBookingSections.map((section) => (
