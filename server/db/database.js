@@ -44,6 +44,11 @@ const tableConfigs = [
   ['securityGuards'],
   ['securityShifts'],
   ['entryLogs'],
+  ['visitorPasses'],
+  ['securityGuestRequests'],
+  ['securityGuestLogs'],
+  ['chatThreads', ['participantUserIds']],
+  ['chatMessages'],
 ];
 
 const authTableNames = ['authSessions', 'authChallenges', 'authIdentities', 'userProfiles'];
@@ -71,6 +76,22 @@ function normalizeSeedPhone(value) {
 
 function normalizeSeedEmail(value) {
   return String(value ?? '').trim().toLowerCase();
+}
+
+function getAvatarInitials(name) {
+  const normalized = String(name ?? '').trim();
+
+  if (!normalized) {
+    return 'SG';
+  }
+
+  const parts = normalized.split(/\s+/).filter(Boolean);
+  const initials = parts
+    .slice(0, 2)
+    .map((part) => part.charAt(0).toUpperCase())
+    .join('');
+
+  return initials || normalized.slice(0, 2).toUpperCase();
 }
 
 fs.mkdirSync(dbDirectory, { recursive: true });
@@ -191,6 +212,19 @@ function ensureSchema() {
   for (const [columnName, definition] of missingVehicleColumns) {
     db.exec(`ALTER TABLE vehicleRegistrations ADD COLUMN ${columnName} ${definition}`);
   }
+
+  const securityGuestRequestColumns = new Set(
+    db.prepare("PRAGMA table_info('securityGuestRequests')").all().map((column) => column.name),
+  );
+  const missingSecurityGuestRequestColumns = [
+    ['guestPhotoCapturedAt', 'TEXT'],
+    ['vehiclePhotoDataUrl', 'TEXT'],
+    ['vehiclePhotoCapturedAt', 'TEXT'],
+  ].filter(([columnName]) => !securityGuestRequestColumns.has(columnName));
+
+  for (const [columnName, definition] of missingSecurityGuestRequestColumns) {
+    db.exec(`ALTER TABLE securityGuestRequests ADD COLUMN ${columnName} ${definition}`);
+  }
 }
 
 function ensureSuperUserAccount() {
@@ -251,7 +285,14 @@ function ensureSuperUserAccount() {
 }
 
 function ensureSupplementalSeedRows() {
-  const supplementalTables = ['vehicleRegistrations', 'importantContacts', 'complaintUpdates'];
+  const supplementalTables = [
+    'vehicleRegistrations',
+    'importantContacts',
+    'complaintUpdates',
+    'visitorPasses',
+    'securityGuestRequests',
+    'securityGuestLogs',
+  ];
 
   for (const tableName of supplementalTables) {
     const row = db.prepare(`SELECT COUNT(*) AS count FROM ${tableName}`).get();
@@ -259,6 +300,84 @@ function ensureSupplementalSeedRows() {
     if (Number(row.count) === 0) {
       insertMany(tableName, seedData[tableName]);
     }
+  }
+}
+
+function ensureSecurityGuardAccess() {
+  const now = new Date().toISOString();
+  const guards = db.prepare('SELECT id, societyId, name, phone FROM securityGuards').all();
+
+  for (const guard of guards) {
+    const normalizedPhone = normalizeSeedPhone(guard.phone);
+
+    if (!normalizedPhone) {
+      continue;
+    }
+
+    runTransaction(() => {
+      if (guard.phone !== normalizedPhone) {
+        db.prepare('UPDATE securityGuards SET phone = ? WHERE id = ?').run(normalizedPhone, guard.id);
+      }
+
+      const existingIdentity = db
+        .prepare("SELECT id, userId FROM authIdentities WHERE channel = 'sms' AND value = ?")
+        .get(normalizedPhone);
+      let userId = existingIdentity?.userId;
+
+      if (!userId) {
+        const existingUser = db.prepare('SELECT id FROM users WHERE phone = ?').get(normalizedPhone);
+        userId = existingUser?.id ?? nextId('user');
+
+        if (existingUser) {
+          db.prepare('UPDATE users SET phone = ? WHERE id = ?').run(normalizedPhone, userId);
+        } else {
+          db.prepare(
+            'INSERT INTO users (id, name, phone, email, avatarInitials) VALUES (?, ?, ?, ?, ?)',
+          ).run(userId, guard.name, normalizedPhone, '', getAvatarInitials(guard.name));
+        }
+
+        db.prepare(
+          'INSERT INTO authIdentities (id, userId, channel, value, isPrimary, verifiedAt, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        ).run(`identity-${userId}-sms`, userId, 'sms', normalizedPhone, 1, now, now);
+      }
+
+      db.prepare(
+        `INSERT INTO userProfiles (userId, preferredRole, createdAt, updatedAt)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(userId) DO UPDATE SET updatedAt = excluded.updatedAt`,
+      ).run(userId, null, now, now);
+
+      const membership = db
+        .prepare('SELECT id, roles FROM memberships WHERE userId = ? AND societyId = ?')
+        .get(userId, guard.societyId);
+
+      if (!membership) {
+        const existingMembershipCount = Number(
+          db.prepare('SELECT COUNT(*) AS count FROM memberships WHERE userId = ?').get(userId)?.count ?? 0,
+        );
+
+        insertMany('memberships', [
+          {
+            id: nextId('membership'),
+            userId,
+            societyId: guard.societyId,
+            roles: ['security'],
+            unitIds: [],
+            isPrimary: existingMembershipCount === 0,
+          },
+        ]);
+        return;
+      }
+
+      const roles = JSON.parse(membership.roles ?? '[]');
+
+      if (!roles.includes('security')) {
+        db.prepare('UPDATE memberships SET roles = ? WHERE id = ?').run(
+          JSON.stringify([...roles, 'security']),
+          membership.id,
+        );
+      }
+    });
   }
 }
 
@@ -806,6 +925,7 @@ function resetDatabase() {
   db.exec('PRAGMA foreign_keys = ON;');
   ensureSchema();
   seedDatabase(seedData);
+  ensureSecurityGuardAccess();
   return getSnapshot();
 }
 
@@ -816,6 +936,7 @@ function initializeDatabase() {
   }
   ensureSuperUserAccount();
   ensureSupplementalSeedRows();
+  ensureSecurityGuardAccess();
 }
 
 module.exports = {

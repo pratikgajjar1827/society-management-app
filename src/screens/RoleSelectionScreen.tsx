@@ -1,4 +1,4 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import {
   ActionButton,
@@ -16,10 +16,13 @@ import { deriveProfiles, getMembershipForSociety, getSelectedSociety, humanizePr
 const profileModules = {
   resident: ['Home', 'Notices', 'Bookings', 'Helpdesk', 'Profile'],
   admin: ['Admin Home', 'Residents', 'Billing', 'Amenities', 'Security', 'Announcements', 'Audit'],
+  security: ['Gate Desk', 'Approvals', 'Visitors', 'Logs'],
 } as const;
 
 export function RoleSelectionScreen() {
   const { state, actions } = useApp();
+  const { width } = useWindowDimensions();
+  const isCompact = width < 768;
 
   if (!state.session.userId || !state.session.selectedSocietyId) {
     return null;
@@ -41,34 +44,45 @@ export function RoleSelectionScreen() {
     <Page>
       <HeroCard
         eyebrow={society.name}
-        title="Pick the profile you want to use in this society."
-        subtitle="One person can carry multiple roles inside the same workspace. Switching the active profile keeps permissions clean and prevents overloaded navigation."
+        title={isCompact ? 'Choose how you want to enter this society.' : 'Pick the profile you want to use in this society.'}
+        subtitle="One person can carry multiple roles inside the same workspace. Switching the active profile keeps permissions clean and keeps the mobile navigation focused."
       >
-        <View style={styles.heroActions}>
+        <View style={[styles.heroActions, isCompact ? styles.heroActionsCompact : null]}>
           <ActionButton label="Change workspace" onPress={actions.goToWorkspaces} variant="secondary" />
         </View>
       </HeroCard>
 
       <SectionHeader
         title="Available profiles"
-        description="Resident view focuses on daily living. Admin view focuses on operations, compliance, and collections."
+        description="Resident view focuses on daily living. Admin view focuses on operations and collections. Security workspace focuses on gate approvals, visitor movement, and entry logs."
       />
 
       {profiles.map((profile) => (
-        <SurfaceCard key={profile}>
-          <View style={styles.profileHeader}>
+        <SurfaceCard key={profile} style={isCompact ? styles.profileCardCompact : null}>
+          <View style={[styles.profileHeader, isCompact ? styles.profileHeaderCompact : null]}>
             <View style={styles.profileHeadingBlock}>
               <Text style={styles.profileTitle}>{humanizeProfile(profile)}</Text>
               <Caption>
                 {profile === 'resident'
                   ? 'Best for owners, tenants, and family members.'
-                  : 'Best for chairman and committee workflows.'}
+                  : profile === 'admin'
+                    ? 'Best for chairman and committee workflows.'
+                    : 'Best for security guards and gate desk operators.'}
               </Caption>
             </View>
-            <Pill label={profile === 'resident' ? 'Daily usage' : 'Operational control'} tone="primary" />
+            <Pill
+              label={
+                profile === 'resident'
+                  ? 'Daily usage'
+                  : profile === 'admin'
+                    ? 'Operational control'
+                    : 'Gate operations'
+              }
+              tone="primary"
+            />
           </View>
 
-          <View style={styles.moduleRow}>
+          <View style={[styles.moduleRow, isCompact ? styles.moduleRowCompact : null]}>
             {profileModules[profile].map((moduleName) => (
               <Pill key={moduleName} label={moduleName} tone="accent" />
             ))}
@@ -86,8 +100,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: spacing.sm,
   },
+  heroActionsCompact: {
+    gap: spacing.xs,
+  },
   profileHeader: {
     gap: spacing.sm,
+  },
+  profileHeaderCompact: {
+    gap: spacing.xs,
   },
   profileHeadingBlock: {
     gap: spacing.xs,
@@ -101,5 +121,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.sm,
+  },
+  moduleRowCompact: {
+    gap: spacing.xs,
+  },
+  profileCardCompact: {
+    gap: spacing.md,
   },
 });

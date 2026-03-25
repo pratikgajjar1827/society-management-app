@@ -10,6 +10,7 @@ const {
 const { countOfficeUnits, findDuplicateOfficeCodes, normalizeOfficeFloorPlan } = require('./seed/factories');
 const {
   assignChairmanResidence,
+  buildAuthPayload,
   captureResidentUpiPayment,
   createAnnouncement,
   createAmenityBooking,
@@ -17,7 +18,9 @@ const {
   createEntryLogRecord,
   createExpenseRecord,
   createSecurityGuard,
+  createSecurityGuestRequest,
   createStaffVerification,
+  createVisitorPass,
   getSynchronizedSnapshot,
   HttpError,
   getOnboardingState,
@@ -27,10 +30,17 @@ const {
   recordManualPayment,
   requireSuperUserRole,
   requireSession,
+  ringSecurityGuestRequest,
   reviewAmenityBooking,
   reviewJoinRequest,
+  reviewSecurityGuestRequest,
   reviewResidentPayment,
   reviewStaffVerification,
+  sendDirectChatMessage,
+  sendSocietyChatMessage,
+  sendSecurityGuestMessage,
+  updateSecurityGuestRequestStatus,
+  updateVisitorPassStatus,
   sendMaintenanceReminder,
   selectSocietyForResident,
   setPreferredRole,
@@ -42,6 +52,7 @@ const {
   updateComplaintTicket,
   verifyOtp,
 } = require('./auth/service');
+const { detectVehicleNumberFromPhotoDataUrl } = require('./ocr/vehicleNumber');
 const { amenityLibrary, defaultSetupDraft } = require('./seed/seedData');
 
 const DEFAULT_PORT = Number(process.env.PORT || 4000);
@@ -270,6 +281,31 @@ async function requestHandler(request, response) {
 
     if (request.method === 'GET' && url.pathname === '/api/bootstrap') {
       sendJson(response, 200, buildBootstrapPayload());
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/api/session/snapshot') {
+      const sessionToken = getBearerToken(request);
+      const userId = requireSession(sessionToken);
+      const payload = buildAuthPayload(userId, sessionToken);
+      sendJson(response, 200, {
+        ...payload,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/security/vehicle-number/detect') {
+      requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+
+      if (!body.photoDataUrl) {
+        throw new HttpError(400, 'Capture a vehicle photo before starting OCR.');
+      }
+
+      const result = await detectVehicleNumberFromPhotoDataUrl(body.photoDataUrl);
+      sendJson(response, 200, result);
       return;
     }
 
@@ -703,6 +739,185 @@ async function requestHandler(request, response) {
       const body = await parseBody(request);
       const result = createEntryLogRecord(userId, decodeURIComponent(entryLogRouteMatch[1]), body);
       sendJson(response, 201, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    const securityGuestRequestRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/societies\/([^/]+)\/security\/guest-requests$/)
+      : null;
+
+    if (securityGuestRequestRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = createSecurityGuestRequest(
+        userId,
+        decodeURIComponent(securityGuestRequestRouteMatch[1]),
+        body,
+      );
+      sendJson(response, 201, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    const societyChatRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/societies\/([^/]+)\/chat\/group\/messages$/)
+      : null;
+
+    if (societyChatRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = sendSocietyChatMessage(
+        userId,
+        decodeURIComponent(societyChatRouteMatch[1]),
+        body.message,
+      );
+      sendJson(response, 201, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    const directChatRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/societies\/([^/]+)\/chat\/direct\/([^/]+)\/messages$/)
+      : null;
+
+    if (directChatRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = sendDirectChatMessage(
+        userId,
+        decodeURIComponent(directChatRouteMatch[1]),
+        decodeURIComponent(directChatRouteMatch[2]),
+        body.message,
+      );
+      sendJson(response, 201, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    const securityGuestDecisionRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/security\/guest-requests\/([^/]+)\/decision$/)
+      : null;
+
+    if (securityGuestDecisionRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = reviewSecurityGuestRequest(
+        userId,
+        decodeURIComponent(securityGuestDecisionRouteMatch[1]),
+        body.decision,
+        body.note,
+      );
+      sendJson(response, 200, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    const securityGuestStatusRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/security\/guest-requests\/([^/]+)\/status$/)
+      : null;
+
+    if (securityGuestStatusRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = updateSecurityGuestRequestStatus(
+        userId,
+        decodeURIComponent(securityGuestStatusRouteMatch[1]),
+        body.status,
+        body.note,
+      );
+      sendJson(response, 200, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    const securityGuestMessageRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/security\/guest-requests\/([^/]+)\/messages$/)
+      : null;
+
+    if (securityGuestMessageRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = sendSecurityGuestMessage(
+        userId,
+        decodeURIComponent(securityGuestMessageRouteMatch[1]),
+        body.message,
+      );
+      sendJson(response, 200, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    const securityGuestRingRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/security\/guest-requests\/([^/]+)\/ring$/)
+      : null;
+
+    if (securityGuestRingRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = ringSecurityGuestRequest(
+        userId,
+        decodeURIComponent(securityGuestRingRouteMatch[1]),
+        body.note,
+      );
+      sendJson(response, 200, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    const visitorPassRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/societies\/([^/]+)\/visitors$/)
+      : null;
+
+    if (visitorPassRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = createVisitorPass(userId, decodeURIComponent(visitorPassRouteMatch[1]), body);
+      sendJson(response, 201, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    const visitorPassStatusRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/visitor-passes\/([^/]+)\/status$/)
+      : null;
+
+    if (visitorPassStatusRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = updateVisitorPassStatus(
+        userId,
+        decodeURIComponent(visitorPassStatusRouteMatch[1]),
+        body.status,
+      );
+      sendJson(response, 200, {
         ...result,
         amenityLibrary,
         defaultSetupDraft,

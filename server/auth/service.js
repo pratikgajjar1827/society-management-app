@@ -21,6 +21,27 @@ const STAFF_CATEGORIES = new Set(['domesticHelp', 'driver', 'cook', 'vendor']);
 const VERIFICATION_STATES = new Set(['pending', 'verified', 'expired']);
 const ENTRY_SUBJECT_TYPES = new Set(['staff', 'visitor', 'delivery']);
 const ENTRY_STATUSES = new Set(['inside', 'exited']);
+const VISITOR_CATEGORIES = new Set(['guest', 'family', 'service', 'delivery']);
+const VISITOR_PASS_STATUSES = new Set(['scheduled', 'checkedIn', 'completed', 'cancelled']);
+const SECURITY_GUEST_REQUEST_STATUSES = new Set([
+  'pendingApproval',
+  'approved',
+  'denied',
+  'checkedIn',
+  'completed',
+  'cancelled',
+]);
+const SECURITY_GUEST_LOG_ACTIONS = new Set([
+  'created',
+  'approved',
+  'denied',
+  'checkedIn',
+  'checkedOut',
+  'cancelled',
+  'message',
+  'ringRequested',
+]);
+const CHAT_THREAD_TYPES = new Set(['society', 'direct']);
 const STAFF_REVIEW_STATES = new Set(['verified', 'expired']);
 const MAINTENANCE_FREQUENCIES = new Set(['monthly', 'quarterly']);
 const VEHICLE_TYPES = new Set(['car', 'bike', 'scooter']);
@@ -165,6 +186,26 @@ function normalizeOptionalPhoneNumber(value, label) {
   } catch (error) {
     throw new HttpError(400, `Enter a valid ${label}.`);
   }
+}
+
+function normalizeOptionalImageDataUrl(value, label, maxSizeInBytes = 4 * 1024 * 1024) {
+  const normalized = String(value ?? '').trim();
+
+  if (!normalized) {
+    return null;
+  }
+
+  if (!/^data:image\/(png|jpeg|jpg|webp);base64,/i.test(normalized)) {
+    throw new HttpError(400, `Upload ${label} as a PNG, JPG, or WEBP image.`);
+  }
+
+  const maxPayloadLength = Math.ceil(maxSizeInBytes * 1.5);
+
+  if (normalized.length > maxPayloadLength) {
+    throw new HttpError(400, `Choose ${label} smaller than 4 MB.`);
+  }
+
+  return normalized;
 }
 
 function normalizeDateOnlyInput(value, label) {
@@ -615,6 +656,213 @@ function getStaffProfile(staffId) {
     .get(staffId);
 }
 
+function getVisitorPass(visitorPassId) {
+  return db
+    .prepare(
+      `SELECT id, societyId, unitId, createdByUserId, visitorName, phone, category, purpose, guestCount, expectedAt, validUntil, vehicleNumber, notes, passCode, status, createdAt, checkedInAt, checkedOutAt, updatedAt
+       FROM visitorPasses
+       WHERE id = ?`,
+    )
+    .get(visitorPassId);
+}
+
+function getSecurityGuestRequest(requestId) {
+  return db
+    .prepare(
+      `SELECT id, societyId, unitId, residentUserId, createdByUserId, visitorPassId, guestName, phone, category, purpose, guestCount, vehicleNumber, guestPhotoDataUrl, guestPhotoCapturedAt, vehiclePhotoDataUrl, vehiclePhotoCapturedAt, gateNotes, status, createdAt, respondedAt, respondedByUserId, checkedInAt, checkedOutAt, updatedAt
+       FROM securityGuestRequests
+       WHERE id = ?`,
+    )
+    .get(requestId);
+}
+
+function getChatThread(threadId) {
+  return db
+    .prepare(
+      `SELECT id, societyId, type, title, createdByUserId, participantUserIds, directKey, createdAt, lastMessageAt, updatedAt
+       FROM chatThreads
+       WHERE id = ?`,
+    )
+    .get(threadId);
+}
+
+function requireSocietyMember(userId, societyId) {
+  const membership = getMembership(userId, societyId);
+
+  if (!membership) {
+    throw new HttpError(403, 'Only society members can use chat in this workspace.');
+  }
+
+  return membership;
+}
+
+function buildDirectChatKey(userIdA, userIdB) {
+  return [String(userIdA ?? '').trim(), String(userIdB ?? '').trim()].sort().join('::');
+}
+
+function getSocietyChatThread(societyId) {
+  return db
+    .prepare(
+      `SELECT id, societyId, type, title, createdByUserId, participantUserIds, directKey, createdAt, lastMessageAt, updatedAt
+       FROM chatThreads
+       WHERE societyId = ? AND type = 'society'
+       ORDER BY createdAt ASC
+       LIMIT 1`,
+    )
+    .get(societyId);
+}
+
+function getDirectChatThread(societyId, directKey) {
+  return db
+    .prepare(
+      `SELECT id, societyId, type, title, createdByUserId, participantUserIds, directKey, createdAt, lastMessageAt, updatedAt
+       FROM chatThreads
+       WHERE societyId = ? AND type = 'direct' AND directKey = ?
+       LIMIT 1`,
+    )
+    .get(societyId, directKey);
+}
+
+function createChatThreadRecord({
+  societyId,
+  type,
+  title,
+  createdByUserId,
+  participantUserIds,
+  directKey,
+}) {
+  if (!CHAT_THREAD_TYPES.has(type)) {
+    throw new HttpError(400, 'Unsupported chat thread type.');
+  }
+
+  const createdAt = nowIso();
+  const threadId = nextId('chat-thread');
+
+  db.prepare(
+    `INSERT INTO chatThreads (
+      id,
+      societyId,
+      type,
+      title,
+      createdByUserId,
+      participantUserIds,
+      directKey,
+      createdAt,
+      lastMessageAt,
+      updatedAt
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    threadId,
+    societyId,
+    type,
+    title || null,
+    createdByUserId || null,
+    JSON.stringify(participantUserIds),
+    directKey || null,
+    createdAt,
+    null,
+    createdAt,
+  );
+
+  return getChatThread(threadId);
+}
+
+function touchChatThread(threadId, updatedAt) {
+  db.prepare('UPDATE chatThreads SET lastMessageAt = ?, updatedAt = ? WHERE id = ?').run(updatedAt, updatedAt, threadId);
+}
+
+function createChatMessageRecord(threadId, societyId, senderUserId, body) {
+  const message = requireText(body, 'Enter a message before sending.');
+  const createdAt = nowIso();
+
+  db.prepare(
+    `INSERT INTO chatMessages (
+      id,
+      threadId,
+      societyId,
+      senderUserId,
+      body,
+      createdAt,
+      updatedAt
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    nextId('chat-message'),
+    threadId,
+    societyId,
+    senderUserId,
+    message,
+    createdAt,
+    createdAt,
+  );
+
+  touchChatThread(threadId, createdAt);
+}
+
+function getOrCreateSocietyChatThread(societyId, userId) {
+  const existingThread = getSocietyChatThread(societyId);
+
+  if (existingThread) {
+    return existingThread;
+  }
+
+  const participantUserIds = db
+    .prepare('SELECT userId FROM memberships WHERE societyId = ? ORDER BY userId ASC')
+    .all(societyId)
+    .map((row) => row.userId);
+
+  return createChatThreadRecord({
+    societyId,
+    type: 'society',
+    title: 'Society lounge',
+    createdByUserId: userId,
+    participantUserIds,
+    directKey: null,
+  });
+}
+
+function getOrCreateDirectChatThread(societyId, userId, otherUserId) {
+  const directKey = buildDirectChatKey(userId, otherUserId);
+  const existingThread = getDirectChatThread(societyId, directKey);
+
+  if (existingThread) {
+    return existingThread;
+  }
+
+  return createChatThreadRecord({
+    societyId,
+    type: 'direct',
+    title: null,
+    createdByUserId: userId,
+    participantUserIds: [userId, otherUserId].sort(),
+    directKey,
+  });
+}
+
+function canRespondToSecurityGuestRequest(userId, request) {
+  const membership = getMembership(userId, request.societyId);
+  const roleSet = membership ? new Set(parseStoredJson(membership.roles)) : new Set();
+  const unitIds = membership ? normalizeRequestedUnitIds(parseStoredJson(membership.unitIds)) : [];
+
+  return (
+    request.residentUserId === userId ||
+    ((roleSet.has('owner') || roleSet.has('tenant') || roleSet.has('family') || roleSet.has('authorizedOccupant'))
+      && unitIds.includes(request.unitId))
+  );
+}
+
+function canMessageSecurityGuestRequest(userId, request) {
+  if (canRespondToSecurityGuestRequest(userId, request)) {
+    return true;
+  }
+
+  try {
+    requireSocietySecurityOperator(userId, request.societyId);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
 function getInvoice(invoiceId) {
   return db
     .prepare('SELECT id, societyId, unitId, planId, periodLabel, dueDate, amountInr, status FROM invoices WHERE id = ?')
@@ -1030,9 +1278,131 @@ function requireSocietyChairman(userId, societyId) {
   }
 }
 
+function requireSocietySecurityOperator(userId, societyId) {
+  const society = getSociety(societyId);
+
+  if (!society) {
+    throw new HttpError(404, 'Selected society was not found.');
+  }
+
+  const roleSet = getMembershipRoleSet(userId, societyId);
+
+  if (!roleSet.has('chairman') && !roleSet.has('committee') && !roleSet.has('security')) {
+    throw new HttpError(403, 'Only the chairman, committee, or security workspace can manage gate operations.');
+  }
+}
+
 function getMembershipRoleSet(userId, societyId) {
   const membership = getMembership(userId, societyId);
   return membership ? new Set(parseStoredJson(membership.roles)) : new Set();
+}
+
+function ensureMembershipRole(userId, societyId, role) {
+  const membership = getMembership(userId, societyId);
+
+  if (!membership) {
+    db.prepare(
+      'INSERT INTO memberships (id, userId, societyId, roles, unitIds, isPrimary) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run(nextId('membership'), userId, societyId, JSON.stringify([role]), JSON.stringify([]), 0);
+    return;
+  }
+
+  const roles = parseStoredJson(membership.roles);
+
+  if (roles.includes(role)) {
+    return;
+  }
+
+  db.prepare('UPDATE memberships SET roles = ? WHERE id = ?').run(
+    JSON.stringify([...roles, role]),
+    membership.id,
+  );
+}
+
+function createSecurityGuestLog(
+  requestId,
+  societyId,
+  actorUserId,
+  actorRole,
+  action,
+  note,
+  createdAt = nowIso(),
+) {
+  if (!SECURITY_GUEST_LOG_ACTIONS.has(action)) {
+    throw new HttpError(400, 'Unsupported security guest log action.');
+  }
+
+  db.prepare(
+    `INSERT INTO securityGuestLogs (
+      id,
+      societyId,
+      requestId,
+      actorUserId,
+      actorRole,
+      action,
+      note,
+      createdAt
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    nextId('security-guest-log'),
+    societyId,
+    requestId,
+    actorUserId || null,
+    actorRole,
+    action,
+    note || null,
+    createdAt,
+  );
+}
+
+function createLinkedVisitorPassFromSecurityRequest(request, createdByUserId, createdAt) {
+  const visitorPassId = nextId('visitor-pass');
+
+  db.prepare(
+    `INSERT INTO visitorPasses (
+      id,
+      societyId,
+      unitId,
+      createdByUserId,
+      visitorName,
+      phone,
+      category,
+      purpose,
+      guestCount,
+      expectedAt,
+      validUntil,
+      vehicleNumber,
+      notes,
+      passCode,
+      status,
+      createdAt,
+      checkedInAt,
+      checkedOutAt,
+      updatedAt
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    visitorPassId,
+    request.societyId,
+    request.unitId,
+    createdByUserId,
+    request.guestName,
+    request.phone || null,
+    request.category,
+    request.purpose,
+    request.guestCount,
+    createdAt,
+    addMinutes(new Date(createdAt), 360),
+    request.vehicleNumber || null,
+    request.gateNotes || null,
+    buildVisitorPassCode(request.societyId),
+    'scheduled',
+    createdAt,
+    null,
+    null,
+    createdAt,
+  );
+
+  return visitorPassId;
 }
 
 function requireSocietyAnnouncementPublisher(userId, societyId) {
@@ -1538,6 +1908,22 @@ function normalizeDateTime(value, message) {
   const parsed = Date.parse(normalized);
 
   if (!normalized || Number.isNaN(parsed)) {
+    throw new HttpError(400, message);
+  }
+
+  return new Date(parsed).toISOString();
+}
+
+function normalizeOptionalDateTime(value, message) {
+  const normalized = String(value ?? '').trim();
+
+  if (!normalized) {
+    return null;
+  }
+
+  const parsed = Date.parse(normalized);
+
+  if (Number.isNaN(parsed)) {
     throw new HttpError(400, message);
   }
 
@@ -2681,7 +3067,7 @@ function createSecurityGuard(userId, societyId, input) {
   requireSocietyChairman(userId, societyId);
 
   const name = requireText(input?.name, 'Enter the guard name.');
-  const phone = requireText(input?.phone, 'Enter the guard contact number.');
+  const phone = normalizePhoneNumber(requireText(input?.phone, 'Enter the guard contact number.'));
   const shiftLabel = requireText(input?.shiftLabel, 'Enter a shift label.');
   const vendorName = String(input?.vendorName ?? '').trim();
   const gate = requireText(input?.gate, 'Enter the gate or patrol point.');
@@ -2693,6 +3079,7 @@ function createSecurityGuard(userId, societyId, input) {
   }
 
   const guardId = nextId('guard');
+  const securityUserId = ensureUserForIdentity('sms', phone);
 
   runTransaction(() => {
     db.prepare(
@@ -2702,6 +3089,8 @@ function createSecurityGuard(userId, societyId, input) {
     db.prepare(
       'INSERT INTO securityShifts (id, guardId, societyId, start, end, gate) VALUES (?, ?, ?, ?, ?, ?)',
     ).run(nextId('shift'), guardId, societyId, shiftStart, shiftEnd, gate);
+
+    ensureMembershipRole(securityUserId, societyId, 'security');
   });
 
   return buildSocietyMutationPayload(userId, societyId);
@@ -2810,8 +3199,541 @@ function reviewStaffVerification(userId, staffId, verificationStateInput) {
   return buildSocietyMutationPayload(userId, staffProfile.societyId);
 }
 
+function buildVisitorPassCode(societyId) {
+  const prefix = societyId
+    .split('-')
+    .map((segment) => segment[0] ?? '')
+    .join('')
+    .slice(0, 3)
+    .toUpperCase()
+    .padEnd(3, 'X');
+
+  const suffix = Math.floor(1000 + Math.random() * 9000).toString();
+  return `${prefix}${suffix}`;
+}
+
+function createVisitorPass(userId, societyId, input) {
+  const membership = getMembership(userId, societyId);
+  const allowedUnitIds = normalizeRequestedUnitIds(parseStoredJson(membership?.unitIds));
+
+  if (!membership || allowedUnitIds.length === 0) {
+    throw new HttpError(
+      403,
+      'Only residents linked to a unit, plot, office, or shed can create a visitor pass.',
+    );
+  }
+
+  const unitId = String(input?.unitId ?? '').trim() || allowedUnitIds[0];
+
+  if (!allowedUnitIds.includes(unitId)) {
+    throw new HttpError(403, 'You can only create a visitor pass for units linked to your membership.');
+  }
+
+  const unit = getUnit(unitId);
+
+  if (!unit || unit.societyId !== societyId) {
+    throw new HttpError(404, 'Selected resident number or space was not found in this society.');
+  }
+
+  const visitorName = requireText(input?.visitorName, 'Enter the visitor name.');
+  const phone = normalizeOptionalPhoneNumber(input?.phone, 'visitor phone number');
+  const category = String(input?.category ?? '').trim();
+  const purpose = requireText(input?.purpose, 'Enter the visit purpose.');
+  const guestCount = parsePositiveWholeNumber(input?.guestCount, 'Enter how many people are expected.');
+  const expectedAt = normalizeDateTime(input?.expectedAt, 'Enter the expected arrival date and time.');
+  const validUntil = normalizeDateTime(input?.validUntil, 'Enter the visitor pass expiry date and time.');
+  const vehicleNumber = normalizeOptionalText(input?.vehicleNumber, 20);
+  const notes = normalizeOptionalText(input?.notes, 200);
+
+  if (!VISITOR_CATEGORIES.has(category)) {
+    throw new HttpError(400, 'Choose guest, family, service, or delivery as the visitor type.');
+  }
+
+  if (Date.parse(validUntil) <= Date.parse(expectedAt)) {
+    throw new HttpError(400, 'Visitor pass expiry should be later than the expected arrival time.');
+  }
+
+  const createdAt = nowIso();
+
+  db.prepare(
+    `INSERT INTO visitorPasses (
+      id,
+      societyId,
+      unitId,
+      createdByUserId,
+      visitorName,
+      phone,
+      category,
+      purpose,
+      guestCount,
+      expectedAt,
+      validUntil,
+      vehicleNumber,
+      notes,
+      passCode,
+      status,
+      createdAt,
+      checkedInAt,
+      checkedOutAt,
+      updatedAt
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    nextId('visitor-pass'),
+    societyId,
+    unitId,
+    userId,
+    visitorName,
+    phone,
+    category,
+    purpose,
+    guestCount,
+    expectedAt,
+    validUntil,
+    vehicleNumber ? vehicleNumber.toUpperCase() : null,
+    notes,
+    buildVisitorPassCode(societyId),
+    'scheduled',
+    createdAt,
+    null,
+    null,
+    createdAt,
+  );
+
+  return buildSocietyMutationPayload(userId, societyId);
+}
+
+function createSecurityGuestRequest(userId, societyId, input) {
+  requireSocietySecurityOperator(userId, societyId);
+
+  const unitId = requireText(input?.unitId, 'Select the resident unit for this guest.');
+  const residentUserId = requireText(input?.residentUserId, 'Select the resident who should approve this guest.');
+  const unit = getUnit(unitId);
+
+  if (!unit || unit.societyId !== societyId) {
+    throw new HttpError(404, 'Selected resident unit was not found in this society.');
+  }
+
+  const residentMembership = getMembership(residentUserId, societyId);
+  const residentRoleSet = residentMembership ? new Set(parseStoredJson(residentMembership.roles)) : new Set();
+  const residentUnitIds = residentMembership ? normalizeRequestedUnitIds(parseStoredJson(residentMembership.unitIds)) : [];
+
+  if (!residentMembership || !residentRoleSet.has('owner') && !residentRoleSet.has('tenant') && !residentRoleSet.has('family') && !residentRoleSet.has('authorizedOccupant')) {
+    throw new HttpError(400, 'Choose a resident account linked to this society.');
+  }
+
+  if (!residentUnitIds.includes(unitId)) {
+    throw new HttpError(400, 'Selected resident is not linked to the chosen unit.');
+  }
+
+  const guestName = requireText(input?.guestName, 'Enter the guest name.');
+  const phone = normalizeOptionalPhoneNumber(input?.phone, 'guest mobile number');
+  const category = String(input?.category ?? '').trim();
+  const purpose = requireText(input?.purpose, 'Enter the visit purpose.');
+  const guestCount = parsePositiveWholeNumber(input?.guestCount, 'Enter the number of guests at the gate.');
+  const vehicleNumber = normalizeOptionalText(input?.vehicleNumber, 20);
+  const gateNotes = normalizeOptionalText(input?.gateNotes, 240);
+  const guestPhotoDataUrl = normalizeOptionalImageDataUrl(input?.guestPhotoDataUrl, 'the guest photo');
+  const guestPhotoCapturedAt = normalizeOptionalDateTime(
+    input?.guestPhotoCapturedAt,
+    'Choose a valid guest photo capture time.',
+  );
+  const vehiclePhotoDataUrl = normalizeOptionalImageDataUrl(input?.vehiclePhotoDataUrl, 'the vehicle photo');
+  const vehiclePhotoCapturedAt = normalizeOptionalDateTime(
+    input?.vehiclePhotoCapturedAt,
+    'Choose a valid vehicle photo capture time.',
+  );
+
+  if (!VISITOR_CATEGORIES.has(category)) {
+    throw new HttpError(400, 'Choose guest, family, service, or delivery as the visitor type.');
+  }
+
+  const createdAt = nowIso();
+  const requestId = nextId('security-guest-request');
+
+  runTransaction(() => {
+    db.prepare(
+      `INSERT INTO securityGuestRequests (
+        id,
+        societyId,
+        unitId,
+        residentUserId,
+        createdByUserId,
+        visitorPassId,
+        guestName,
+        phone,
+        category,
+        purpose,
+        guestCount,
+        vehicleNumber,
+        guestPhotoDataUrl,
+        guestPhotoCapturedAt,
+        vehiclePhotoDataUrl,
+        vehiclePhotoCapturedAt,
+        gateNotes,
+        status,
+        createdAt,
+        respondedAt,
+        respondedByUserId,
+        checkedInAt,
+        checkedOutAt,
+        updatedAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      requestId,
+      societyId,
+      unitId,
+      residentUserId,
+      userId,
+      null,
+      guestName,
+      phone,
+      category,
+      purpose,
+      guestCount,
+      vehicleNumber ? vehicleNumber.toUpperCase() : null,
+      guestPhotoDataUrl,
+      guestPhotoCapturedAt,
+      vehiclePhotoDataUrl,
+      vehiclePhotoCapturedAt,
+      gateNotes,
+      'pendingApproval',
+      createdAt,
+      null,
+      null,
+      null,
+      null,
+      createdAt,
+    );
+
+    createSecurityGuestLog(
+      requestId,
+      societyId,
+      userId,
+      getMembershipRoleSet(userId, societyId).has('security') ? 'security' : 'admin',
+      'created',
+      gateNotes,
+      createdAt,
+    );
+  });
+
+  return buildSocietyMutationPayload(userId, societyId);
+}
+
+function reviewSecurityGuestRequest(userId, requestId, decisionInput, noteInput) {
+  const request = getSecurityGuestRequest(requestId);
+
+  if (!request) {
+    throw new HttpError(404, 'Gate approval request was not found.');
+  }
+
+  if (!canRespondToSecurityGuestRequest(userId, request)) {
+    throw new HttpError(403, 'Only the linked resident can approve or deny this guest request.');
+  }
+
+  if (request.status !== 'pendingApproval') {
+    throw new HttpError(400, 'Only pending gate requests can be reviewed.');
+  }
+
+  const decision = String(decisionInput ?? '').trim().toLowerCase();
+  const note = normalizeOptionalText(noteInput, 240);
+
+  if (decision !== 'approve' && decision !== 'deny') {
+    throw new HttpError(400, 'Choose approve or deny for the gate request.');
+  }
+
+  const respondedAt = nowIso();
+
+  runTransaction(() => {
+    if (decision === 'approve') {
+      const visitorPassId = createLinkedVisitorPassFromSecurityRequest(request, userId, respondedAt);
+
+      db.prepare(
+        `UPDATE securityGuestRequests
+         SET status = ?, visitorPassId = ?, respondedAt = ?, respondedByUserId = ?, updatedAt = ?
+         WHERE id = ?`,
+      ).run('approved', visitorPassId, respondedAt, userId, respondedAt, requestId);
+
+      createSecurityGuestLog(requestId, request.societyId, userId, 'resident', 'approved', note, respondedAt);
+    } else {
+      db.prepare(
+        `UPDATE securityGuestRequests
+         SET status = ?, respondedAt = ?, respondedByUserId = ?, updatedAt = ?
+         WHERE id = ?`,
+      ).run('denied', respondedAt, userId, respondedAt, requestId);
+
+      createSecurityGuestLog(requestId, request.societyId, userId, 'resident', 'denied', note, respondedAt);
+    }
+  });
+
+  return buildSocietyMutationPayload(userId, request.societyId);
+}
+
+function sendSecurityGuestMessage(userId, requestId, messageInput) {
+  const request = getSecurityGuestRequest(requestId);
+
+  if (!request) {
+    throw new HttpError(404, 'Gate approval request was not found.');
+  }
+
+  if (!canMessageSecurityGuestRequest(userId, request)) {
+    throw new HttpError(403, 'Only the resident or the gate team can message on this approval thread.');
+  }
+
+  if (request.status === 'cancelled' || request.status === 'denied' || request.status === 'completed') {
+    throw new HttpError(400, 'This gate request is closed, so new chat messages are not allowed.');
+  }
+
+  const message = requireText(messageInput, 'Enter a message before sending.');
+  const createdAt = nowIso();
+
+  let actorRole = 'resident';
+
+  if (!canRespondToSecurityGuestRequest(userId, request)) {
+    actorRole = getMembershipRoleSet(userId, request.societyId).has('security') ? 'security' : 'admin';
+  }
+
+  createSecurityGuestLog(requestId, request.societyId, userId, actorRole, 'message', message, createdAt);
+  db.prepare('UPDATE securityGuestRequests SET updatedAt = ? WHERE id = ?').run(createdAt, requestId);
+
+  return buildSocietyMutationPayload(userId, request.societyId);
+}
+
+function ringSecurityGuestRequest(userId, requestId, noteInput) {
+  const request = getSecurityGuestRequest(requestId);
+
+  if (!request) {
+    throw new HttpError(404, 'Gate approval request was not found.');
+  }
+
+  requireSocietySecurityOperator(userId, request.societyId);
+
+  if (request.status !== 'pendingApproval') {
+    throw new HttpError(400, 'Only waiting resident approvals can be rung right now.');
+  }
+
+  const createdAt = nowIso();
+  const note =
+    normalizeOptionalText(noteInput, 240) || 'Security desk is asking for a quick live approval.';
+  const actorRole = getMembershipRoleSet(userId, request.societyId).has('security') ? 'security' : 'admin';
+
+  createSecurityGuestLog(requestId, request.societyId, userId, actorRole, 'ringRequested', note, createdAt);
+  db.prepare('UPDATE securityGuestRequests SET updatedAt = ? WHERE id = ?').run(createdAt, requestId);
+
+  return buildSocietyMutationPayload(userId, request.societyId);
+}
+
+function sendSocietyChatMessage(userId, societyId, messageInput) {
+  requireSocietyMember(userId, societyId);
+  const thread = getOrCreateSocietyChatThread(societyId, userId);
+
+  createChatMessageRecord(thread.id, societyId, userId, messageInput);
+
+  return buildSocietyMutationPayload(userId, societyId);
+}
+
+function sendDirectChatMessage(userId, societyId, otherUserId, messageInput) {
+  requireSocietyMember(userId, societyId);
+
+  if (!otherUserId || String(otherUserId).trim() === userId) {
+    throw new HttpError(400, 'Choose another society member to start a direct chat.');
+  }
+
+  const otherUser = getUserById(otherUserId);
+
+  if (!otherUser || !getMembership(otherUserId, societyId)) {
+    throw new HttpError(404, 'That society member is not available for direct chat.');
+  }
+
+  const thread = getOrCreateDirectChatThread(societyId, userId, otherUserId);
+
+  createChatMessageRecord(thread.id, societyId, userId, messageInput);
+
+  return buildSocietyMutationPayload(userId, societyId);
+}
+
+function updateSecurityGuestRequestStatus(userId, requestId, nextStatusInput, noteInput) {
+  const request = getSecurityGuestRequest(requestId);
+
+  if (!request) {
+    throw new HttpError(404, 'Gate approval request was not found.');
+  }
+
+  requireSocietySecurityOperator(userId, request.societyId);
+
+  const nextStatus = String(nextStatusInput ?? '').trim();
+  const note = normalizeOptionalText(noteInput, 240);
+
+  if (!SECURITY_GUEST_REQUEST_STATUSES.has(nextStatus)) {
+    throw new HttpError(400, 'Choose a valid gate request status.');
+  }
+
+  const updatedAt = nowIso();
+  const operatorRole = getMembershipRoleSet(userId, request.societyId).has('security') ? 'security' : 'admin';
+
+  if (nextStatus === 'cancelled') {
+    if (request.status !== 'pendingApproval' && request.status !== 'approved') {
+      throw new HttpError(400, 'Only pending or approved gate requests can be cancelled.');
+    }
+
+    runTransaction(() => {
+      db.prepare('UPDATE securityGuestRequests SET status = ?, updatedAt = ? WHERE id = ?').run(
+        'cancelled',
+        updatedAt,
+        requestId,
+      );
+
+      if (request.visitorPassId) {
+        db.prepare('UPDATE visitorPasses SET status = ?, updatedAt = ? WHERE id = ?').run(
+          'cancelled',
+          updatedAt,
+          request.visitorPassId,
+        );
+      }
+
+      createSecurityGuestLog(requestId, request.societyId, userId, operatorRole, 'cancelled', note, updatedAt);
+    });
+
+    return buildSocietyMutationPayload(userId, request.societyId);
+  }
+
+  if (nextStatus === 'checkedIn') {
+    if (request.status !== 'approved') {
+      throw new HttpError(400, 'Only approved gate requests can be checked in.');
+    }
+
+    if (!request.visitorPassId) {
+      throw new HttpError(400, 'This gate request is missing its linked visitor pass.');
+    }
+
+    runTransaction(() => {
+      db.prepare(
+        'UPDATE securityGuestRequests SET status = ?, checkedInAt = ?, updatedAt = ? WHERE id = ?',
+      ).run('checkedIn', updatedAt, updatedAt, requestId);
+
+      db.prepare(
+        'UPDATE visitorPasses SET status = ?, checkedInAt = ?, updatedAt = ? WHERE id = ?',
+      ).run('checkedIn', updatedAt, updatedAt, request.visitorPassId);
+
+      db.prepare(
+        'INSERT INTO entryLogs (id, societyId, subjectType, subjectName, unitId, enteredAt, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      ).run(nextId('entry'), request.societyId, 'visitor', request.guestName, request.unitId, updatedAt, 'inside');
+
+      createSecurityGuestLog(requestId, request.societyId, userId, operatorRole, 'checkedIn', note, updatedAt);
+    });
+
+    return buildSocietyMutationPayload(userId, request.societyId);
+  }
+
+  if (nextStatus === 'completed') {
+    if (request.status !== 'checkedIn') {
+      throw new HttpError(400, 'Only checked-in gate requests can be completed.');
+    }
+
+    if (!request.visitorPassId) {
+      throw new HttpError(400, 'This gate request is missing its linked visitor pass.');
+    }
+
+    runTransaction(() => {
+      db.prepare(
+        'UPDATE securityGuestRequests SET status = ?, checkedOutAt = ?, updatedAt = ? WHERE id = ?',
+      ).run('completed', updatedAt, updatedAt, requestId);
+
+      db.prepare(
+        'UPDATE visitorPasses SET status = ?, checkedOutAt = ?, updatedAt = ? WHERE id = ?',
+      ).run('completed', updatedAt, updatedAt, request.visitorPassId);
+
+      db.prepare(
+        'INSERT INTO entryLogs (id, societyId, subjectType, subjectName, unitId, enteredAt, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      ).run(nextId('entry'), request.societyId, 'visitor', request.guestName, request.unitId, updatedAt, 'exited');
+
+      createSecurityGuestLog(requestId, request.societyId, userId, operatorRole, 'checkedOut', note, updatedAt);
+    });
+
+    return buildSocietyMutationPayload(userId, request.societyId);
+  }
+
+  throw new HttpError(400, 'This gate request transition is not supported.');
+}
+
+function updateVisitorPassStatus(userId, visitorPassId, nextStatusInput) {
+  const visitorPass = getVisitorPass(visitorPassId);
+
+  if (!visitorPass) {
+    throw new HttpError(404, 'Visitor pass was not found.');
+  }
+
+  const nextStatus = String(nextStatusInput ?? '').trim();
+
+  if (!VISITOR_PASS_STATUSES.has(nextStatus)) {
+    throw new HttpError(400, 'Choose a valid visitor pass status.');
+  }
+
+  const currentStatus = String(visitorPass.status ?? '').trim();
+  const updatedAt = nowIso();
+
+  if (nextStatus === 'cancelled') {
+    const isCreator = visitorPass.createdByUserId === userId;
+
+    if (!isCreator) {
+      requireSocietySecurityOperator(userId, visitorPass.societyId);
+    }
+
+    if (currentStatus !== 'scheduled') {
+      throw new HttpError(400, 'Only scheduled visitor passes can be cancelled.');
+    }
+
+    db.prepare('UPDATE visitorPasses SET status = ?, updatedAt = ? WHERE id = ?').run(
+      'cancelled',
+      updatedAt,
+      visitorPassId,
+    );
+
+    return buildSocietyMutationPayload(userId, visitorPass.societyId);
+  }
+
+  requireSocietySecurityOperator(userId, visitorPass.societyId);
+
+  if (nextStatus === 'checkedIn') {
+    if (currentStatus !== 'scheduled') {
+      throw new HttpError(400, 'Only scheduled visitor passes can be marked checked in.');
+    }
+
+    runTransaction(() => {
+      db.prepare(
+        'UPDATE visitorPasses SET status = ?, checkedInAt = ?, updatedAt = ? WHERE id = ?',
+      ).run('checkedIn', updatedAt, updatedAt, visitorPassId);
+
+      db.prepare(
+        'INSERT INTO entryLogs (id, societyId, subjectType, subjectName, unitId, enteredAt, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      ).run(nextId('entry'), visitorPass.societyId, 'visitor', visitorPass.visitorName, visitorPass.unitId, updatedAt, 'inside');
+    });
+
+    return buildSocietyMutationPayload(userId, visitorPass.societyId);
+  }
+
+  if (nextStatus === 'completed') {
+    if (currentStatus !== 'checkedIn') {
+      throw new HttpError(400, 'Only checked-in visitor passes can be completed.');
+    }
+
+    runTransaction(() => {
+      db.prepare(
+        'UPDATE visitorPasses SET status = ?, checkedOutAt = ?, updatedAt = ? WHERE id = ?',
+      ).run('completed', updatedAt, updatedAt, visitorPassId);
+
+      db.prepare(
+        'INSERT INTO entryLogs (id, societyId, subjectType, subjectName, unitId, enteredAt, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      ).run(nextId('entry'), visitorPass.societyId, 'visitor', visitorPass.visitorName, visitorPass.unitId, updatedAt, 'exited');
+    });
+
+    return buildSocietyMutationPayload(userId, visitorPass.societyId);
+  }
+
+  throw new HttpError(400, 'This visitor pass status transition is not supported.');
+}
+
 function createEntryLogRecord(userId, societyId, input) {
-  requireSocietyChairman(userId, societyId);
+  requireSocietySecurityOperator(userId, societyId);
 
   const subjectType = String(input?.subjectType ?? '').trim();
   const subjectName = requireText(input?.subjectName, 'Enter the visitor, staff, or delivery name.');
@@ -2864,14 +3786,23 @@ module.exports = {
   normalizeAuthIntent,
   recordManualPayment,
   requestOtp,
+  ringSecurityGuestRequest,
+  sendDirectChatMessage,
+  sendSocietyChatMessage,
+  sendSecurityGuestMessage,
   createEntryLogRecord,
   createExpenseRecord,
   createSecurityGuard,
+  createSecurityGuestRequest,
   createStaffVerification,
+  createVisitorPass,
   getSynchronizedSnapshot,
   reviewAmenityBooking,
+  reviewSecurityGuestRequest,
   reviewResidentPayment,
   reviewStaffVerification,
+  updateSecurityGuestRequestStatus,
+  updateVisitorPassStatus,
   requireSuperUserRole,
   requireSession,
   reviewJoinRequest,

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import {
   ActionButton,
@@ -26,6 +26,8 @@ import {
 export function WorkspaceSelectionScreen() {
   const { state, actions } = useApp();
   const [pendingDeleteSocietyId, setPendingDeleteSocietyId] = useState<string>();
+  const { width } = useWindowDimensions();
+  const isCompact = width < 768;
   const user = getCurrentUser(state.data, state.session.userId);
   const canCreateSociety = state.session.accountRole === 'superUser';
   const linkedOptions = state.session.userId ? getSocietyOptions(state.data, state.session.userId) : [];
@@ -67,14 +69,14 @@ export function WorkspaceSelectionScreen() {
     <Page>
       <HeroCard
         eyebrow={user ? `Welcome back, ${user.name}` : 'Select workspace'}
-        title="Choose a society workspace first."
+        title={isCompact ? 'Pick your society and jump in.' : 'Choose a society workspace first.'}
         subtitle={
           canCreateSociety
             ? 'This super user login can open, delete, and create society workspaces across the full portfolio.'
-            : 'Use this login to join societies and move across every workspace already linked to it.'
+            : 'Use one login to move across every society already linked to you with a clean mobile-first workspace switcher.'
         }
       >
-        <View style={styles.heroActions}>
+        <View style={[styles.heroActions, isCompact ? styles.heroActionsCompact : null]}>
           {canCreateSociety ? (
             <ActionButton label="Create new society" onPress={actions.startSetup} />
           ) : null}
@@ -137,8 +139,8 @@ export function WorkspaceSelectionScreen() {
       ) : null}
 
       {options.map((option) => (
-        <SurfaceCard key={option.society.id}>
-          <View style={styles.societyHeader}>
+        <SurfaceCard key={option.society.id} style={isCompact ? styles.workspaceCardCompact : null}>
+          <View style={[styles.societyHeader, isCompact ? styles.societyHeaderCompact : null]}>
             <View style={styles.societyHeadingBlock}>
               <Text style={styles.societyName}>{option.society.name}</Text>
               <Caption>{option.society.address}</Caption>
@@ -151,7 +153,7 @@ export function WorkspaceSelectionScreen() {
 
           <Caption>{option.society.tagline}</Caption>
 
-          <View style={styles.metricRow}>
+          <View style={[styles.metricRow, isCompact ? styles.metricRowCompact : null]}>
             <View style={styles.metricTile}>
               <Text style={styles.metricLabel}>Outstanding dues</Text>
               <Text style={styles.metricValue}>{formatCurrency(option.totalDue)}</Text>
@@ -187,7 +189,7 @@ export function WorkspaceSelectionScreen() {
             </Caption>
           ) : null}
 
-          <View style={styles.cardActions}>
+          <View style={[styles.cardActions, isCompact ? styles.cardActionsCompact : null]}>
             <ActionButton
               label={canCreateSociety ? 'Open admin workspace' : 'Open workspace'}
               onPress={() => actions.selectSociety(option.society.id)}
@@ -233,8 +235,14 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     flexWrap: 'wrap',
   },
+  heroActionsCompact: {
+    gap: spacing.xs,
+  },
   societyHeader: {
     gap: spacing.sm,
+  },
+  societyHeaderCompact: {
+    gap: spacing.xs,
   },
   societyHeadingBlock: {
     gap: spacing.xs,
@@ -249,6 +257,10 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: spacing.sm,
   },
+  metricRowCompact: {
+    gap: spacing.xs,
+    flexDirection: 'column',
+  },
   metricTile: {
     flex: 1,
     minWidth: 96,
@@ -258,6 +270,9 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
     borderWidth: 1,
     borderColor: palette.border,
+  },
+  workspaceCardCompact: {
+    gap: spacing.md,
   },
   metricLabel: {
     fontSize: 12,
@@ -278,6 +293,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.sm,
+  },
+  cardActionsCompact: {
+    gap: spacing.xs,
+    flexDirection: 'column',
   },
   deleteWarning: {
     color: palette.danger,

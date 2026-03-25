@@ -1,3 +1,4 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 
 import { amenityLibrary, defaultSetupDraft, seedData } from '../data/seed';
@@ -18,11 +19,14 @@ import {
   PaymentMethod,
   ComplaintCategory,
   SeedData,
+  SecurityGuestRequestStatus,
   SocietySetupDraft,
   StaffCategory,
   UserProfile,
   VehicleType,
   VerificationState,
+  VisitorCategory,
+  VisitorPassStatus,
 } from '../types/domain';
 
 type BootstrapResponse = {
@@ -36,6 +40,11 @@ type BootstrapResponse = {
 type AuthenticatedResponse = BootstrapResponse & {
   currentUserId: string;
   onboarding: OnboardingState;
+};
+
+type SessionSnapshotResponse = AuthenticatedResponse & {
+  sessionToken: string;
+  user: UserProfile;
 };
 
 type VerifyOtpResponse = AuthenticatedResponse & {
@@ -68,6 +77,13 @@ type ReviewJoinRequestResponse = AuthenticatedResponse & {
 
 type SocietyAdminMutationResponse = AuthenticatedResponse & {
   societyId: string;
+};
+
+type VehicleNumberDetectionResponse = {
+  vehicleNumber: string | null;
+  rawText: string;
+  message: string;
+  source: 'backend-ocr';
 };
 
 export interface ResidenceVehicleInput {
@@ -103,7 +119,51 @@ export interface AnnouncementCreateInput {
   priority: AnnouncementPriority;
 }
 
+export interface VisitorPassCreateInput {
+  unitId: string;
+  visitorName: string;
+  phone?: string;
+  category: VisitorCategory;
+  purpose: string;
+  guestCount: string;
+  expectedAt: string;
+  validUntil: string;
+  vehicleNumber?: string;
+  notes?: string;
+}
+
+export interface SecurityGuestRequestCreateInput {
+  unitId: string;
+  residentUserId: string;
+  guestName: string;
+  phone?: string;
+  category: VisitorCategory;
+  purpose: string;
+  guestCount: string;
+  vehicleNumber?: string;
+  guestPhotoDataUrl?: string;
+  guestPhotoCapturedAt?: string;
+  vehiclePhotoDataUrl?: string;
+  vehiclePhotoCapturedAt?: string;
+  gateNotes?: string;
+}
+
+export interface SecurityGuestMessageInput {
+  message: string;
+}
+
+export interface SecurityGuestRingInput {
+  note?: string;
+}
+
+export interface SocietyChatMessageInput {
+  message: string;
+}
+
 const DEFAULT_API_PORT = 4000;
+const API_BASE_URL_STORAGE_KEY = 'societyos.apiBaseUrl';
+
+let runtimeApiBaseUrlOverride: string | undefined;
 
 function normalizeSeedDataSnapshot(data: unknown) {
   if (!data || typeof data !== 'object') {
@@ -115,6 +175,11 @@ function normalizeSeedDataSnapshot(data: unknown) {
     vehicleRegistrations?: unknown;
     importantContacts?: unknown;
     complaintUpdates?: unknown;
+    visitorPasses?: unknown;
+    securityGuestRequests?: unknown;
+    securityGuestLogs?: unknown;
+    chatThreads?: unknown;
+    chatMessages?: unknown;
   };
 
   return {
@@ -123,6 +188,11 @@ function normalizeSeedDataSnapshot(data: unknown) {
     vehicleRegistrations: Array.isArray(snapshot.vehicleRegistrations) ? snapshot.vehicleRegistrations : [],
     importantContacts: Array.isArray(snapshot.importantContacts) ? snapshot.importantContacts : [],
     complaintUpdates: Array.isArray(snapshot.complaintUpdates) ? snapshot.complaintUpdates : [],
+    visitorPasses: Array.isArray(snapshot.visitorPasses) ? snapshot.visitorPasses : [],
+    securityGuestRequests: Array.isArray(snapshot.securityGuestRequests) ? snapshot.securityGuestRequests : [],
+    securityGuestLogs: Array.isArray(snapshot.securityGuestLogs) ? snapshot.securityGuestLogs : [],
+    chatThreads: Array.isArray(snapshot.chatThreads) ? snapshot.chatThreads : [],
+    chatMessages: Array.isArray(snapshot.chatMessages) ? snapshot.chatMessages : [],
   };
 }
 
@@ -139,11 +209,11 @@ function normalizeApiPayload<T>(payload: T): T {
   };
 }
 
-function normalizeBaseUrl(value: string) {
-  return value.replace(/\/$/, '');
+export function normalizeBaseUrl(value: string) {
+  return value.trim().replace(/\/+$/, '');
 }
 
-export function getApiBaseUrl() {
+export function getDefaultApiBaseUrl() {
   const configured = process.env.EXPO_PUBLIC_API_URL?.trim();
 
   if (configured) {
@@ -161,6 +231,32 @@ export function getApiBaseUrl() {
   }
 
   return `http://localhost:${DEFAULT_API_PORT}`;
+}
+
+export function getApiBaseUrl() {
+  return runtimeApiBaseUrlOverride ?? getDefaultApiBaseUrl();
+}
+
+export async function loadPersistedApiBaseUrl() {
+  const storedValue = await AsyncStorage.getItem(API_BASE_URL_STORAGE_KEY);
+  const normalizedValue = storedValue ? normalizeBaseUrl(storedValue) : '';
+
+  runtimeApiBaseUrlOverride = normalizedValue || undefined;
+  return runtimeApiBaseUrlOverride ?? null;
+}
+
+export async function persistApiBaseUrl(value: string) {
+  const normalizedValue = normalizeBaseUrl(value);
+
+  await AsyncStorage.setItem(API_BASE_URL_STORAGE_KEY, normalizedValue);
+  runtimeApiBaseUrlOverride = normalizedValue;
+  return normalizedValue;
+}
+
+export async function clearPersistedApiBaseUrl() {
+  await AsyncStorage.removeItem(API_BASE_URL_STORAGE_KEY);
+  runtimeApiBaseUrlOverride = undefined;
+  return getDefaultApiBaseUrl();
 }
 
 async function requestJson<T>(path: string, options?: RequestInit): Promise<T> {
@@ -202,6 +298,13 @@ function createAuthHeaders(sessionToken: string) {
 
 export async function fetchBootstrapData() {
   return requestJson<BootstrapResponse>('/api/bootstrap');
+}
+
+export async function fetchSessionSnapshot(sessionToken: string) {
+  return requestJson<SessionSnapshotResponse>('/api/session/snapshot', {
+    method: 'GET',
+    headers: createAuthHeaders(sessionToken),
+  });
 }
 
 export async function requestOtp(intent: AuthIntent, channel: AuthChannel, destination: string) {
@@ -669,6 +772,152 @@ export async function createEntryLogRecord(
       body: JSON.stringify(entryLog),
     },
   );
+}
+
+export async function createSecurityGuestRequest(
+  sessionToken: string,
+  societyId: string,
+  request: SecurityGuestRequestCreateInput,
+) {
+  return requestJson<SocietyAdminMutationResponse>(
+    `/api/societies/${encodeURIComponent(societyId)}/security/guest-requests`,
+    {
+      method: 'POST',
+      headers: createAuthHeaders(sessionToken),
+      body: JSON.stringify(request),
+    },
+  );
+}
+
+export async function reviewSecurityGuestRequest(
+  sessionToken: string,
+  requestId: string,
+  decision: 'approve' | 'deny',
+  note?: string,
+) {
+  return requestJson<SocietyAdminMutationResponse>(
+    `/api/security/guest-requests/${encodeURIComponent(requestId)}/decision`,
+    {
+      method: 'POST',
+      headers: createAuthHeaders(sessionToken),
+      body: JSON.stringify({ decision, note }),
+    },
+  );
+}
+
+export async function updateSecurityGuestRequestStatus(
+  sessionToken: string,
+  requestId: string,
+  status: SecurityGuestRequestStatus,
+  note?: string,
+) {
+  return requestJson<SocietyAdminMutationResponse>(
+    `/api/security/guest-requests/${encodeURIComponent(requestId)}/status`,
+    {
+      method: 'POST',
+      headers: createAuthHeaders(sessionToken),
+      body: JSON.stringify({ status, note }),
+    },
+  );
+}
+
+export async function sendSecurityGuestMessage(
+  sessionToken: string,
+  requestId: string,
+  input: SecurityGuestMessageInput,
+) {
+  return requestJson<SocietyAdminMutationResponse>(
+    `/api/security/guest-requests/${encodeURIComponent(requestId)}/messages`,
+    {
+      method: 'POST',
+      headers: createAuthHeaders(sessionToken),
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function ringSecurityGuestRequest(
+  sessionToken: string,
+  requestId: string,
+  input: SecurityGuestRingInput = {},
+) {
+  return requestJson<SocietyAdminMutationResponse>(
+    `/api/security/guest-requests/${encodeURIComponent(requestId)}/ring`,
+    {
+      method: 'POST',
+      headers: createAuthHeaders(sessionToken),
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function sendSocietyChatMessage(
+  sessionToken: string,
+  societyId: string,
+  input: SocietyChatMessageInput,
+) {
+  return requestJson<SocietyAdminMutationResponse>(
+    `/api/societies/${encodeURIComponent(societyId)}/chat/group/messages`,
+    {
+      method: 'POST',
+      headers: createAuthHeaders(sessionToken),
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function sendDirectChatMessage(
+  sessionToken: string,
+  societyId: string,
+  recipientUserId: string,
+  input: SocietyChatMessageInput,
+) {
+  return requestJson<SocietyAdminMutationResponse>(
+    `/api/societies/${encodeURIComponent(societyId)}/chat/direct/${encodeURIComponent(recipientUserId)}/messages`,
+    {
+      method: 'POST',
+      headers: createAuthHeaders(sessionToken),
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function createVisitorPass(
+  sessionToken: string,
+  societyId: string,
+  visitorPass: VisitorPassCreateInput,
+) {
+  return requestJson<SocietyAdminMutationResponse>(
+    `/api/societies/${encodeURIComponent(societyId)}/visitors`,
+    {
+      method: 'POST',
+      headers: createAuthHeaders(sessionToken),
+      body: JSON.stringify(visitorPass),
+    },
+  );
+}
+
+export async function updateVisitorPassStatus(
+  sessionToken: string,
+  visitorPassId: string,
+  status: VisitorPassStatus,
+) {
+  return requestJson<SocietyAdminMutationResponse>(
+    `/api/visitor-passes/${encodeURIComponent(visitorPassId)}/status`,
+    {
+      method: 'POST',
+      headers: createAuthHeaders(sessionToken),
+      body: JSON.stringify({ status }),
+    },
+  );
+}
+
+export async function detectVehicleNumber(sessionToken: string, photoDataUrl: string) {
+  return requestJson<VehicleNumberDetectionResponse>('/api/security/vehicle-number/detect', {
+    method: 'POST',
+    headers: createAuthHeaders(sessionToken),
+    body: JSON.stringify({ photoDataUrl }),
+  });
 }
 
 export async function resetDatabase() {

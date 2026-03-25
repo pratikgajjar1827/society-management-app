@@ -1,23 +1,23 @@
 import { useEffect, useState } from 'react';
-import { Image, Linking, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { Image, Linking, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import {
   ActionButton,
   Caption,
   ChoiceChip,
   DetailRow,
-  HeroCard,
   InputField,
   MetricCard,
   NavigationStrip,
-  Page,
+  PageFrame,
   Pill,
   SectionHeader,
   SurfaceCard,
 } from '../../components/ui';
 import { MaintenanceReceiptCard } from '../../components/MaintenanceReceiptCard';
+import { AdminHomeExperience } from './AdminHomeExperience';
 import { useApp } from '../../state/AppContext';
-import { palette, spacing } from '../../theme/tokens';
+import { palette, shadow, spacing } from '../../theme/tokens';
 import { pickWebFileAsDataUrl } from '../../utils/fileUploads';
 import {
   buildMaintenanceReceiptDetails,
@@ -51,10 +51,12 @@ import {
   getPaymentsForSociety,
   getResidentsDirectory,
   getEnabledStructures,
+  getUnitsForSociety,
   getSocietyUnitCollectionLabel,
   getRulesForSociety,
   getSelectedSociety,
   getStaffVerificationDirectory,
+  getVisitorPassesForSociety,
   societySupportsOfficeSpaces,
   humanizeRole,
 } from '../../utils/selectors';
@@ -75,6 +77,33 @@ const adminTabs: Array<{ key: AdminTab; label: string }> = [
   { key: 'announcements', label: 'Announcements' },
   { key: 'audit', label: 'Audit' },
 ];
+
+function getAdminTabDescription(activeTab: AdminTab) {
+  switch (activeTab) {
+    case 'home':
+      return 'Monitor approvals, collections, complaints, and daily society operations from one elegant control center.';
+    case 'residents':
+      return 'Review occupancy, residents, unit snapshots, and linked household data with better clarity.';
+    case 'billing':
+      return 'Manage cycles, invoices, reminders, UPI settings, and collection health from one billing desk.';
+    case 'collections':
+      return 'Track incoming payments, review proofs, receipts, and pending maintenance collections.';
+    case 'ledger':
+      return 'Audit payment movement, reconciliation records, and maintenance collection history.';
+    case 'amenities':
+      return 'Control amenity inventory, booking approvals, and day-to-day service planning.';
+    case 'helpdesk':
+      return 'Resolve resident complaints faster and keep every operational update visible.';
+    case 'security':
+      return 'Coordinate guards, staff verification, visitor access, and entry records from one security workspace.';
+    case 'announcements':
+      return 'Publish notices, resident communication, and policy updates in the new premium admin flow.';
+    case 'audit':
+      return 'Review durable logs for money movement, complaints, announcements, and security actions.';
+    default:
+      return 'Run society operations with a cleaner and more modern admin experience.';
+  }
+}
 
 const expenseTypes = [
   { key: 'maintenance' as const, label: 'Maintenance' },
@@ -239,6 +268,8 @@ const announcementTemplates = [
 export function AdminShell() {
   const { state, actions } = useApp();
   const [activeTab, setActiveTab] = useState<AdminTab>('home');
+  const { width } = useWindowDimensions();
+  const isCompact = width < 768;
 
   if (!state.session.userId || !state.session.selectedSocietyId) {
     return null;
@@ -252,35 +283,103 @@ export function AdminShell() {
   }
 
   const overview = getAdminOverview(state.data, society.id);
+  const activeTabLabel = adminTabs.find((item) => item.key === activeTab)?.label ?? 'Admin Home';
+  const canReturnToResident = state.session.accountRole !== 'superUser';
 
   return (
-    <Page>
-      <HeroCard
-        eyebrow={`${society.name} - Admin view`}
-        title="Run society operations from one control surface."
-        subtitle="Admin mode is built for occupancy control, collections, security, and auditable society operations."
-      >
-        <View style={styles.heroActions}>
-          {state.session.accountRole !== 'superUser' ? (
-            <ActionButton label="Resident view" onPress={actions.goToRoleSelection} variant="secondary" />
-          ) : null}
-          <ActionButton label="Workspaces" onPress={actions.goToWorkspaces} variant="ghost" />
-        </View>
-        <View style={styles.metricGrid}>
-          <MetricCard label="Collection rate" value={`${overview.collectionRate}%`} />
-          <MetricCard label="Pending approvals" value={String(overview.pendingApprovals)} tone="accent" />
-          <MetricCard
-            label="Open complaints"
-            value={String(overview.openComplaints)}
-            tone="blue"
-            onPress={() => setActiveTab('helpdesk')}
-          />
-        </View>
-      </HeroCard>
+    <PageFrame>
+      {isCompact ? (
+        <SurfaceCard style={styles.compactWorkspaceCard}>
+          <View style={styles.compactWorkspaceTopRow}>
+            <View style={styles.compactWorkspaceTitleWrap}>
+              <Pill label="Admin" tone="accent" />
+              <Text style={styles.compactWorkspaceTitle}>{society.name}</Text>
+              <Caption>{activeTabLabel} | {getAdminTabDescription(activeTab)}</Caption>
+            </View>
+            <View style={styles.compactWorkspaceStatsRow}>
+              <View style={styles.compactWorkspaceStat}>
+                <Text style={styles.compactWorkspaceStatValue}>{overview.collectionRate}%</Text>
+                <Caption>Collect</Caption>
+              </View>
+              <View style={styles.compactWorkspaceStat}>
+                <Text style={styles.compactWorkspaceStatValue}>{overview.pendingApprovals}</Text>
+                <Caption>Queue</Caption>
+              </View>
+            </View>
+          </View>
+          <View style={styles.compactWorkspaceActionRow}>
+            {canReturnToResident ? (
+              <ActionButton label="Resident" onPress={actions.goToRoleSelection} variant="secondary" />
+            ) : null}
+            <ActionButton label="Societies" onPress={actions.goToWorkspaces} variant="secondary" />
+          </View>
+          <NavigationStrip items={adminTabs} activeKey={activeTab} onChange={setActiveTab} />
+        </SurfaceCard>
+      ) : null}
 
-      <NavigationStrip items={adminTabs} activeKey={activeTab} onChange={setActiveTab} />
+      {activeTab === 'home' ? (
+        <AdminHomeExperience
+          societyId={society.id}
+          userId={user.id}
+          canReturnToResident={canReturnToResident}
+          onOpenTab={setActiveTab}
+          onOpenWorkspaces={actions.goToWorkspaces}
+          onSwitchResident={actions.goToRoleSelection}
+        />
+      ) : !isCompact ? (
+        <>
+          <SurfaceCard style={styles.moduleHeroCard}>
+            <View style={styles.moduleHeroTopRow}>
+              <View style={styles.moduleHeroTitleWrap}>
+                <Pill label="Admin workspace" tone="accent" />
+                <Text style={styles.moduleHeroTitle}>{activeTabLabel}</Text>
+                <Caption>
+                  {society.name} | {getAdminTabDescription(activeTab)}
+                </Caption>
+              </View>
+              <View style={styles.moduleHeroStats}>
+                <View style={styles.moduleHeroStatChip}>
+                  <Text style={styles.moduleHeroStatValue}>{overview.collectionRate}%</Text>
+                  <Text style={styles.moduleHeroStatLabel}>Collection</Text>
+                </View>
+                <View style={styles.moduleHeroStatChip}>
+                  <Text style={styles.moduleHeroStatValue}>{overview.pendingApprovals}</Text>
+                  <Text style={styles.moduleHeroStatLabel}>Approvals</Text>
+                </View>
+                <View style={styles.moduleHeroStatChip}>
+                  <Text style={styles.moduleHeroStatValue}>{overview.openComplaints}</Text>
+                  <Text style={styles.moduleHeroStatLabel}>Complaints</Text>
+                </View>
+              </View>
+            </View>
+            <View style={styles.metricGrid}>
+              <MetricCard label="Collection rate" value={`${overview.collectionRate}%`} />
+              <MetricCard label="Pending approvals" value={String(overview.pendingApprovals)} tone="accent" />
+              <MetricCard
+                label="Open complaints"
+                value={String(overview.openComplaints)}
+                tone="blue"
+                onPress={() => setActiveTab('helpdesk')}
+              />
+            </View>
+            <View style={styles.heroActions}>
+              {canReturnToResident ? (
+                <ActionButton label="Resident view" onPress={actions.goToRoleSelection} variant="secondary" />
+              ) : null}
+              <ActionButton label="Workspaces" onPress={actions.goToWorkspaces} variant="primary" />
+            </View>
+          </SurfaceCard>
 
-      {activeTab === 'home' ? <AdminHome societyId={society.id} onOpenTab={setActiveTab} /> : null}
+          <SurfaceCard style={styles.adminNavigationCard}>
+            <SectionHeader
+              title={activeTabLabel}
+              description={getAdminTabDescription(activeTab)}
+            />
+            <NavigationStrip items={adminTabs} activeKey={activeTab} onChange={setActiveTab} />
+          </SurfaceCard>
+        </>
+      ) : null}
+
       {activeTab === 'residents' ? <AdminResidents societyId={society.id} /> : null}
       {activeTab === 'billing' ? <AdminBilling societyId={society.id} /> : null}
       {activeTab === 'collections' ? <AdminCollections societyId={society.id} /> : null}
@@ -290,7 +389,7 @@ export function AdminShell() {
       {activeTab === 'security' ? <AdminSecurity societyId={society.id} /> : null}
       {activeTab === 'announcements' ? <AdminAnnouncements societyId={society.id} /> : null}
       {activeTab === 'audit' ? <AdminAudit societyId={society.id} /> : null}
-    </Page>
+    </PageFrame>
   );
 }
 
@@ -300,6 +399,7 @@ function AdminHome({ societyId, onOpenTab }: { societyId: string; onOpenTab: (ta
   const pendingJoinRequests = getJoinRequestsForSociety(state.data, societyId, 'pending');
   const recommendations = getAdminRecommendations(state.data, societyId);
   const society = getSelectedSociety(state.data, societyId);
+  const units = getUnitsForSociety(state.data, societyId);
   const isSuperUser = state.session.accountRole === 'superUser';
   const [societyName, setSocietyName] = useState('');
   const [country, setCountry] = useState('');
@@ -349,10 +449,55 @@ function AdminHome({ societyId, onOpenTab }: { societyId: string; onOpenTab: (ta
     }
   }
 
+  const quickLaunches: Array<{
+    title: string;
+    summary: string;
+    metric: string;
+    tone: 'accent' | 'blue' | 'gold' | 'primary';
+    tab: AdminRecommendationTab;
+  }> = [
+    {
+      title: 'Residents',
+      summary: 'Occupancy, directory, and join approvals.',
+      metric: `${units.length} ${society ? getSocietyUnitCollectionLabel(society) : 'units'}`,
+      tone: 'primary',
+      tab: 'residents',
+    },
+    {
+      title: 'Billing',
+      summary: 'Maintenance due cycles and reminders.',
+      metric: `${overview.overdueInvoices} overdue`,
+      tone: 'accent',
+      tab: 'billing',
+    },
+    {
+      title: 'Helpdesk',
+      summary: 'Complaints, updates, and service follow-ups.',
+      metric: `${overview.openComplaints} open`,
+      tone: 'blue',
+      tab: 'helpdesk',
+    },
+    {
+      title: 'Security',
+      summary: 'Guards, visitors, staff, and entry control.',
+      metric: `${overview.activeGuards} guards`,
+      tone: 'gold',
+      tab: 'security',
+    },
+  ];
+
+  const profilePills = society
+    ? [
+        `${society.city}, ${society.state}`,
+        `${units.length} ${getSocietyUnitCollectionLabel(society)}`,
+        societySupportsOfficeSpaces(society) ? 'Commercial-ready' : 'Residential flow',
+      ]
+    : [];
+
   return (
     <>
       {pendingJoinRequests.length > 0 ? (
-        <SurfaceCard>
+        <SurfaceCard style={styles.adminFocusPanel}>
           <SectionHeader title="Pending access approvals" description="Approve ownership and tenancy claims before access is linked." />
           {pendingJoinRequests.map((request) => (
             <View key={request.joinRequest.id} style={styles.requestCard}>
@@ -392,19 +537,73 @@ function AdminHome({ societyId, onOpenTab }: { societyId: string; onOpenTab: (ta
         </SurfaceCard>
       ) : null}
 
-      <SurfaceCard>
-        <SectionHeader title="Operating priorities" />
-        <Caption>
-          Overdue invoices: {overview.overdueInvoices}. Pending approvals: {overview.pendingApprovals}. Active guards: {overview.activeGuards}.
-        </Caption>
+      <SurfaceCard style={styles.adminDashboardHero}>
+        <View style={styles.adminDashboardTop}>
+          <View style={styles.adminDashboardCopy}>
+            <Pill label="Operations cockpit" tone="warning" />
+            <Text style={styles.adminDashboardTitle}>Run daily society operations with better visibility</Text>
+            <Caption style={styles.adminDashboardDescription}>
+              Monitor collections, approvals, complaints, and security readiness from one polished admin dashboard.
+            </Caption>
+          </View>
+          <View style={styles.adminDashboardMeta}>
+            <Text style={styles.adminDashboardMetaValue}>{recommendations.length}</Text>
+            <Caption style={styles.adminDashboardMetaText}>recommended module jumps</Caption>
+          </View>
+        </View>
+
+        <View style={styles.adminSignalGrid}>
+          <View style={styles.adminSignalCard}>
+            <Text style={styles.adminSignalLabel}>Overdue invoices</Text>
+            <Text style={styles.adminSignalValue}>{overview.overdueInvoices}</Text>
+            <Caption>Residents waiting for collection follow-up.</Caption>
+          </View>
+          <View style={styles.adminSignalCard}>
+            <Text style={styles.adminSignalLabel}>Pending approvals</Text>
+            <Text style={styles.adminSignalValue}>{overview.pendingApprovals}</Text>
+            <Caption>Approvals across joins, staff, payments, and bookings.</Caption>
+          </View>
+          <View style={styles.adminSignalCard}>
+            <Text style={styles.adminSignalLabel}>Active guards</Text>
+            <Text style={styles.adminSignalValue}>{overview.activeGuards}</Text>
+            <Caption>Security coverage active for access operations.</Caption>
+          </View>
+        </View>
+
+        <View style={styles.adminQuickLaunchGrid}>
+          {quickLaunches.map((item) => (
+            <Pressable
+              key={item.title}
+              onPress={() => onOpenTab(item.tab)}
+              style={({ pressed }) => [
+                styles.adminQuickLaunchCard,
+                pressed ? styles.interactiveCardPressed : null,
+              ]}
+            >
+              <Pill label={item.metric} tone={item.tone === 'gold' ? 'warning' : item.tone === 'blue' ? 'primary' : item.tone} />
+              <Text style={styles.adminQuickLaunchTitle}>{item.title}</Text>
+              <Caption>{item.summary}</Caption>
+              <Text style={styles.adminQuickLaunchLink}>Open module</Text>
+            </Pressable>
+          ))}
+        </View>
       </SurfaceCard>
 
       {society ? (
-        <SurfaceCard>
-          <SectionHeader
-            title="Society profile"
-            description="Update the society name and location here after setup. Structure, unit count, and space layout stay locked so existing records remain stable."
-          />
+        <SurfaceCard style={styles.adminFocusPanel}>
+          <View style={styles.adminPanelHeader}>
+            <View style={styles.adminPanelHeaderCopy}>
+              <SectionHeader
+                title="Society profile"
+                description="Update the society name and location here after setup. Structure, unit count, and space layout stay locked so existing records remain stable."
+              />
+            </View>
+            <View style={styles.pillRow}>
+              {profilePills.map((label) => (
+                <Pill key={label} label={label} tone="primary" />
+              ))}
+            </View>
+          </View>
           <View style={styles.formGrid}>
             <View style={styles.formField}>
               <InputField
@@ -511,7 +710,7 @@ function AdminHome({ societyId, onOpenTab }: { societyId: string; onOpenTab: (ta
         </SurfaceCard>
       ) : null}
 
-      <SurfaceCard>
+      <SurfaceCard style={styles.adminFocusPanel}>
         <SectionHeader title="Recommended next admin modules" description="Open the next module directly from the current workload." />
         <View style={styles.recommendationGrid}>
           {recommendations.map((recommendation) => (
@@ -549,6 +748,8 @@ function AdminResidents({ societyId }: { societyId: string }) {
   const currentChairmanUnits = residents
     .filter((entry) => currentChairmanUnitIds.has(entry.unit.id))
     .map((entry) => entry.unit.code);
+  const occupiedUnits = residents.filter((entry) => entry.residents.length > 0).length;
+  const vacantUnits = residents.length - occupiedUnits;
 
   useEffect(() => {
     setSelectedChairmanUnitIds(chairmanMembership?.unitIds ?? []);
@@ -583,6 +784,23 @@ function AdminResidents({ societyId }: { societyId: string }) {
 
   return (
     <>
+      <SectionHeader
+        title="Residents hub"
+        description="Monitor occupancy, unit mapping, resident links, and domestic staff visibility from the same summary-led admin layout used across the workspace."
+      />
+      <SurfaceCard>
+        <View style={styles.metricGrid}>
+          <MetricCard label="Total units" value={String(residents.length)} tone="primary" />
+          <MetricCard label="Occupied" value={String(occupiedUnits)} tone="accent" />
+          <MetricCard label="Vacant" value={String(vacantUnits)} tone="blue" />
+          <MetricCard label="Chairman links" value={String(currentChairmanUnits.length)} tone="primary" />
+        </View>
+        <View style={styles.inlineSection}>
+          <Caption>
+            Open any unit below to review resident details, occupancy, domestic staff records, and current payment visibility.
+          </Caption>
+        </View>
+      </SurfaceCard>
       <SectionHeader
         title="Units and occupancy"
         description={`Showing all ${residents.length} units. Click any plot, apartment, office, or shed to see resident detail.`}
@@ -762,6 +980,7 @@ function AdminBilling({ societyId }: { societyId: string }) {
   const selectedManualInvoice = unpaidInvoices.find(({ invoice }) => invoice.id === manualInvoiceId)
     ?? unpaidInvoices[0]
     ?? null;
+  const capturedPayments = payments.filter((payment) => payment.status === 'captured').length;
 
   useEffect(() => {
     setPlanFrequency(plan?.frequency === 'quarterly' ? 'quarterly' : 'monthly');
@@ -889,6 +1108,23 @@ function AdminBilling({ societyId }: { societyId: string }) {
 
   return (
     <>
+      <SectionHeader
+        title="Billing hub"
+        description="Manage the maintenance plan, payment receivers, manual captures, and expense tracking from one summary-led billing module."
+      />
+      <SurfaceCard>
+        <View style={styles.metricGrid}>
+          <MetricCard label="Unpaid invoices" value={String(unpaidInvoices.length)} tone="accent" />
+          <MetricCard label="Captured payments" value={String(capturedPayments)} tone="primary" />
+          <MetricCard label="Expenses" value={String(expenses.length)} tone="blue" />
+          <MetricCard label="UPI configured" value={plan?.upiId || plan?.upiMobileNumber || plan?.upiQrCodeDataUrl ? 'Yes' : 'No'} tone="primary" />
+        </View>
+        <View style={styles.inlineSection}>
+          <Caption>
+            Use the cards below to update recurring billing, publish resident payment setup, capture offline payments, and maintain the expense register.
+          </Caption>
+        </View>
+      </SurfaceCard>
       {plan ? (
         <SurfaceCard>
           <SectionHeader
@@ -1098,7 +1334,12 @@ function AdminBilling({ societyId }: { societyId: string }) {
         <ActionButton label={state.isSyncing ? 'Saving...' : 'Save expense'} onPress={handleSave} disabled={state.isSyncing} />
       </SurfaceCard>
 
-      <SectionHeader title="Expense register" />
+      <SurfaceCard>
+        <SectionHeader
+          title="Expense register"
+          description="Saved maintenance and ad hoc expenses are listed here in the same subsection card format used across admin operations."
+        />
+      </SurfaceCard>
       {expenses.length > 0 ? expenses.map((expense) => (
         <SurfaceCard key={expense.id}>
           <View style={styles.rowBetween}>
@@ -1331,16 +1572,21 @@ function AdminCollections({ societyId }: { societyId: string }) {
 
   return (
     <>
+      <SectionHeader
+        title="Collections hub"
+        description="Review dues, pending resident payment proofs, reminders, and invoice tracker health from one collections dashboard."
+      />
       <SurfaceCard>
-        <SectionHeader
-          title="Collections desk"
-          description="Track unpaid maintenance, review resident payment proofs, and keep the collection cycle moving from one dedicated page."
-        />
         <View style={styles.metricGrid}>
           <MetricCard label="Outstanding dues" value={formatCurrency(totalOutstanding)} tone="accent" />
           <MetricCard label="Pending approvals" value={String(pendingPaymentFlags.length)} tone="primary" />
           <MetricCard label="Open maintenance entries" value={String(unpaidInvoices.length)} tone="blue" />
           <MetricCard label="Collected" value={formatCurrency(totalCaptured)} />
+        </View>
+        <View style={styles.inlineSection}>
+          <Caption>
+            Start here for collection health, then move into billing cycle timing, reminders, approval review, and the invoice tracker below.
+          </Caption>
         </View>
       </SurfaceCard>
 
@@ -1634,7 +1880,12 @@ function AdminCollections({ societyId }: { societyId: string }) {
         <SurfaceCard><Caption>No maintenance entries match this filter right now.</Caption></SurfaceCard>
       ) : null}
 
-      <SectionHeader title="Payment reminders sent" />
+      <SurfaceCard>
+        <SectionHeader
+          title="Payment reminders sent"
+          description="Every reminder broadcast is preserved here so follow-up activity stays visible after the tracker actions above."
+        />
+      </SurfaceCard>
       {paymentReminders.length > 0 ? paymentReminders.map(({ reminder, units, sentBy }) => (
         <SurfaceCard key={reminder.id}>
           <Text style={styles.cardTitle}>Reminder by {sentBy?.name ?? 'Admin'}</Text>
@@ -1697,11 +1948,11 @@ function AdminPaymentLedger({ societyId }: { societyId: string }) {
 
   return (
     <>
+      <SectionHeader
+        title="Ledger hub"
+        description="Keep receipt-ready payment history separate from live collections follow-up while preserving the same admin module design language."
+      />
       <SurfaceCard>
-        <SectionHeader
-          title="Payment ledger"
-          description="Keep receipt-ready payment history separate from collections follow-up, with one place to open PDFs and share receipts."
-        />
         <View style={styles.metricGrid}>
           <MetricCard label="Total payments" value={String(payments.length)} />
           <MetricCard label="Captured" value={String(capturedPayments.length)} tone="primary" />
@@ -1778,9 +2029,27 @@ function AdminAmenities({ societyId }: { societyId: string }) {
   const bookings = getBookingsForSociety(state.data, societyId);
   const pendingBookings = bookings.filter(({ booking }) => booking.status === 'pending');
   const waitlistedBookings = bookings.filter(({ booking }) => booking.status === 'waitlisted');
+  const confirmedBookings = bookings.filter(({ booking }) => booking.status === 'confirmed').length;
 
   return (
     <>
+      <SectionHeader
+        title="Amenities hub"
+        description="Manage the amenity catalog and booking operations from one admin module that follows the same summary-first pattern as the rest of the workspace."
+      />
+      <SurfaceCard>
+        <View style={styles.metricGrid}>
+          <MetricCard label="Amenities" value={String(amenities.length)} tone="primary" />
+          <MetricCard label="Pending" value={String(pendingBookings.length)} tone="accent" />
+          <MetricCard label="Waitlisted" value={String(waitlistedBookings.length)} tone="blue" />
+          <MetricCard label="Confirmed" value={String(confirmedBookings)} tone="primary" />
+        </View>
+        <View style={styles.inlineSection}>
+          <Caption>
+            Review the amenity catalog first, then manage booking demand, confirmations, and waitlist movement below.
+          </Caption>
+        </View>
+      </SurfaceCard>
       <SectionHeader title="Amenity catalog" description="Support exclusive, capacity-based, and info-only amenities from day one." />
       {amenities.map((amenity) => (
         <SurfaceCard key={amenity.id}>
@@ -1804,7 +2073,12 @@ function AdminAmenities({ societyId }: { societyId: string }) {
         </View>
       </SurfaceCard>
 
-      <SectionHeader title="Pending, waitlisted, and confirmed bookings" />
+      <SurfaceCard>
+        <SectionHeader
+          title="Pending, waitlisted, and confirmed bookings"
+          description="The full amenity booking queue stays grouped here after the summary cards so every status reads the same way."
+        />
+      </SurfaceCard>
       {bookings.length > 0 ? bookings.map(({ booking, amenity, unit, user }) => (
         <SurfaceCard key={booking.id}>
           <View style={styles.rowBetween}>
@@ -1939,11 +2213,11 @@ function AdminHelpdesk({ societyId }: { societyId: string }) {
 
   return (
     <>
+      <SectionHeader
+        title="Helpdesk hub"
+        description="Track complaint volume, assignment progress, and resolution flow from the same summary-led admin design used in the other modules."
+      />
       <SurfaceCard>
-        <SectionHeader
-          title="Helpdesk control"
-          description="Resident tickets now land here directly from the resident workspace. Assign ownership and move them through open, in progress, and resolved states."
-        />
         <View style={styles.metricGrid}>
           <MetricCard
             label={statusFilter === 'open' ? 'Open tickets - selected' : 'Open tickets'}
@@ -1963,6 +2237,11 @@ function AdminHelpdesk({ societyId }: { societyId: string }) {
             tone="blue"
             onPress={() => setStatusFilter((current) => (current === 'resolved' ? 'all' : 'resolved'))}
           />
+        </View>
+        <View style={styles.inlineSection}>
+          <Caption>
+            Use the status cards above to focus the queue, then assign owners, post updates, and resolve resident tickets below.
+          </Caption>
         </View>
       </SurfaceCard>
 
@@ -2128,6 +2407,8 @@ function AdminSecurity({ societyId }: { societyId: string }) {
   const staff = getStaffVerificationDirectory(state.data, societyId);
   const pendingStaff = staff.filter((entry) => entry.staff.verificationState === 'pending');
   const entries = getEntryLogsForSociety(state.data, societyId);
+  const visitorPasses = getVisitorPassesForSociety(state.data, societyId);
+  const checkedInVisitorPasses = visitorPasses.filter(({ visitorPass }) => visitorPass.status === 'checkedIn').length;
 
   async function saveGuard() {
     const saved = await actions.createSecurityGuard(societyId, {
@@ -2186,6 +2467,24 @@ function AdminSecurity({ societyId }: { societyId: string }) {
 
   return (
     <>
+      <SectionHeader
+        title="Security hub"
+        description="Manage guards, staff verification, visitor passes, and entry records from one security operations hub that matches the newer admin module layout."
+      />
+      <SurfaceCard>
+        <View style={styles.metricGrid}>
+          <MetricCard label="Guards" value={String(guards.length)} tone="primary" />
+          <MetricCard label="Pending staff" value={String(pendingStaff.length)} tone="accent" />
+          <MetricCard label="Visitor passes" value={String(visitorPasses.length)} tone="blue" />
+          <MetricCard label="Checked in" value={String(checkedInVisitorPasses)} tone="primary" />
+        </View>
+        <View style={styles.inlineSection}>
+          <Caption>
+            This module centralizes roster updates, approvals, visitor movement, and entry logs so the resident and security workspaces stay in sync.
+          </Caption>
+        </View>
+      </SurfaceCard>
+
       <SectionHeader title="Security operations" description="Add guard, staff, and entry data here. Residents can then see the records tied to their units." />
 
       <SurfaceCard>
@@ -2200,6 +2499,9 @@ function AdminSecurity({ societyId }: { societyId: string }) {
           <View style={styles.formField}><InputField label="Shift end" value={guardShiftEnd} onChangeText={setGuardShiftEnd} placeholder="2026-03-20T14:00" /></View>
         </View>
         <ActionButton label={state.isSyncing ? 'Saving...' : 'Add guard'} onPress={saveGuard} disabled={state.isSyncing} />
+        <Caption>
+          That phone number will also receive Security workspace access for this society, so the guard can sign in and manage live gate approvals.
+        </Caption>
         {guards.length > 0 ? guards.map(({ guard, latestShift }) => (
           <View key={guard.id} style={styles.inlineSection}>
             <Text style={styles.inlineTitle}>{guard.name}</Text>
@@ -2298,6 +2600,61 @@ function AdminSecurity({ societyId }: { societyId: string }) {
       </SurfaceCard>
 
       <SurfaceCard>
+        <SectionHeader
+          title="Visitor passes"
+          description="Residents create visitor passes from their workspace. Security or committee can check them in and out here, and every move stays synced with entry logs."
+        />
+        {visitorPasses.length > 0 ? visitorPasses.map(({ visitorPass, unit, createdBy }) => (
+          <View key={visitorPass.id} style={styles.inlineSection}>
+            <View style={styles.rowBetween}>
+              <Text style={styles.inlineTitle}>{visitorPass.visitorName}</Text>
+              <Pill
+                label={humanizeVisitorPassStatus(visitorPass.status)}
+                tone={getVisitorPassTone(visitorPass.status)}
+              />
+            </View>
+            <Caption>
+              {humanizeVisitorCategory(visitorPass.category)} for {unit?.code ?? 'Resident unit'} - pass {visitorPass.passCode}
+            </Caption>
+            <Caption>
+              Expected {formatLongDate(visitorPass.expectedAt)}{visitorPass.phone ? ` - ${visitorPass.phone}` : ''}
+            </Caption>
+            <Caption>
+              Purpose: {visitorPass.purpose}{visitorPass.vehicleNumber ? ` - Vehicle ${visitorPass.vehicleNumber}` : ''}
+            </Caption>
+            {visitorPass.notes ? <Caption>Gate note: {visitorPass.notes}</Caption> : null}
+            <Caption>
+              Created by {createdBy?.name ?? 'Resident'} on {formatLongDate(visitorPass.createdAt)}
+            </Caption>
+            {visitorPass.status === 'scheduled' ? (
+              <View style={styles.heroActions}>
+                <ActionButton
+                  label={state.isSyncing ? 'Processing...' : 'Check in visitor'}
+                  onPress={() => actions.updateVisitorPassStatus(societyId, visitorPass.id, { status: 'checkedIn' })}
+                  disabled={state.isSyncing}
+                />
+                <ActionButton
+                  label={state.isSyncing ? 'Processing...' : 'Cancel pass'}
+                  onPress={() => actions.updateVisitorPassStatus(societyId, visitorPass.id, { status: 'cancelled' })}
+                  disabled={state.isSyncing}
+                  variant="secondary"
+                />
+              </View>
+            ) : null}
+            {visitorPass.status === 'checkedIn' ? (
+              <View style={styles.heroActions}>
+                <ActionButton
+                  label={state.isSyncing ? 'Processing...' : 'Mark exited'}
+                  onPress={() => actions.updateVisitorPassStatus(societyId, visitorPass.id, { status: 'completed' })}
+                  disabled={state.isSyncing}
+                />
+              </View>
+            ) : null}
+          </View>
+        )) : <Caption>No visitor passes created yet.</Caption>}
+      </SurfaceCard>
+
+      <SurfaceCard>
         <SectionHeader title="Recent entry logs" />
         <View style={styles.choiceRow}>
           {entrySubjects.map((option) => (
@@ -2338,6 +2695,7 @@ function AdminAnnouncements({ societyId }: { societyId: string }) {
   const [announcementPhotoMessage, setAnnouncementPhotoMessage] = useState('');
   const [announcementAudience, setAnnouncementAudience] = useState<AnnouncementAudience>('all');
   const [announcementPriority, setAnnouncementPriority] = useState<AnnouncementPriority>('normal');
+  const highPriorityAnnouncements = announcements.filter((announcement) => announcement.priority === 'high').length;
 
   async function handleSendAnnouncement() {
     const saved = await actions.createAnnouncement(societyId, {
@@ -2413,6 +2771,24 @@ function AdminAnnouncements({ societyId }: { societyId: string }) {
 
   return (
     <>
+      <SectionHeader
+        title="Announcements hub"
+        description="Publish targeted resident communication, manage priority notices, and keep policy documents visible from one unified communications module."
+      />
+      <SurfaceCard>
+        <View style={styles.metricGrid}>
+          <MetricCard label="Announcements" value={String(announcements.length)} tone="primary" />
+          <MetricCard label="High priority" value={String(highPriorityAnnouncements)} tone="accent" />
+          <MetricCard label="Rules" value={String(rules.length)} tone="blue" />
+          <MetricCard label="Templates" value={String(announcementTemplates.length)} tone="primary" />
+        </View>
+        <View style={styles.inlineSection}>
+          <Caption>
+            Start with the summary above, then publish a new announcement or review the current notice feed and rule documents below.
+          </Caption>
+        </View>
+      </SurfaceCard>
+
       <SectionHeader
         title="Targeted communications"
         description="Choose a common society announcement template or draft a custom one, then send it to the selected audience in one shot."
@@ -2572,7 +2948,12 @@ function AdminAnnouncements({ societyId }: { societyId: string }) {
           <Caption>No announcements published yet.</Caption>
         </SurfaceCard>
       )}
-      <SectionHeader title="Policy and rule documents" />
+      <SurfaceCard>
+        <SectionHeader
+          title="Policy and rule documents"
+          description="Published rules and society policy notes are kept in one document section beneath the communications feed."
+        />
+      </SurfaceCard>
       {rules.map((rule) => (
         <SurfaceCard key={rule.id}>
           <Text style={styles.cardTitle}>{rule.title}</Text>
@@ -2587,10 +2968,33 @@ function AdminAnnouncements({ societyId }: { societyId: string }) {
 function AdminAudit({ societyId }: { societyId: string }) {
   const { state } = useApp();
   const events = getAuditEvents(state.data, societyId);
+  const todayPrefix = new Date().toISOString().slice(0, 10);
+  const todayEvents = events.filter((event) => event.createdAt.slice(0, 10) === todayPrefix).length;
 
   return (
     <>
-      <SectionHeader title="Audit timeline" description="Durable logs for notices, money movement, complaints, and security actions." />
+      <SectionHeader
+        title="Audit hub"
+        description="Review durable logs for announcements, money movement, complaints, and security activity from one summarized audit timeline."
+      />
+      <SurfaceCard>
+        <View style={styles.metricGrid}>
+          <MetricCard label="Total events" value={String(events.length)} tone="primary" />
+          <MetricCard label="Today" value={String(todayEvents)} tone="accent" />
+          <MetricCard label="Latest event" value={events[0] ? formatShortDate(events[0].createdAt) : 'None'} tone="blue" />
+        </View>
+        <View style={styles.inlineSection}>
+          <Caption>
+            The audit feed below keeps a durable view of operational actions across communication, collections, complaints, and security workflows.
+          </Caption>
+        </View>
+      </SurfaceCard>
+      <SurfaceCard>
+        <SectionHeader
+          title="Audit timeline"
+          description="Durable logs for notices, money movement, complaints, and security actions."
+        />
+      </SurfaceCard>
       {events.map((event) => (
         <SurfaceCard key={event.id}>
           <Text style={styles.cardTitle}>{event.title}</Text>
@@ -2603,17 +3007,248 @@ function AdminAudit({ societyId }: { societyId: string }) {
 }
 
 const styles = StyleSheet.create({
+  compactWorkspaceCard: {
+    gap: spacing.sm,
+    backgroundColor: '#FFF8F0',
+  },
+  compactWorkspaceTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    flexWrap: 'wrap',
+  },
+  compactWorkspaceTitleWrap: {
+    flex: 1,
+    gap: spacing.xs,
+  },
+  compactWorkspaceTitle: {
+    fontSize: 22,
+    lineHeight: 26,
+    fontWeight: '900',
+    color: palette.ink,
+  },
+  compactWorkspaceStatsRow: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+    width: '100%',
+  },
+  compactWorkspaceStat: {
+    flex: 1,
+    minWidth: 0,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E8DCCB',
+    backgroundColor: '#FFFDF9',
+    alignItems: 'center',
+    gap: 2,
+  },
+  compactWorkspaceStatValue: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: palette.accent,
+  },
+  compactWorkspaceActionRow: {
+    flexDirection: 'column',
+    gap: spacing.xs,
+  },
+  adminFocusPanel: {
+    backgroundColor: '#FFFCF8',
+  },
+  adminDashboardHero: {
+    gap: spacing.lg,
+    backgroundColor: '#FFF8F0',
+  },
+  adminDashboardTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+    flexWrap: 'wrap',
+  },
+  adminDashboardCopy: {
+    flex: 1,
+    minWidth: 260,
+    gap: spacing.sm,
+  },
+  adminDashboardTitle: {
+    fontSize: 30,
+    lineHeight: 36,
+    fontWeight: '800',
+    color: palette.ink,
+  },
+  adminDashboardDescription: {
+    maxWidth: 640,
+  },
+  adminDashboardMeta: {
+    minWidth: 138,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: '#E8D9C7',
+    backgroundColor: '#FFF6E8',
+    alignItems: 'center',
+    gap: 2,
+  },
+  adminDashboardMetaValue: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: palette.warning,
+  },
+  adminDashboardMetaText: {
+    textAlign: 'center',
+  },
+  adminSignalGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.md,
+  },
+  adminSignalCard: {
+    flexGrow: 1,
+    flexBasis: 220,
+    minWidth: 220,
+    padding: spacing.md,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: '#E8D9C7',
+    backgroundColor: '#FFFDF9',
+    gap: spacing.xs,
+    ...shadow.card,
+  },
+  adminSignalLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: palette.mutedInk,
+  },
+  adminSignalValue: {
+    fontSize: 32,
+    fontWeight: '800',
+    color: palette.ink,
+  },
+  adminQuickLaunchGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.md,
+  },
+  adminQuickLaunchCard: {
+    flexGrow: 1,
+    flexBasis: 220,
+    minWidth: 220,
+    padding: spacing.md,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: '#E7D9C6',
+    backgroundColor: '#FFFDF9',
+    gap: spacing.sm,
+    ...shadow.card,
+  },
+  adminQuickLaunchTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: palette.ink,
+  },
+  adminQuickLaunchLink: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: palette.accent,
+  },
+  adminPanelHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+    flexWrap: 'wrap',
+  },
+  adminPanelHeaderCopy: {
+    flex: 1,
+    minWidth: 260,
+  },
+  adminNavigationCard: {
+    gap: spacing.md,
+    backgroundColor: '#FFFAF4',
+  },
+  moduleHeroCard: {
+    gap: spacing.md,
+    backgroundColor: '#FFF8F0',
+  },
+  moduleHeroTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+    flexWrap: 'wrap',
+  },
+  moduleHeroTitleWrap: {
+    flex: 1,
+    minWidth: 240,
+    gap: spacing.sm,
+  },
+  moduleHeroTitle: {
+    fontSize: 30,
+    lineHeight: 34,
+    fontWeight: '800',
+    color: palette.ink,
+  },
+  moduleHeroStats: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    flexWrap: 'wrap',
+  },
+  moduleHeroStatChip: {
+    minWidth: 92,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 20,
+    backgroundColor: '#FFF1E3',
+    borderWidth: 1,
+    borderColor: '#F0D9BF',
+    alignItems: 'center',
+    gap: 2,
+  },
+  moduleHeroStatValue: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: palette.accent,
+  },
+  moduleHeroStatLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: palette.mutedInk,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
   heroActions: { flexDirection: 'row', gap: spacing.sm, flexWrap: 'wrap' },
   metricGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   pillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: spacing.sm },
   cardTitle: { fontSize: 18, fontWeight: '800', color: palette.ink, flex: 1 },
-  requestCard: { gap: spacing.sm, paddingTop: spacing.sm, borderTopWidth: 1, borderTopColor: '#EFE5D9' },
+  requestCard: { gap: spacing.sm, paddingTop: spacing.md, borderTopWidth: 1, borderTopColor: '#F0E5D8' },
   recommendationGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
-  recommendationCard: { flexGrow: 1, flexBasis: 260, gap: spacing.sm, padding: spacing.md, borderRadius: 20, backgroundColor: palette.surfaceMuted, borderWidth: 1, borderColor: '#E4D8CA' },
+  recommendationCard: {
+    flexGrow: 1,
+    flexBasis: 260,
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: 22,
+    backgroundColor: '#FFF7EE',
+    borderWidth: 1,
+    borderColor: '#E6D8C6',
+    ...shadow.card,
+  },
   recommendationTitle: { fontSize: 16, fontWeight: '800', color: palette.ink },
-  interactiveCard: { backgroundColor: palette.surface, borderRadius: 24, padding: spacing.lg, gap: spacing.sm, borderWidth: 1, borderColor: palette.border },
-  interactiveCardActive: { borderColor: palette.primary, backgroundColor: '#F8F3EB' },
+  interactiveCard: {
+    backgroundColor: '#FFFBF7',
+    borderRadius: 24,
+    padding: spacing.lg,
+    gap: spacing.sm,
+    borderWidth: 1,
+    borderColor: '#E8DDCF',
+    ...shadow.card,
+  },
+  interactiveCardActive: { borderColor: '#F0C07C', backgroundColor: '#FFF5E8' },
   interactiveCardPressed: { opacity: 0.9 },
   templateGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md, paddingTop: spacing.sm },
   templateCard: { flexGrow: 1, flexBasis: 240, minWidth: 240 },
@@ -2628,7 +3263,14 @@ const styles = StyleSheet.create({
   officeStatusChipPressed: { opacity: 0.88 },
   officeStatusChipLabel: { fontSize: 13, fontWeight: '700' },
   detailStack: { gap: spacing.md, paddingTop: spacing.sm },
-  detailPanel: { gap: spacing.sm, padding: spacing.md, borderRadius: 20, backgroundColor: palette.white, borderWidth: 1, borderColor: '#E7DDD0' },
+  detailPanel: {
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: 20,
+    backgroundColor: '#FFF9F2',
+    borderWidth: 1,
+    borderColor: '#E7DDD0',
+  },
   detailTitle: { fontSize: 15, fontWeight: '800', color: palette.ink },
   formGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
   formField: { flexGrow: 1, flexBasis: 220 },
@@ -2642,15 +3284,15 @@ const styles = StyleSheet.create({
   deleteWarningText: {
     color: palette.danger,
   },
-  qrPreviewPanel: { alignSelf: 'flex-start', padding: spacing.sm, borderRadius: 18, backgroundColor: palette.white, borderWidth: 1, borderColor: '#E7DDD0' },
+  qrPreviewPanel: { alignSelf: 'flex-start', padding: spacing.sm, borderRadius: 18, backgroundColor: palette.white, borderWidth: 1, borderColor: '#E7DDD0', ...shadow.card },
   qrPreviewImage: { width: 180, height: 180, borderRadius: 14, backgroundColor: '#F4F1EB' },
-  proofCard: { alignSelf: 'flex-start', padding: spacing.xs, borderRadius: 18, backgroundColor: palette.white, borderWidth: 1, borderColor: '#E7DDD0' },
+  proofCard: { alignSelf: 'flex-start', padding: spacing.xs, borderRadius: 18, backgroundColor: palette.white, borderWidth: 1, borderColor: '#E7DDD0', ...shadow.card },
   proofImage: { width: 180, height: 220, borderRadius: 14, backgroundColor: '#F4F1EB' },
   helpdeskUpdateImage: { width: 220, height: 160, borderRadius: 14, backgroundColor: '#F4F1EB' },
-  announcementMediaCard: { marginTop: spacing.sm, alignSelf: 'stretch', maxWidth: 420, padding: spacing.xs, borderRadius: 18, backgroundColor: palette.white, borderWidth: 1, borderColor: '#E7DDD0' },
+  announcementMediaCard: { marginTop: spacing.sm, alignSelf: 'stretch', maxWidth: 420, padding: spacing.xs, borderRadius: 18, backgroundColor: palette.white, borderWidth: 1, borderColor: '#E7DDD0', ...shadow.card },
   announcementMediaImage: { width: '100%', height: 220, borderRadius: 14, backgroundColor: '#F4F1EB' },
   choiceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
-  inlineSection: { gap: spacing.xs, paddingTop: spacing.sm, borderTopWidth: 1, borderTopColor: '#EFE5D9' },
+  inlineSection: { gap: spacing.xs, paddingTop: spacing.md, borderTopWidth: 1, borderTopColor: '#F0E5D8' },
   inlineTitle: { fontSize: 15, fontWeight: '800', color: palette.ink },
 });
 
@@ -3110,6 +3752,48 @@ function getComplaintTone(status: 'open' | 'inProgress' | 'resolved') {
     case 'inProgress':
       return 'primary' as const;
     case 'open':
+    default:
+      return 'warning' as const;
+  }
+}
+
+function humanizeVisitorCategory(category: 'guest' | 'family' | 'service' | 'delivery') {
+  switch (category) {
+    case 'family':
+      return 'Family';
+    case 'service':
+      return 'Service';
+    case 'delivery':
+      return 'Delivery';
+    case 'guest':
+    default:
+      return 'Guest';
+  }
+}
+
+function humanizeVisitorPassStatus(status: 'scheduled' | 'checkedIn' | 'completed' | 'cancelled') {
+  switch (status) {
+    case 'checkedIn':
+      return 'Checked in';
+    case 'completed':
+      return 'Completed';
+    case 'cancelled':
+      return 'Cancelled';
+    case 'scheduled':
+    default:
+      return 'Scheduled';
+  }
+}
+
+function getVisitorPassTone(status: 'scheduled' | 'checkedIn' | 'completed' | 'cancelled') {
+  switch (status) {
+    case 'checkedIn':
+      return 'primary' as const;
+    case 'completed':
+      return 'success' as const;
+    case 'cancelled':
+      return 'accent' as const;
+    case 'scheduled':
     default:
       return 'warning' as const;
   }

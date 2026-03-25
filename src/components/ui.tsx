@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode } from 'react';
 import {
+  Platform,
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -7,6 +8,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   TextStyle,
   View,
   ViewStyle,
@@ -42,20 +44,56 @@ function getToneStyle(tone: Tone) {
   }
 }
 
+function useResponsiveMetrics() {
+  const { width } = useWindowDimensions();
+  const isCompact = width < 768;
+  const isAndroidCompact = Platform.OS === 'android' && isCompact;
+
+  return {
+    width,
+    isCompact,
+    isAndroidCompact,
+  };
+}
+
 export function Page({ children }: { children: ReactNode }) {
+  return <PageFrame>{children}</PageFrame>;
+}
+
+export function PageFrame({
+  children,
+  footer,
+  contentContainerStyle,
+}: {
+  children: ReactNode;
+  footer?: ReactNode;
+  contentContainerStyle?: StyleProp<ViewStyle>;
+}) {
+  const { isCompact, isAndroidCompact } = useResponsiveMetrics();
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <View pointerEvents="none" style={styles.pageBackdrop}>
         <View style={styles.pageGlowTop} />
         <View style={styles.pageGlowBottom} />
+        {isAndroidCompact ? <View style={styles.pageGridGlow} /> : null}
       </View>
-      <ScrollView
-        contentContainerStyle={styles.pageContent}
-        style={styles.page}
-        showsVerticalScrollIndicator={false}
-      >
-        {children}
-      </ScrollView>
+      <View style={styles.pageFrame}>
+        <ScrollView
+          contentContainerStyle={[
+            styles.pageContent,
+            isCompact ? styles.pageContentCompact : null,
+            isAndroidCompact ? styles.pageContentAndroidCompact : null,
+            footer ? styles.pageContentWithFooter : null,
+            contentContainerStyle,
+          ]}
+          style={styles.page}
+          showsVerticalScrollIndicator={false}
+        >
+          {children}
+        </ScrollView>
+        {footer ? <View style={styles.pageFooter}>{footer}</View> : null}
+      </View>
     </SafeAreaView>
   );
 }
@@ -73,16 +111,40 @@ export function HeroCard({
   children?: ReactNode;
   tone?: Tone;
 }) {
+  const { isCompact, isAndroidCompact } = useResponsiveMetrics();
   const toneStyle = getToneStyle(tone);
 
   return (
-    <View style={[styles.heroCard, { backgroundColor: toneStyle.backgroundColor }]}>
+    <View
+      style={[
+        styles.heroCard,
+        isCompact ? styles.heroCardCompact : null,
+        isAndroidCompact ? styles.heroCardAndroidCompact : null,
+        { backgroundColor: toneStyle.backgroundColor },
+      ]}
+    >
       <View pointerEvents="none" style={styles.heroAura} />
       <View pointerEvents="none" style={[styles.heroOrbLarge, { backgroundColor: toneStyle.highlight }]} />
       <View pointerEvents="none" style={styles.heroOrbSmall} />
       <Text style={[styles.eyebrow, { color: toneStyle.subtitleColor }]}>{eyebrow}</Text>
-      <Text style={[styles.heroTitle, { color: toneStyle.textColor }]}>{title}</Text>
-      <Text style={[styles.heroSubtitle, { color: toneStyle.subtitleColor }]}>{subtitle}</Text>
+      <Text
+        style={[
+          styles.heroTitle,
+          isCompact ? styles.heroTitleCompact : null,
+          { color: toneStyle.textColor },
+        ]}
+      >
+        {title}
+      </Text>
+      <Text
+        style={[
+          styles.heroSubtitle,
+          isCompact ? styles.heroSubtitleCompact : null,
+          { color: toneStyle.subtitleColor },
+        ]}
+      >
+        {subtitle}
+      </Text>
       {children}
     </View>
   );
@@ -95,8 +157,17 @@ export function SurfaceCard({
   children: ReactNode;
   style?: StyleProp<ViewStyle>;
 }) {
+  const { isCompact, isAndroidCompact } = useResponsiveMetrics();
+
   return (
-    <View style={[styles.surfaceCard, style]}>
+    <View
+      style={[
+        styles.surfaceCard,
+        isCompact ? styles.surfaceCardCompact : null,
+        isAndroidCompact ? styles.surfaceCardAndroidCompact : null,
+        style,
+      ]}
+    >
       <View pointerEvents="none" style={styles.surfaceAccent} />
       {children}
     </View>
@@ -110,10 +181,16 @@ export function SectionHeader({
   title: string;
   description?: string;
 }) {
+  const { isCompact } = useResponsiveMetrics();
+
   return (
     <View style={styles.sectionHeader}>
-      <Text style={styles.sectionTitle}>{title}</Text>
-      {description ? <Text style={styles.sectionDescription}>{description}</Text> : null}
+      <Text style={[styles.sectionTitle, isCompact ? styles.sectionTitleCompact : null]}>{title}</Text>
+      {description ? (
+        <Text style={[styles.sectionDescription, isCompact ? styles.sectionDescriptionCompact : null]}>
+          {description}
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -129,6 +206,7 @@ export function MetricCard({
   tone?: 'primary' | 'accent' | 'blue';
   onPress?: () => void;
 }) {
+  const { isCompact } = useResponsiveMetrics();
   const toneMap = {
     primary: { backgroundColor: palette.primarySoft, color: palette.primary, borderColor: '#C8D9EE' },
     accent: { backgroundColor: palette.accentSoft, color: palette.accent, borderColor: '#F0D0C6' },
@@ -139,6 +217,7 @@ export function MetricCard({
     <View
       style={[
         styles.metricCard,
+        isCompact ? styles.metricCardCompact : null,
         {
           backgroundColor: toneMap[tone].backgroundColor,
           borderColor: toneMap[tone].borderColor,
@@ -172,6 +251,7 @@ export function Pill({
   label: string;
   tone?: 'neutral' | 'primary' | 'accent' | 'warning' | 'success';
 }) {
+  const { isCompact } = useResponsiveMetrics();
   const toneStyles = {
     neutral: { backgroundColor: palette.surfaceMuted, color: palette.ink },
     primary: { backgroundColor: palette.primarySoft, color: palette.primary },
@@ -181,8 +261,16 @@ export function Pill({
   };
 
   return (
-    <View style={[styles.pill, { backgroundColor: toneStyles[tone].backgroundColor }]}>
-      <Text style={[styles.pillLabel, { color: toneStyles[tone].color }]}>{label}</Text>
+    <View
+      style={[
+        styles.pill,
+        isCompact ? styles.pillCompact : null,
+        { backgroundColor: toneStyles[tone].backgroundColor },
+      ]}
+    >
+      <Text style={[styles.pillLabel, isCompact ? styles.pillLabelCompact : null, { color: toneStyles[tone].color }]}>
+        {label}
+      </Text>
     </View>
   );
 }
@@ -198,6 +286,7 @@ export function ActionButton({
   variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
   disabled?: boolean;
 }) {
+  const { isCompact, isAndroidCompact } = useResponsiveMetrics();
   const variantStyles = {
     primary: {
       backgroundColor: palette.primary,
@@ -205,8 +294,8 @@ export function ActionButton({
       color: palette.white,
     },
     secondary: {
-      backgroundColor: palette.surfaceMuted,
-      borderColor: palette.border,
+      backgroundColor: '#F8F1E7',
+      borderColor: '#E8DAC4',
       color: palette.ink,
     },
     ghost: {
@@ -230,6 +319,8 @@ export function ActionButton({
       disabled={disabled}
       style={({ pressed }) => [
         styles.button,
+        isCompact ? styles.buttonCompact : null,
+        isAndroidCompact ? styles.buttonAndroidCompact : null,
         {
           backgroundColor: current.backgroundColor,
           borderColor: current.borderColor,
@@ -237,7 +328,9 @@ export function ActionButton({
         },
       ]}
     >
-      <Text style={[styles.buttonLabel, { color: current.color }]}>{label}</Text>
+      <Text style={[styles.buttonLabel, isCompact ? styles.buttonLabelCompact : null, { color: current.color }]}>
+        {label}
+      </Text>
     </Pressable>
   );
 }
@@ -270,6 +363,8 @@ export function InputField({
   autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
   nativeType?: 'text' | 'date' | 'email' | 'tel';
 }) {
+  const { isCompact } = useResponsiveMetrics();
+
   if (nativeType === 'date' && !multiline && typeof document !== 'undefined') {
     return (
       <View style={styles.fieldGroup}>
@@ -302,7 +397,11 @@ export function InputField({
         onChangeText={onChangeText}
         placeholder={placeholder}
         placeholderTextColor={palette.mutedInk}
-        style={[styles.input, multiline ? styles.multilineInput : null]}
+        style={[
+          styles.input,
+          isCompact ? styles.inputCompact : null,
+          multiline ? styles.multilineInput : null,
+        ]}
         value={value}
       />
     </View>
@@ -318,16 +417,25 @@ export function ChoiceChip({
   selected: boolean;
   onPress: () => void;
 }) {
+  const { isCompact } = useResponsiveMetrics();
+
   return (
     <Pressable
       onPress={onPress}
       style={({ pressed }) => [
         styles.choiceChip,
+        isCompact ? styles.choiceChipCompact : null,
         selected ? styles.choiceChipSelected : null,
         pressed ? styles.choiceChipPressed : null,
       ]}
     >
-      <Text style={[styles.choiceChipLabel, selected ? styles.choiceChipLabelSelected : null]}>
+      <Text
+        style={[
+          styles.choiceChipLabel,
+          isCompact ? styles.choiceChipLabelCompact : null,
+          selected ? styles.choiceChipLabelSelected : null,
+        ]}
+      >
         {label}
       </Text>
     </Pressable>
@@ -343,10 +451,12 @@ export function NavigationStrip<T extends string>({
   activeKey: T;
   onChange: (value: T) => void;
 }) {
+  const { isCompact } = useResponsiveMetrics();
+
   return (
     <ScrollView
       horizontal
-      contentContainerStyle={styles.navigationStrip}
+      contentContainerStyle={[styles.navigationStrip, isCompact ? styles.navigationStripCompact : null]}
       showsHorizontalScrollIndicator={false}
     >
       {items.map((item) => (
@@ -355,6 +465,7 @@ export function NavigationStrip<T extends string>({
           onPress={() => onChange(item.key)}
           style={({ pressed }) => [
             styles.navigationItem,
+            isCompact ? styles.navigationItemCompact : null,
             item.key === activeKey ? styles.navigationItemActive : null,
             pressed ? styles.navigationItemPressed : null,
           ]}
@@ -362,6 +473,7 @@ export function NavigationStrip<T extends string>({
           <Text
             style={[
               styles.navigationLabel,
+              isCompact ? styles.navigationLabelCompact : null,
               item.key === activeKey ? styles.navigationLabelActive : null,
             ]}
           >
@@ -380,7 +492,8 @@ export function Caption({
   children: ReactNode;
   style?: StyleProp<TextStyle>;
 }) {
-  return <Text style={[styles.caption, style]}>{children}</Text>;
+  const { isCompact } = useResponsiveMetrics();
+  return <Text style={[styles.caption, isCompact ? styles.captionCompact : null, style]}>{children}</Text>;
 }
 
 const webNativeInputStyle: CSSProperties = {
@@ -409,23 +522,35 @@ const styles = StyleSheet.create({
   },
   pageGlowTop: {
     position: 'absolute',
-    width: 320,
-    height: 320,
+    width: 360,
+    height: 360,
     borderRadius: radius.pill,
-    top: -120,
-    left: -90,
-    backgroundColor: '#D9E8F6',
-    opacity: 0.55,
+    top: -150,
+    left: -110,
+    backgroundColor: '#F7DCCF',
+    opacity: 0.68,
   },
   pageGlowBottom: {
     position: 'absolute',
-    width: 280,
-    height: 280,
+    width: 320,
+    height: 320,
     borderRadius: radius.pill,
+    right: -110,
+    bottom: -10,
+    backgroundColor: '#DDE8F8',
+    opacity: 0.58,
+  },
+  pageGridGlow: {
+    position: 'absolute',
     right: -80,
-    bottom: 50,
-    backgroundColor: '#FCE7DF',
-    opacity: 0.42,
+    top: 180,
+    width: 220,
+    height: 220,
+    borderRadius: radius.pill,
+    backgroundColor: 'rgba(232, 93, 75, 0.08)',
+  },
+  pageFrame: {
+    flex: 1,
   },
   page: {
     flex: 1,
@@ -440,6 +565,26 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.xxxl,
     gap: spacing.lg,
   },
+  pageContentCompact: {
+    maxWidth: '100%',
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.lg,
+    paddingBottom: 116,
+    gap: spacing.md,
+  },
+  pageContentAndroidCompact: {
+    paddingTop: spacing.md,
+    paddingHorizontal: 14,
+  },
+  pageContentWithFooter: {
+    paddingBottom: 136,
+  },
+  pageFooter: {
+    position: 'absolute',
+    left: spacing.lg,
+    right: spacing.lg,
+    bottom: spacing.lg,
+  },
   heroCard: {
     borderRadius: radius.xl,
     overflow: 'hidden',
@@ -447,8 +592,17 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xxl,
     gap: spacing.md,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+    borderColor: 'rgba(255,255,255,0.14)',
     ...shadow.card,
+  },
+  heroCardCompact: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.xl,
+    borderRadius: radius.lg,
+    gap: spacing.sm,
+  },
+  heroCardAndroidCompact: {
+    borderRadius: 30,
   },
   heroAura: {
     position: 'absolute',
@@ -457,7 +611,7 @@ const styles = StyleSheet.create({
     top: 18,
     height: 94,
     borderRadius: 28,
-    backgroundColor: 'rgba(255,255,255,0.06)',
+    backgroundColor: 'rgba(255,255,255,0.08)',
   },
   heroOrbLarge: {
     position: 'absolute',
@@ -475,7 +629,7 @@ const styles = StyleSheet.create({
     borderRadius: radius.pill,
     right: 28,
     bottom: -46,
-    backgroundColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(255,255,255,0.12)',
   },
   eyebrow: {
     fontSize: typeScale.eyebrow,
@@ -488,10 +642,19 @@ const styles = StyleSheet.create({
     lineHeight: 42,
     fontWeight: '800',
   },
+  heroTitleCompact: {
+    fontSize: 30,
+    lineHeight: 36,
+  },
   heroSubtitle: {
     fontSize: typeScale.body,
     lineHeight: 24,
     maxWidth: 560,
+  },
+  heroSubtitleCompact: {
+    fontSize: 14,
+    lineHeight: 21,
+    maxWidth: '100%',
   },
   surfaceCard: {
     backgroundColor: palette.surface,
@@ -503,13 +666,22 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     ...shadow.card,
   },
+  surfaceCardCompact: {
+    padding: spacing.md,
+    borderRadius: radius.md,
+    gap: spacing.sm,
+  },
+  surfaceCardAndroidCompact: {
+    borderRadius: 24,
+    backgroundColor: 'rgba(255, 253, 252, 0.98)',
+  },
   surfaceAccent: {
     position: 'absolute',
     left: 0,
     top: 0,
     right: 0,
-    height: 1,
-    backgroundColor: '#EEF4FB',
+    height: 5,
+    backgroundColor: '#F6E4D7',
   },
   sectionHeader: {
     gap: spacing.xs,
@@ -519,10 +691,17 @@ const styles = StyleSheet.create({
     color: palette.ink,
     fontWeight: '800',
   },
+  sectionTitleCompact: {
+    fontSize: 18,
+  },
   sectionDescription: {
     fontSize: typeScale.body,
     lineHeight: 22,
     color: palette.mutedInk,
+  },
+  sectionDescriptionCompact: {
+    fontSize: 14,
+    lineHeight: 20,
   },
   metricCard: {
     flex: 1,
@@ -531,6 +710,11 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     gap: spacing.xs,
     borderWidth: 1,
+  },
+  metricCardCompact: {
+    minWidth: 92,
+    borderRadius: 18,
+    padding: spacing.sm,
   },
   metricPressable: {
     flex: 1,
@@ -554,9 +738,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: 9,
   },
+  pillCompact: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
   pillLabel: {
     fontSize: 12,
     fontWeight: '700',
+  },
+  pillLabelCompact: {
+    fontSize: 11,
   },
   button: {
     minHeight: 50,
@@ -567,9 +758,20 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     ...shadow.card,
   },
+  buttonCompact: {
+    minHeight: 54,
+    paddingHorizontal: spacing.md,
+    borderRadius: 20,
+  },
+  buttonAndroidCompact: {
+    elevation: 3,
+  },
   buttonLabel: {
     fontSize: 15,
     fontWeight: '800',
+  },
+  buttonLabelCompact: {
+    fontSize: 14,
   },
   detailRow: {
     gap: spacing.xs,
@@ -600,11 +802,16 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: palette.border,
-    backgroundColor: palette.surface,
+    backgroundColor: '#FFFEFD',
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     color: palette.ink,
     fontSize: 15,
+  },
+  inputCompact: {
+    minHeight: 54,
+    borderRadius: 18,
+    fontSize: 16,
   },
   multilineInput: {
     minHeight: 110,
@@ -616,7 +823,11 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderWidth: 1,
     borderColor: palette.border,
-    backgroundColor: palette.surface,
+    backgroundColor: '#FFFCF8',
+  },
+  choiceChipCompact: {
+    paddingHorizontal: 12,
+    paddingVertical: 9,
   },
   choiceChipSelected: {
     backgroundColor: palette.primary,
@@ -630,11 +841,17 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
   },
+  choiceChipLabelCompact: {
+    fontSize: 12,
+  },
   choiceChipLabelSelected: {
     color: palette.white,
   },
   navigationStrip: {
     gap: spacing.sm,
+  },
+  navigationStripCompact: {
+    gap: spacing.xs,
   },
   navigationItem: {
     borderRadius: radius.pill,
@@ -642,7 +859,11 @@ const styles = StyleSheet.create({
     borderColor: palette.border,
     paddingHorizontal: spacing.md,
     paddingVertical: 12,
-    backgroundColor: palette.surface,
+    backgroundColor: '#FFFCF8',
+  },
+  navigationItemCompact: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
   navigationItemActive: {
     backgroundColor: palette.primary,
@@ -656,6 +877,9 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
   },
+  navigationLabelCompact: {
+    fontSize: 12,
+  },
   navigationLabelActive: {
     color: palette.white,
   },
@@ -663,5 +887,9 @@ const styles = StyleSheet.create({
     color: palette.mutedInk,
     fontSize: 13,
     lineHeight: 19,
+  },
+  captionCompact: {
+    fontSize: 12,
+    lineHeight: 18,
   },
 });

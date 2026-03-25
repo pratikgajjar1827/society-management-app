@@ -388,6 +388,106 @@ CREATE TABLE IF NOT EXISTS entryLogs (
   FOREIGN KEY (unitId) REFERENCES units(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS visitorPasses (
+  id TEXT PRIMARY KEY,
+  societyId TEXT NOT NULL,
+  unitId TEXT NOT NULL,
+  createdByUserId TEXT NOT NULL,
+  visitorName TEXT NOT NULL,
+  phone TEXT,
+  category TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  guestCount INTEGER NOT NULL,
+  expectedAt TEXT NOT NULL,
+  validUntil TEXT NOT NULL,
+  vehicleNumber TEXT,
+  notes TEXT,
+  passCode TEXT NOT NULL,
+  status TEXT NOT NULL,
+  createdAt TEXT NOT NULL,
+  checkedInAt TEXT,
+  checkedOutAt TEXT,
+  updatedAt TEXT NOT NULL,
+  FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE,
+  FOREIGN KEY (unitId) REFERENCES units(id) ON DELETE CASCADE,
+  FOREIGN KEY (createdByUserId) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS securityGuestRequests (
+  id TEXT PRIMARY KEY,
+  societyId TEXT NOT NULL,
+  unitId TEXT NOT NULL,
+  residentUserId TEXT NOT NULL,
+  createdByUserId TEXT NOT NULL,
+  visitorPassId TEXT,
+  guestName TEXT NOT NULL,
+  phone TEXT,
+  category TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  guestCount INTEGER NOT NULL,
+  vehicleNumber TEXT,
+  guestPhotoDataUrl TEXT,
+  guestPhotoCapturedAt TEXT,
+  vehiclePhotoDataUrl TEXT,
+  vehiclePhotoCapturedAt TEXT,
+  gateNotes TEXT,
+  status TEXT NOT NULL,
+  createdAt TEXT NOT NULL,
+  respondedAt TEXT,
+  respondedByUserId TEXT,
+  checkedInAt TEXT,
+  checkedOutAt TEXT,
+  updatedAt TEXT NOT NULL,
+  FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE,
+  FOREIGN KEY (unitId) REFERENCES units(id) ON DELETE CASCADE,
+  FOREIGN KEY (residentUserId) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (createdByUserId) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (visitorPassId) REFERENCES visitorPasses(id) ON DELETE SET NULL,
+  FOREIGN KEY (respondedByUserId) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS securityGuestLogs (
+  id TEXT PRIMARY KEY,
+  societyId TEXT NOT NULL,
+  requestId TEXT NOT NULL,
+  actorUserId TEXT,
+  actorRole TEXT NOT NULL,
+  action TEXT NOT NULL,
+  note TEXT,
+  createdAt TEXT NOT NULL,
+  FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE,
+  FOREIGN KEY (requestId) REFERENCES securityGuestRequests(id) ON DELETE CASCADE,
+  FOREIGN KEY (actorUserId) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS chatThreads (
+  id TEXT PRIMARY KEY,
+  societyId TEXT NOT NULL,
+  type TEXT NOT NULL,
+  title TEXT,
+  createdByUserId TEXT,
+  participantUserIds TEXT NOT NULL,
+  directKey TEXT,
+  createdAt TEXT NOT NULL,
+  lastMessageAt TEXT,
+  updatedAt TEXT NOT NULL,
+  FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE,
+  FOREIGN KEY (createdByUserId) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS chatMessages (
+  id TEXT PRIMARY KEY,
+  threadId TEXT NOT NULL,
+  societyId TEXT NOT NULL,
+  senderUserId TEXT NOT NULL,
+  body TEXT NOT NULL,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL,
+  FOREIGN KEY (threadId) REFERENCES chatThreads(id) ON DELETE CASCADE,
+  FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE,
+  FOREIGN KEY (senderUserId) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS userProfiles (
   userId TEXT PRIMARY KEY,
   preferredRole TEXT,

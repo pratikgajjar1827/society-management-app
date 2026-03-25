@@ -1,6 +1,7 @@
 import { ReactNode, createContext, useContext, useEffect, useState } from 'react';
 
 import {
+  clearPersistedApiBaseUrl,
   assignChairmanResidence as assignChairmanResidenceRequest,
   captureResidentUpiPayment as captureResidentUpiPaymentRequest,
   createAnnouncement as createAnnouncementRequest,
@@ -9,30 +10,45 @@ import {
   createEntryLogRecord as createEntryLogRecordRequest,
   createExpenseRecord as createExpenseRecordRequest,
   createSecurityGuard as createSecurityGuardRequest,
+  createSecurityGuestRequest as createSecurityGuestRequestRequest,
   createSocietyWorkspace as createSocietyWorkspaceRequest,
   createStaffVerification as createStaffVerificationRequest,
+  createVisitorPass as createVisitorPassRequest,
   deleteSocietyWorkspace as deleteSocietyWorkspaceRequest,
   enrollIntoSociety as enrollIntoSocietyRequest,
   fetchBootstrapData,
+  fetchSessionSnapshot as fetchSessionSnapshotRequest,
   getApiBaseUrl,
+  getDefaultApiBaseUrl,
   localFallbackSnapshot,
+  loadPersistedApiBaseUrl,
   markAnnouncementRead as markAnnouncementReadRequest,
+  persistApiBaseUrl,
   requestOtp as requestOtpRequest,
   recordManualPayment as recordManualPaymentRequest,
   reviewAmenityBooking as reviewAmenityBookingRequest,
   reviewResidentPayment as reviewResidentPaymentRequest,
+  reviewSecurityGuestRequest as reviewSecurityGuestRequestRequest,
   reviewStaffVerification as reviewStaffVerificationRequest,
   reviewJoinRequest as reviewJoinRequestRequest,
+  sendDirectChatMessage as sendDirectChatMessageRequest,
   sendMaintenanceReminder as sendMaintenanceReminderRequest,
+  sendSocietyChatMessage as sendSocietyChatMessageRequest,
+  sendSecurityGuestMessage as sendSecurityGuestMessageRequest,
   submitResidentPayment as submitResidentPaymentRequest,
+  ringSecurityGuestRequest as ringSecurityGuestRequestRequest,
   updateResidenceProfile as updateResidenceProfileRequest,
   updateMaintenancePlanSettings as updateMaintenancePlanSettingsRequest,
   updateSocietyProfile as updateSocietyProfileRequest,
   updateMaintenanceBillingConfig as updateMaintenanceBillingConfigRequest,
   updateComplaintTicket as updateComplaintTicketRequest,
+  updateSecurityGuestRequestStatus as updateSecurityGuestRequestStatusRequest,
+  updateVisitorPassStatus as updateVisitorPassStatusRequest,
   verifyOtp as verifyOtpRequest,
   type AnnouncementCreateInput,
   type ResidenceProfileInput,
+  type SecurityGuestRequestCreateInput,
+  type VisitorPassCreateInput,
 } from '../api/client';
 import {
   AuthChannel,
@@ -48,6 +64,7 @@ import {
   OnboardingState,
   PaymentMethod,
   RoleProfile,
+  SecurityGuestRequestStatus,
   SeedData,
   SocietySetupDraft,
   StaffCategory,
@@ -185,6 +202,32 @@ interface EntryLogInput {
   status: EntryStatus;
 }
 
+interface SecurityGuestDecisionInput {
+  decision: 'approve' | 'deny';
+  note?: string;
+}
+
+interface SecurityGuestStatusInput {
+  status: SecurityGuestRequestStatus;
+  note?: string;
+}
+
+interface SecurityGuestMessageInput {
+  message: string;
+}
+
+interface SecurityGuestRingInput {
+  note?: string;
+}
+
+interface SocietyChatMessageInput {
+  message: string;
+}
+
+interface VisitorPassStatusInput {
+  status: 'scheduled' | 'checkedIn' | 'completed' | 'cancelled';
+}
+
 interface SocietyMutationResponse {
   currentUserId: string;
   chairmanAssigned: boolean;
@@ -216,6 +259,8 @@ interface AppState {
   onboarding?: OnboardingState;
   isHydrating: boolean;
   isSyncing: boolean;
+  apiBaseUrl: string;
+  hasCustomApiBaseUrl: boolean;
   apiError?: string;
   noticeMessage?: string;
   dataSource: DataSource;
@@ -226,6 +271,9 @@ interface AppContextValue {
   actions: {
     requestOtp: (destination: string) => Promise<void>;
     verifyOtp: (code: string) => Promise<void>;
+    retryBackendConnection: () => Promise<boolean>;
+    saveApiBaseUrl: (value: string) => Promise<boolean>;
+    resetApiBaseUrl: () => Promise<boolean>;
     resetAuthFlow: () => void;
     logout: () => void;
     goToPortalSelection: () => void;
@@ -298,6 +346,45 @@ interface AppContextValue {
       verificationState: 'verified' | 'expired',
     ) => Promise<boolean>;
     createEntryLogRecord: (societyId: string, input: EntryLogInput) => Promise<boolean>;
+    createSecurityGuestRequest: (
+      societyId: string,
+      input: SecurityGuestRequestCreateInput,
+    ) => Promise<boolean>;
+    reviewSecurityGuestRequest: (
+      societyId: string,
+      requestId: string,
+      input: SecurityGuestDecisionInput,
+    ) => Promise<boolean>;
+    updateSecurityGuestRequestStatus: (
+      societyId: string,
+      requestId: string,
+      input: SecurityGuestStatusInput,
+    ) => Promise<boolean>;
+    sendSecurityGuestMessage: (
+      societyId: string,
+      requestId: string,
+      input: SecurityGuestMessageInput,
+    ) => Promise<boolean>;
+    ringSecurityGuestRequest: (
+      societyId: string,
+      requestId: string,
+      input?: SecurityGuestRingInput,
+    ) => Promise<boolean>;
+    sendSocietyChatMessage: (
+      societyId: string,
+      input: SocietyChatMessageInput,
+    ) => Promise<boolean>;
+    sendDirectChatMessage: (
+      societyId: string,
+      recipientUserId: string,
+      input: SocietyChatMessageInput,
+    ) => Promise<boolean>;
+    createVisitorPass: (societyId: string, input: VisitorPassCreateInput) => Promise<boolean>;
+    updateVisitorPassStatus: (
+      societyId: string,
+      visitorPassId: string,
+      input: VisitorPassStatusInput,
+    ) => Promise<boolean>;
   };
 }
 
@@ -312,6 +399,8 @@ const initialState: AppState = {
   onboarding: undefined,
   isHydrating: true,
   isSyncing: false,
+  apiBaseUrl: getApiBaseUrl(),
+  hasCustomApiBaseUrl: false,
   apiError: undefined,
   noticeMessage: undefined,
   dataSource: 'fallback',
@@ -319,12 +408,16 @@ const initialState: AppState = {
 
 const AppContext = createContext<AppContextValue | undefined>(undefined);
 
-  function getErrorMessage(error: unknown) {
+function getErrorMessage(error: unknown) {
   if (error instanceof Error) {
     return error.message;
   }
 
   return 'Unknown application error.';
+}
+
+function getBackendUnavailableMessage(apiBaseUrl: string) {
+  return `Backend not reachable at ${apiBaseUrl}. Start \`npm run server\` to use SQLite-backed data and OTP authentication.`;
 }
 
 function resolveScreen(onboarding?: OnboardingState): Screen {
@@ -344,12 +437,121 @@ function resolveScreen(onboarding?: OnboardingState): Screen {
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AppState>(initialState);
 
+  async function refreshBackendConnection({
+    loadingMode = 'sync',
+    apiBaseUrl = getApiBaseUrl(),
+    hasCustomApiBaseUrl = state.hasCustomApiBaseUrl,
+    successMessage,
+  }: {
+    loadingMode?: 'hydrate' | 'sync';
+    apiBaseUrl?: string;
+    hasCustomApiBaseUrl?: boolean;
+    successMessage?: string;
+  } = {}) {
+    const sessionToken = state.session.sessionToken;
+
+    setState((currentState) => ({
+      ...currentState,
+      isHydrating: loadingMode === 'hydrate',
+      isSyncing: loadingMode === 'sync',
+      apiBaseUrl,
+      hasCustomApiBaseUrl,
+      apiError: undefined,
+      noticeMessage: undefined,
+    }));
+
+    try {
+      const bootstrapResponse = await fetchBootstrapData();
+      let sessionResponse:
+        | Awaited<ReturnType<typeof fetchSessionSnapshotRequest>>
+        | undefined;
+      let sessionError: string | undefined;
+
+      if (sessionToken) {
+        try {
+          sessionResponse = await fetchSessionSnapshotRequest(sessionToken);
+        } catch (error) {
+          sessionError = getErrorMessage(error);
+        }
+      }
+
+      setState((currentState) => ({
+        ...currentState,
+        data: sessionResponse?.data ?? bootstrapResponse.data,
+        chairmanAssigned: sessionResponse?.chairmanAssigned ?? bootstrapResponse.chairmanAssigned,
+        amenityLibrary: sessionResponse?.amenityLibrary ?? bootstrapResponse.amenityLibrary,
+        defaultSetupDraft: sessionResponse?.defaultSetupDraft ?? bootstrapResponse.defaultSetupDraft,
+        onboarding: sessionResponse?.onboarding ?? currentState.onboarding,
+        isHydrating: false,
+        isSyncing: false,
+        apiBaseUrl,
+        hasCustomApiBaseUrl,
+        apiError: sessionError,
+        noticeMessage: sessionError ? undefined : successMessage,
+        dataSource: 'remote',
+        session: sessionResponse
+          ? {
+              ...currentState.session,
+              userId: sessionResponse.currentUserId,
+              sessionToken: sessionResponse.sessionToken,
+            }
+          : currentState.session,
+      }));
+
+      return !sessionError;
+    } catch (error) {
+      setState((currentState) => ({
+        ...currentState,
+        isHydrating: false,
+        isSyncing: false,
+        apiBaseUrl,
+        hasCustomApiBaseUrl,
+        dataSource: 'fallback',
+        apiError: getBackendUnavailableMessage(apiBaseUrl),
+        noticeMessage: undefined,
+      }));
+
+      return false;
+    }
+  }
+
   useEffect(() => {
     let active = true;
 
     async function hydrate() {
+      const persistedApiBaseUrl = await loadPersistedApiBaseUrl();
+
+      if (!active) {
+        return;
+      }
+
+      await refreshBackendConnection({
+        loadingMode: 'hydrate',
+        apiBaseUrl: persistedApiBaseUrl ?? getDefaultApiBaseUrl(),
+        hasCustomApiBaseUrl: Boolean(persistedApiBaseUrl),
+      });
+    }
+
+    void hydrate();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const sessionToken = state.session.sessionToken;
+
+    if (!sessionToken) {
+      return undefined;
+    }
+
+    let active = true;
+    const activeSessionToken = sessionToken;
+
+    async function refreshSnapshot() {
       try {
-        const response = await fetchBootstrapData();
+        const response = await fetchSessionSnapshotRequest(activeSessionToken);
 
         if (!active) {
           return;
@@ -361,10 +563,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
           chairmanAssigned: response.chairmanAssigned,
           amenityLibrary: response.amenityLibrary,
           defaultSetupDraft: response.defaultSetupDraft,
-          isHydrating: false,
-          apiError: undefined,
-          noticeMessage: undefined,
+          onboarding: response.onboarding,
+          apiError: currentState.apiError?.startsWith('Backend not reachable') ? undefined : currentState.apiError,
           dataSource: 'remote',
+          session: {
+            ...currentState.session,
+            userId: response.currentUserId,
+            sessionToken: response.sessionToken,
+          },
         }));
       } catch (error) {
         if (!active) {
@@ -373,20 +579,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         setState((currentState) => ({
           ...currentState,
-          isHydrating: false,
-          dataSource: 'fallback',
-          apiError: `Backend not reachable at ${getApiBaseUrl()}. Start \`npm run server\` to use SQLite-backed data and OTP authentication.`,
-          noticeMessage: undefined,
+          apiError:
+            currentState.apiError ??
+            (error instanceof Error ? error.message : 'Could not refresh workspace data.'),
         }));
       }
     }
 
-    hydrate();
+    void refreshSnapshot();
+
+    const interval = setInterval(() => {
+      void refreshSnapshot();
+    }, 15000);
 
     return () => {
       active = false;
+      clearInterval(interval);
     };
-  }, []);
+  }, [state.session.sessionToken, state.apiBaseUrl]);
 
   async function runSocietyMutation(
     societyId: string,
@@ -444,10 +654,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
       return true;
     } catch (error) {
+      const message = getErrorMessage(error);
+
+      if (message === 'Route not found.') {
+        setState((currentState) => ({
+          ...currentState,
+          isSyncing: false,
+          apiError:
+            'This action needs the latest backend routes. Restart the backend and try again.',
+          noticeMessage: undefined,
+        }));
+        return false;
+      }
+
       setState((currentState) => ({
         ...currentState,
         isSyncing: false,
-        apiError: getErrorMessage(error),
+        apiError: message,
         noticeMessage: undefined,
       }));
       return false;
@@ -455,6 +678,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }
 
   const actions: AppContextValue['actions'] = {
+    retryBackendConnection: async () =>
+      refreshBackendConnection({
+        loadingMode: 'sync',
+        apiBaseUrl: state.apiBaseUrl,
+        hasCustomApiBaseUrl: state.hasCustomApiBaseUrl,
+        successMessage: 'Backend connection refreshed.',
+      }),
+    saveApiBaseUrl: async (value) => {
+      const normalizedValue = value.trim();
+
+      if (!normalizedValue) {
+        setState((currentState) => ({
+          ...currentState,
+          apiError: 'Enter the backend URL in the format http://YOUR-LAN-IP:4000.',
+          noticeMessage: undefined,
+        }));
+        return false;
+      }
+
+      const nextApiBaseUrl = await persistApiBaseUrl(normalizedValue);
+
+      return refreshBackendConnection({
+        loadingMode: 'sync',
+        apiBaseUrl: nextApiBaseUrl,
+        hasCustomApiBaseUrl: true,
+        successMessage: 'Backend URL saved.',
+      });
+    },
+    resetApiBaseUrl: async () => {
+      const nextApiBaseUrl = await clearPersistedApiBaseUrl();
+
+      return refreshBackendConnection({
+        loadingMode: 'sync',
+        apiBaseUrl: nextApiBaseUrl,
+        hasCustomApiBaseUrl: false,
+        successMessage: 'Backend URL reset to this device default.',
+      });
+    },
     requestOtp: async (destination) => {
       setState((currentState) => ({
         ...currentState,
@@ -1212,7 +1473,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       runSocietyMutation(
         societyId,
         (sessionToken) => createSecurityGuardRequest(sessionToken, societyId, input),
-        'Guard roster updated.',
+        'Guard roster updated. That phone number can now use the Security workspace for this society.',
       ),
     createStaffVerification: async (societyId, input) =>
       runSocietyMutation(
@@ -1243,6 +1504,76 @@ export function AppProvider({ children }: { children: ReactNode }) {
         societyId,
         (sessionToken) => createEntryLogRecordRequest(sessionToken, societyId, input),
         'Entry log captured.',
+      ),
+    createSecurityGuestRequest: async (societyId, input) =>
+      runSocietyMutation(
+        societyId,
+        (sessionToken) => createSecurityGuestRequestRequest(sessionToken, societyId, input),
+        'Guest captured and sent to the resident for approval.',
+      ),
+    reviewSecurityGuestRequest: async (societyId, requestId, input) =>
+      runSocietyMutation(
+        societyId,
+        (sessionToken) =>
+          reviewSecurityGuestRequestRequest(sessionToken, requestId, input.decision, input.note),
+        input.decision === 'approve'
+          ? 'Guest approved. Security can check the visitor in now.'
+          : 'Guest denied. Security has been updated.',
+      ),
+    updateSecurityGuestRequestStatus: async (societyId, requestId, input) =>
+      runSocietyMutation(
+        societyId,
+        (sessionToken) =>
+          updateSecurityGuestRequestStatusRequest(sessionToken, requestId, input.status, input.note),
+        input.status === 'checkedIn'
+          ? 'Guest checked in.'
+          : input.status === 'completed'
+            ? 'Guest checked out and logged.'
+            : input.status === 'cancelled'
+              ? 'Gate request cancelled.'
+              : 'Gate request updated.',
+      ),
+    sendSecurityGuestMessage: async (societyId, requestId, input) =>
+      runSocietyMutation(
+        societyId,
+        (sessionToken) => sendSecurityGuestMessageRequest(sessionToken, requestId, input),
+        'Message sent to the gate approval thread.',
+      ),
+    ringSecurityGuestRequest: async (societyId, requestId, input = {}) =>
+      runSocietyMutation(
+        societyId,
+        (sessionToken) => ringSecurityGuestRequestRequest(sessionToken, requestId, input),
+        'Resident ring sent for faster gate approval.',
+      ),
+    sendSocietyChatMessage: async (societyId, input) =>
+      runSocietyMutation(
+        societyId,
+        (sessionToken) => sendSocietyChatMessageRequest(sessionToken, societyId, input),
+        'Message sent to the society chat.',
+      ),
+    sendDirectChatMessage: async (societyId, recipientUserId, input) =>
+      runSocietyMutation(
+        societyId,
+        (sessionToken) => sendDirectChatMessageRequest(sessionToken, societyId, recipientUserId, input),
+        'Direct message sent.',
+      ),
+    createVisitorPass: async (societyId, input) =>
+      runSocietyMutation(
+        societyId,
+        (sessionToken) => createVisitorPassRequest(sessionToken, societyId, input),
+        'Visitor pass created and shared with the security desk.',
+      ),
+    updateVisitorPassStatus: async (societyId, visitorPassId, input) =>
+      runSocietyMutation(
+        societyId,
+        (sessionToken) => updateVisitorPassStatusRequest(sessionToken, visitorPassId, input.status),
+        input.status === 'checkedIn'
+          ? 'Visitor marked checked in.'
+          : input.status === 'completed'
+            ? 'Visitor marked exited.'
+            : input.status === 'cancelled'
+              ? 'Visitor pass cancelled.'
+              : 'Visitor pass updated.',
       ),
   };
 

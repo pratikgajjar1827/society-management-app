@@ -1,9 +1,8 @@
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import {
   ActionButton,
   Caption,
-  HeroCard,
   Page,
   Pill,
   SectionHeader,
@@ -14,21 +13,39 @@ import { palette, spacing } from '../theme/tokens';
 
 export function AccountRoleSelectionScreen() {
   const { state, actions } = useApp();
+  const { width } = useWindowDimensions();
+  const isCompact = width < 768;
   const canCreateSociety = state.session.accountRole === 'superUser';
   const hasMemberships = Boolean(state.onboarding?.membershipsCount);
 
   return (
     <Page>
-      <HeroCard
-        eyebrow="Portal Selection"
-        title="Choose how this mobile number should continue."
-        subtitle="If you are setting up a new residential community, use the society creation portal. If the society already exists, use the join portal to find it by country, state, city, and area."
-        tone="accent"
-      >
-        <View style={styles.heroMeta}>
-          <Pill label={state.session.verifiedDestination ?? 'OTP verified'} tone="warning" />
+      <SurfaceCard style={[styles.heroCard, isCompact ? styles.heroCardCompact : null]}>
+        <View style={[styles.heroTop, isCompact ? styles.heroTopCompact : null]}>
+          <View style={[styles.heroCopy, isCompact ? styles.heroCopyCompact : null]}>
+            <Pill label="Portal selection" tone="accent" />
+            <Text style={[styles.heroTitle, isCompact ? styles.heroTitleCompact : null]}>
+              Choose how this mobile number should continue
+            </Text>
+            <Caption style={styles.heroDescription}>
+              Open workspaces directly, create a new society, or use the guided join journey with a cleaner Android-style flow.
+            </Caption>
+          </View>
+          <View style={styles.heroBadgeStack}>
+            <Pill label={state.session.verifiedDestination ?? 'OTP verified'} tone="warning" />
+          </View>
         </View>
-      </HeroCard>
+        <View style={[styles.heroMeta, isCompact ? styles.heroMetaCompact : null]}>
+          <View style={[styles.heroMetric, isCompact ? styles.heroMetricCompact : null]}>
+            <Text style={styles.heroMetricValue}>{hasMemberships ? 'Ready' : 'Fresh'}</Text>
+            <Caption>workspace state</Caption>
+          </View>
+          <View style={[styles.heroMetric, isCompact ? styles.heroMetricCompact : null]}>
+            <Text style={styles.heroMetricValue}>{canCreateSociety ? '3' : '2'}</Text>
+            <Caption>available paths</Caption>
+          </View>
+        </View>
+      </SurfaceCard>
 
       <SectionHeader
         title="Two separate portals"
@@ -99,10 +116,75 @@ export function AccountRoleSelectionScreen() {
 }
 
 const styles = StyleSheet.create({
+  heroCard: {
+    gap: spacing.lg,
+    backgroundColor: '#FFF8F0',
+  },
+  heroCardCompact: {
+    gap: spacing.md,
+  },
+  heroTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+    flexWrap: 'wrap',
+  },
+  heroTopCompact: {
+    gap: spacing.sm,
+  },
+  heroCopy: {
+    flex: 1,
+    minWidth: 260,
+    gap: spacing.sm,
+  },
+  heroCopyCompact: {
+    minWidth: 0,
+  },
+  heroTitle: {
+    fontSize: 34,
+    lineHeight: 40,
+    fontWeight: '800',
+    color: palette.ink,
+  },
+  heroTitleCompact: {
+    fontSize: 28,
+    lineHeight: 33,
+  },
+  heroDescription: {
+    maxWidth: 700,
+  },
+  heroBadgeStack: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    flexWrap: 'wrap',
+  },
   heroMeta: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.sm,
+  },
+  heroMetaCompact: {
+    gap: spacing.xs,
+  },
+  heroMetric: {
+    minWidth: 120,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#E7D9C8',
+    backgroundColor: '#FFFDF9',
+    gap: 2,
+  },
+  heroMetricCompact: {
+    flex: 1,
+    minWidth: 0,
+  },
+  heroMetricValue: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: palette.accent,
   },
   cardTitle: {
     fontSize: 22,

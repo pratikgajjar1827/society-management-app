@@ -1,22 +1,22 @@
 export const palette = {
-  background: '#F3F7FB',
-  surface: '#FFFFFF',
-  surfaceMuted: '#EDF3FA',
-  ink: '#142033',
-  mutedInk: '#5F6F82',
-  primary: '#18324B',
-  primaryDark: '#0D2032',
-  primarySoft: '#DCE8F5',
-  accent: '#E07A5F',
-  accentSoft: '#FCE4DC',
-  gold: '#C9962A',
-  goldSoft: '#F6E8C4',
-  blue: '#2F6EA7',
-  blueSoft: '#DCEBFA',
-  success: '#1F8F5F',
-  warning: '#A26917',
-  danger: '#C44F45',
-  border: '#D7E1EC',
+  background: '#F7F2EA',
+  surface: '#FFFDFC',
+  surfaceMuted: '#F4EDE2',
+  ink: '#223144',
+  mutedInk: '#6A7282',
+  primary: '#24364A',
+  primaryDark: '#162433',
+  primarySoft: '#DEE8F3',
+  accent: '#E85D4B',
+  accentSoft: '#FFE4DE',
+  gold: '#D3A13F',
+  goldSoft: '#FFF0CF',
+  blue: '#4C7AB3',
+  blueSoft: '#E1EDFB',
+  success: '#2C8A62',
+  warning: '#A86A1B',
+  danger: '#CB4D43',
+  border: '#E7DDCF',
   white: '#FFFFFF',
   overlay: '#08111C',
 } as const;
@@ -33,9 +33,9 @@ export const spacing = {
 
 export const radius = {
   sm: 14,
-  md: 20,
-  lg: 26,
-  xl: 34,
+  md: 22,
+  lg: 28,
+  xl: 36,
   pill: 999,
 } as const;
 
@@ -49,10 +49,10 @@ export const typeScale = {
 
 export const shadow = {
   card: {
-    shadowColor: '#10253B',
-    shadowOpacity: 0.08,
-    shadowRadius: 22,
-    shadowOffset: { width: 0, height: 14 },
+    shadowColor: '#7E6148',
+    shadowOpacity: 0.09,
+    shadowRadius: 24,
+    shadowOffset: { width: 0, height: 16 },
     elevation: 4,
   },
 } as const;

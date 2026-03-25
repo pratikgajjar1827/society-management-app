@@ -1,22 +1,24 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Image, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Image, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import {
   ActionButton,
   Caption,
   ChoiceChip,
-  HeroCard,
   InputField,
   MetricCard,
   NavigationStrip,
-  Page,
+  PageFrame,
   Pill,
   SectionHeader,
   SurfaceCard,
 } from '../../components/ui';
+import { ModuleGlyph } from '../../components/ModuleGlyph';
 import { MaintenanceReceiptCard } from '../../components/MaintenanceReceiptCard';
+import { ResidentHomeExperience } from './ResidentHomeExperience';
 import { useApp } from '../../state/AppContext';
-import { palette, spacing } from '../../theme/tokens';
+import { palette, radius, shadow, spacing } from '../../theme/tokens';
+import { openPhoneDialer, openWhatsAppConversation, startRingAlert, stopRingAlert } from '../../utils/communication';
 import {
   openWebDataUrlInNewTab,
   pickWebFileAsDataUrl,
@@ -30,25 +32,35 @@ import {
   formatShortDate,
   getAmenitiesForSociety,
   getAnnouncementsForSociety,
+  getChatMessagesForThread,
   getBookingsForUserSociety,
   getComplaintUpdatesForComplaint,
   getComplaintsForUserSociety,
   getCommunityMembersForSociety,
   getCurrentUser,
+  getDirectChatThreadsForUser,
   getEntryLogsForSociety,
   getGuardRosterForSociety,
   getImportantContactsForSociety,
   getMembershipForSociety,
   getPaymentRemindersForUser,
+  getPendingSecurityGuestRequestsForResident,
   getPaymentsForUserSociety,
   getResidenceProfileForUserSociety,
   getResidentOverview,
   getRulesForSociety,
+  getSocietyChatThread,
+  getSecurityGuestConversationForRequest,
+  getSecurityGuestRequestTone,
   getSelectedSociety,
+  getSecurityGuestRequestsForResident,
   getStaffVerificationDirectory,
   getUnitsForSociety,
   getVehicleDirectoryForSociety,
+  getVisitorPassesForUserSociety,
   humanizeRole,
+  humanizeSecurityGuestLogAction,
+  humanizeSecurityGuestRequestStatus,
 } from '../../utils/selectors';
 import {
   ComplaintCategory,
@@ -56,10 +68,15 @@ import {
   PaymentMethod,
   SeedData,
   VehicleType,
+  VisitorCategory,
 } from '../../types/domain';
 
-type ResidentTab = 'home' | 'community' | 'billing' | 'notices' | 'bookings' | 'helpdesk' | 'profile';
-type ResidentCommunitySection = 'members' | 'vehicles' | 'contacts' | 'staff';
+type ResidentTab = 'home' | 'visitors' | 'community' | 'billing' | 'notices' | 'bookings' | 'helpdesk' | 'profile';
+type ResidentCommunitySection = 'members' | 'vehicles' | 'contacts' | 'staff' | 'chat';
+type ResidentVisitorsSection = 'create' | 'approvals' | 'history' | 'desk';
+type ResidentBillingSection = 'pay' | 'reminders' | 'outstanding' | 'history';
+type ResidentBookingsSection = 'booking' | 'amenities' | 'history';
+type ResidentProfileSection = 'household' | 'vehicles' | 'staff';
 type EditableVehicleDraft = {
   id: string;
   unitId: string;
@@ -73,6 +90,7 @@ type EditableVehicleDraft = {
 
 const residentTabs: Array<{ key: ResidentTab; label: string }> = [
   { key: 'home', label: 'Home' },
+  { key: 'visitors', label: 'Visitors' },
   { key: 'community', label: 'Community' },
   { key: 'billing', label: 'Billing' },
   { key: 'notices', label: 'Notices' },
@@ -81,12 +99,88 @@ const residentTabs: Array<{ key: ResidentTab; label: string }> = [
   { key: 'profile', label: 'Profile' },
 ];
 
+const residentBottomTabs: Array<{
+  key: 'home' | 'community' | 'bookings' | 'billing' | 'profile';
+  label: string;
+  badge: string;
+}> = [
+  { key: 'home', label: 'My Hood', badge: 'HM' },
+  { key: 'community', label: 'Society', badge: 'SC' },
+  { key: 'bookings', label: 'Services', badge: 'SV' },
+  { key: 'billing', label: 'Bills', badge: 'BL' },
+  { key: 'profile', label: 'Profile', badge: 'ME' },
+];
+
 const residentCommunitySections: Array<{ key: ResidentCommunitySection; label: string }> = [
   { key: 'members', label: 'Members' },
+  { key: 'chat', label: 'Chats' },
   { key: 'vehicles', label: 'Vehicles' },
   { key: 'contacts', label: 'Important contacts' },
   { key: 'staff', label: 'Staff and security' },
 ];
+
+const residentVisitorSections: Array<{ key: ResidentVisitorsSection; label: string }> = [
+  { key: 'create', label: 'Create pass' },
+  { key: 'approvals', label: 'Approvals' },
+  { key: 'history', label: 'History' },
+  { key: 'desk', label: 'Security desk' },
+];
+
+const residentBillingSections: Array<{ key: ResidentBillingSection; label: string }> = [
+  { key: 'pay', label: 'Pay now' },
+  { key: 'reminders', label: 'Reminders' },
+  { key: 'outstanding', label: 'Outstanding' },
+  { key: 'history', label: 'History' },
+];
+
+const residentBookingSections: Array<{ key: ResidentBookingsSection; label: string }> = [
+  { key: 'booking', label: 'Book' },
+  { key: 'amenities', label: 'Amenities' },
+  { key: 'history', label: 'My bookings' },
+];
+
+const residentProfileSections: Array<{ key: ResidentProfileSection; label: string }> = [
+  { key: 'household', label: 'Household' },
+  { key: 'vehicles', label: 'Vehicles' },
+  { key: 'staff', label: 'Staff' },
+];
+
+function getResidentBottomTabKey(
+  activeTab: ResidentTab,
+): 'home' | 'community' | 'bookings' | 'billing' | 'profile' {
+  switch (activeTab) {
+    case 'visitors':
+      return 'home';
+    case 'helpdesk':
+      return 'bookings';
+    case 'notices':
+      return 'home';
+    default:
+      return activeTab as 'home' | 'community' | 'bookings' | 'billing' | 'profile';
+  }
+}
+
+function getResidentTabDescription(activeTab: ResidentTab) {
+  switch (activeTab) {
+    case 'visitors':
+      return 'Create visitor passes, share gate-ready details, and track arrivals and exits.';
+    case 'community':
+      return 'Browse resident directory, vehicles, important contacts, and staff records.';
+    case 'billing':
+      return 'Stay on top of maintenance dues, receipts, reminders, and payment history.';
+    case 'notices':
+      return 'Read society announcements, updates, and resident-facing policy information.';
+    case 'bookings':
+      return 'Manage amenity requests, schedules, and service-oriented daily actions.';
+    case 'helpdesk':
+      return 'Raise issues, track updates, and follow service requests to resolution.';
+    case 'profile':
+      return 'Update residence details, household staff, vehicles, and privacy preferences.';
+    case 'home':
+    default:
+      return 'A cleaner society home experience built around the tasks residents use every day.';
+  }
+}
 
 function createEditableVehicleDraft(unitId = ''): EditableVehicleDraft {
   return {
@@ -120,6 +214,13 @@ const complaintCategories = [
   { key: 'cleaning' as const, label: 'Cleaning' },
   { key: 'billing' as const, label: 'Billing' },
   { key: 'security' as const, label: 'Security' },
+];
+
+const visitorCategories = [
+  { key: 'guest' as const, label: 'Guest' },
+  { key: 'family' as const, label: 'Family' },
+  { key: 'service' as const, label: 'Service' },
+  { key: 'delivery' as const, label: 'Delivery' },
 ];
 
 type ComplaintTemplate = {
@@ -323,6 +424,13 @@ function getComplaintTemplatesForSociety(
 export function ResidentShell() {
   const { state, actions } = useApp();
   const [activeTab, setActiveTab] = useState<ResidentTab>('home');
+  const [preferredCommunitySection, setPreferredCommunitySection] = useState<ResidentCommunitySection>('members');
+  const [preferredVisitorsSection, setPreferredVisitorsSection] = useState<ResidentVisitorsSection>('create');
+  const [preferredBillingSection, setPreferredBillingSection] = useState<ResidentBillingSection>('pay');
+  const [preferredBookingsSection, setPreferredBookingsSection] = useState<ResidentBookingsSection>('booking');
+  const [preferredProfileSection, setPreferredProfileSection] = useState<ResidentProfileSection>('household');
+  const { width } = useWindowDimensions();
+  const isCompact = width < 768;
 
   if (!state.session.userId || !state.session.selectedSocietyId) {
     return null;
@@ -343,18 +451,150 @@ export function ResidentShell() {
   const overview = getResidentOverview(state.data, user.id, society.id);
   const profiles = deriveProfiles(membership.roles);
   const canUseAdmin = profiles.includes('admin');
+  const activeBottomTab = getResidentBottomTabKey(activeTab);
 
   return (
-    <Page>
-      <HeroCard
+    <PageFrame
+      footer={
+        <View style={[styles.bottomNavigationCard, isCompact ? styles.bottomNavigationCardCompact : null]}>
+          {residentBottomTabs.map((item) => {
+            const isActive = activeBottomTab === item.key;
+
+            return (
+              <Pressable
+                key={item.key}
+                onPress={() => setActiveTab(item.key)}
+                style={(state) => [
+                  styles.bottomNavigationItem,
+                  isCompact ? styles.bottomNavigationItemCompact : null,
+                  isActive ? styles.bottomNavigationItemActive : null,
+                  (state as { hovered?: boolean }).hovered ? styles.bottomNavigationItemHover : null,
+                  state.pressed ? styles.bottomNavigationItemPressed : null,
+                ]}
+              >
+                <View
+                  style={[
+                    styles.bottomNavigationBadge,
+                    isCompact ? styles.bottomNavigationBadgeCompact : null,
+                    isActive ? styles.bottomNavigationBadgeActive : null,
+                  ]}
+                >
+                  <ModuleGlyph
+                    module={item.badge}
+                    color={isActive ? palette.white : palette.ink}
+                    size="sm"
+                  />
+                </View>
+                <Text
+                  style={[
+                    styles.bottomNavigationLabel,
+                    isCompact ? styles.bottomNavigationLabelCompact : null,
+                    isActive ? styles.bottomNavigationLabelActive : null,
+                  ]}
+                >
+                  {item.label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+      }
+    >
+      {isCompact ? (
+        <SurfaceCard style={styles.compactWorkspaceCard}>
+          <View style={styles.compactWorkspaceTopRow}>
+            <View style={styles.compactWorkspaceTitleWrap}>
+              <Pill label="Resident" tone="accent" />
+              <Text style={styles.compactWorkspaceTitle}>{society.name}</Text>
+              <Caption>{user.name.split(' ')[0]} | {residentTabs.find((item) => item.key === activeTab)?.label ?? 'Home'}</Caption>
+            </View>
+            <View style={styles.compactWorkspaceStatsRow}>
+              <View style={styles.compactWorkspaceStat}>
+                <Text style={styles.compactWorkspaceStatValue}>{overview.unreadAnnouncements.length}</Text>
+                <Caption>Unread</Caption>
+              </View>
+              <View style={styles.compactWorkspaceStat}>
+                <Text style={styles.compactWorkspaceStatValue}>
+                  {overview.myComplaints.filter((item) => item.status !== 'resolved').length}
+                </Text>
+                <Caption>Open</Caption>
+              </View>
+            </View>
+          </View>
+          <View style={styles.compactWorkspaceActionRow}>
+            <ActionButton label="Societies" onPress={actions.goToWorkspaces} variant="secondary" />
+            {canUseAdmin ? (
+              <ActionButton label="Admin" onPress={actions.goToRoleSelection} variant="secondary" />
+            ) : null}
+          </View>
+          <NavigationStrip items={residentTabs} activeKey={activeTab} onChange={setActiveTab} />
+        </SurfaceCard>
+      ) : null}
+
+      {activeTab === 'home' ? (
+        <ResidentHomeExperience
+          societyId={society.id}
+          userId={user.id}
+          canUseAdmin={canUseAdmin}
+          onOpenTab={setActiveTab}
+          onOpenCommunitySection={(section) => {
+            setPreferredCommunitySection(section);
+            setActiveTab('community');
+          }}
+          onOpenVisitorsSection={(section) => {
+            setPreferredVisitorsSection(section);
+            setActiveTab('visitors');
+          }}
+          onOpenBillingSection={(section) => {
+            setPreferredBillingSection(section);
+            setActiveTab('billing');
+          }}
+          onOpenBookingsSection={(section) => {
+            setPreferredBookingsSection(section);
+            setActiveTab('bookings');
+          }}
+          onOpenProfileSection={(section) => {
+            setPreferredProfileSection(section);
+            setActiveTab('profile');
+          }}
+          onOpenWorkspaces={actions.goToWorkspaces}
+          onSwitchAdmin={actions.goToRoleSelection}
+        />
+      ) : null}
+
+      {!isCompact && activeTab !== 'home' ? (
+        <SurfaceCard style={styles.moduleHeroCard}>{/*
         eyebrow={`${society.name} · Resident view`}
         title={`Hello ${user.name.split(' ')[0]}, your day starts here.`}
         subtitle="Resident navigation prioritizes dues, notices, helpdesk, bookings, and household management."
-      >
+      */}
+        <View style={styles.moduleHeroTopRow}>
+          <View style={styles.moduleHeroTitleWrap}>
+            <Pill label="Resident workspace" tone="accent" />
+            <Text style={styles.moduleHeroTitle}>
+              {residentTabs.find((item) => item.key === activeTab)?.label ?? 'Resident'} dashboard
+            </Text>
+            <Caption>
+              {society.name} | {getResidentTabDescription(activeTab)}
+            </Caption>
+          </View>
+          <View style={styles.moduleHeroStats}>
+            <View style={styles.moduleHeroStatChip}>
+              <Text style={styles.moduleHeroStatValue}>{overview.unreadAnnouncements.length}</Text>
+              <Text style={styles.moduleHeroStatLabel}>Unread</Text>
+            </View>
+            <View style={styles.moduleHeroStatChip}>
+              <Text style={styles.moduleHeroStatValue}>
+                {overview.myComplaints.filter((item) => item.status !== 'resolved').length}
+              </Text>
+              <Text style={styles.moduleHeroStatLabel}>Open</Text>
+            </View>
+          </View>
+        </View>
         <View style={styles.heroActions}>
           <ActionButton label="Workspaces" onPress={actions.goToWorkspaces} variant="secondary" />
           {canUseAdmin ? (
-            <ActionButton label="Switch to Admin" onPress={actions.goToRoleSelection} variant="ghost" />
+            <ActionButton label="Switch to Admin" onPress={actions.goToRoleSelection} variant="primary" />
           ) : null}
         </View>
         <View style={styles.metricGrid}>
@@ -371,18 +611,57 @@ export function ResidentShell() {
             onPress={() => setActiveTab('helpdesk')}
           />
         </View>
-      </HeroCard>
+      </SurfaceCard>
+      ) : null}
 
-      <NavigationStrip items={residentTabs} activeKey={activeTab} onChange={setActiveTab} />
+      {!isCompact && activeTab !== 'home' ? (
+        <SurfaceCard style={styles.residentNavigationCard}>
+          <SectionHeader
+            title={residentTabs.find((item) => item.key === activeTab)?.label ?? 'Resident'}
+            description={getResidentTabDescription(activeTab)}
+          />
+          <NavigationStrip items={residentTabs} activeKey={activeTab} onChange={setActiveTab} />
+        </SurfaceCard>
+      ) : null}
 
-      {activeTab === 'home' ? <ResidentHome societyId={society.id} userId={user.id} onOpenTab={setActiveTab} /> : null}
-      {activeTab === 'community' ? <ResidentCommunity societyId={society.id} userId={user.id} /> : null}
-      {activeTab === 'billing' ? <ResidentBilling societyId={society.id} userId={user.id} /> : null}
+      {activeTab === 'visitors' ? (
+        <ResidentVisitors
+          societyId={society.id}
+          userId={user.id}
+          preferredSection={preferredVisitorsSection}
+        />
+      ) : null}
+      {activeTab === 'community' ? (
+        <ResidentCommunity
+          societyId={society.id}
+          userId={user.id}
+          preferredSection={preferredCommunitySection}
+        />
+      ) : null}
+      {activeTab === 'billing' ? (
+        <ResidentBilling
+          societyId={society.id}
+          userId={user.id}
+          preferredSection={preferredBillingSection}
+        />
+      ) : null}
       {activeTab === 'notices' ? <ResidentNotices societyId={society.id} userId={user.id} /> : null}
-      {activeTab === 'bookings' ? <ResidentBookings societyId={society.id} userId={user.id} /> : null}
+      {activeTab === 'bookings' ? (
+        <ResidentBookings
+          societyId={society.id}
+          userId={user.id}
+          preferredSection={preferredBookingsSection}
+        />
+      ) : null}
       {activeTab === 'helpdesk' ? <ResidentHelpdesk societyId={society.id} userId={user.id} /> : null}
-      {activeTab === 'profile' ? <ResidentProfile societyId={society.id} userId={user.id} /> : null}
-    </Page>
+      {activeTab === 'profile' ? (
+        <ResidentProfile
+          societyId={society.id}
+          userId={user.id}
+          preferredSection={preferredProfileSection}
+        />
+      ) : null}
+    </PageFrame>
   );
 }
 
@@ -452,43 +731,741 @@ function ResidentHome({
   );
 }
 
-function ResidentCommunity({ societyId, userId }: { societyId: string; userId: string }) {
-  const { state } = useApp();
-  const [activeSection, setActiveSection] = useState<ResidentCommunitySection>('members');
+function ResidentVisitors({
+  societyId,
+  userId,
+  preferredSection,
+}: {
+  societyId: string;
+  userId: string;
+  preferredSection?: ResidentVisitorsSection;
+}) {
+  const { state, actions } = useApp();
+  const membership = getMembershipForSociety(state.data, userId, societyId);
+  const units = getUnitsForSociety(state.data, societyId).filter((unit) =>
+    membership?.unitIds.includes(unit.id),
+  );
+  const visitorPasses = getVisitorPassesForUserSociety(state.data, userId, societyId);
+  const securityGuestRequests = getSecurityGuestRequestsForResident(state.data, userId, societyId);
+  const pendingSecurityGuestRequests = getPendingSecurityGuestRequestsForResident(
+    state.data,
+    userId,
+    societyId,
+  );
+  const securityContacts = getImportantContactsForSociety(state.data, societyId).filter(
+    (contact) => contact.category === 'security',
+  );
+  const conversationsByRequestId = useMemo(
+    () =>
+      new Map(
+        securityGuestRequests.map(({ request }) => [
+          request.id,
+          getSecurityGuestConversationForRequest(state.data, request.id),
+        ]),
+      ),
+    [securityGuestRequests, state.data],
+  );
+  const [selectedUnitId, setSelectedUnitId] = useState(units[0]?.id ?? '');
+  const [visitorCategory, setVisitorCategory] = useState<VisitorCategory>('guest');
+  const [visitorName, setVisitorName] = useState('');
+  const [visitorPhone, setVisitorPhone] = useState('');
+  const [visitorPurpose, setVisitorPurpose] = useState('');
+  const [guestCount, setGuestCount] = useState('1');
+  const [expectedAt, setExpectedAt] = useState(nowDateTimeInputValue());
+  const [validUntil, setValidUntil] = useState(addHoursToDateTimeInputValue(3));
+  const [vehicleNumber, setVehicleNumber] = useState('');
+  const [visitorNotes, setVisitorNotes] = useState('');
+  const [threadDrafts, setThreadDrafts] = useState<Record<string, string>>({});
+  const lastAlertedRingIdRef = useRef('');
+  const [activeSection, setActiveSection] = useState<ResidentVisitorsSection>(preferredSection ?? 'create');
+  const unitIds = new Set(membership?.unitIds ?? []);
+  const entryLogs = getEntryLogsForSociety(state.data, societyId)
+    .filter(({ entry }) => entry.unitId && unitIds.has(entry.unitId))
+    .slice(0, 8);
+
+  useEffect(() => {
+    if (preferredSection) {
+      setActiveSection(preferredSection);
+    }
+  }, [preferredSection]);
+
+  useEffect(() => {
+    if (!selectedUnitId && units[0]?.id) {
+      setSelectedUnitId(units[0].id);
+    }
+  }, [selectedUnitId, units]);
+
+  async function handleCreateVisitorPass() {
+    const saved = await actions.createVisitorPass(societyId, {
+      unitId: selectedUnitId,
+      visitorName,
+      phone: visitorPhone,
+      category: visitorCategory,
+      purpose: visitorPurpose,
+      guestCount,
+      expectedAt,
+      validUntil,
+      vehicleNumber,
+      notes: visitorNotes,
+    });
+
+    if (saved) {
+      setVisitorCategory('guest');
+      setVisitorName('');
+      setVisitorPhone('');
+      setVisitorPurpose('');
+      setGuestCount('1');
+      setExpectedAt(nowDateTimeInputValue());
+      setValidUntil(addHoursToDateTimeInputValue(3));
+      setVehicleNumber('');
+      setVisitorNotes('');
+    }
+  }
+
+  const scheduledPasses = visitorPasses.filter(({ visitorPass }) => visitorPass.status === 'scheduled');
+  const activePasses = visitorPasses.filter(({ visitorPass }) => visitorPass.status === 'checkedIn');
+  const latestPendingRing = useMemo(() => {
+    const ringEvents = pendingSecurityGuestRequests.flatMap(({ request }) =>
+      (conversationsByRequestId.get(request.id) ?? []).filter(({ log }) => log.action === 'ringRequested'),
+    );
+
+    return ringEvents.sort((left, right) => Date.parse(right.log.createdAt) - Date.parse(left.log.createdAt))[0];
+  }, [conversationsByRequestId, pendingSecurityGuestRequests]);
+  const featuredLiveApproval = pendingSecurityGuestRequests.find(({ request }) => {
+    const conversation = conversationsByRequestId.get(request.id) ?? [];
+    return conversation.some(({ log }) => log.action === 'ringRequested');
+  }) ?? pendingSecurityGuestRequests[0];
+
+  useEffect(() => {
+    if (!latestPendingRing?.log.id) {
+      void stopRingAlert();
+      return;
+    }
+
+    if (latestPendingRing.log.id === lastAlertedRingIdRef.current) {
+      return;
+    }
+
+    lastAlertedRingIdRef.current = latestPendingRing.log.id;
+    void startRingAlert(latestPendingRing.log.id, 60_000);
+  }, [latestPendingRing]);
+
+  useEffect(() => () => {
+    void stopRingAlert();
+  }, []);
+
+  async function handleSendThreadMessage(requestId: string) {
+    const message = (threadDrafts[requestId] ?? '').trim();
+
+    if (!message) {
+      return;
+    }
+
+    const sent = await actions.sendSecurityGuestMessage(societyId, requestId, { message });
+
+    if (sent) {
+      setThreadDrafts((current) => ({
+        ...current,
+        [requestId]: '',
+      }));
+    }
+  }
+
+  async function handleCallGate(phone?: string) {
+    if (!phone) {
+      return;
+    }
+
+    await openPhoneDialer(phone);
+  }
+
+  async function handleGateWhatsapp(phone: string | undefined, guestName: string, unitCode?: string) {
+    if (!phone) {
+      return;
+    }
+
+    await openWhatsAppConversation(
+      phone,
+      `Resident update for ${unitCode ?? 'my unit'}: I am reviewing the gate approval for ${guestName}. Please keep the request open in the app.`,
+    );
+  }
+
+  return (
+    <>
+      <SectionHeader
+        title="Visitor hub"
+        description="Create passes, respond to live gate approvals, review visit history, and keep the security desk aligned from one place."
+      />
+      <SurfaceCard>
+        <View style={styles.metricGrid}>
+          <MetricCard label="Scheduled passes" value={String(scheduledPasses.length)} tone="accent" />
+          <MetricCard label="Checked in" value={String(activePasses.length)} tone="blue" />
+          <MetricCard label="Completed visits" value={String(visitorPasses.filter(({ visitorPass }) => visitorPass.status === 'completed').length)} />
+          <MetricCard label="Gate approvals" value={String(pendingSecurityGuestRequests.length)} tone="accent" />
+        </View>
+        <View style={styles.choiceRow}>
+          {residentVisitorSections.map((section) => (
+            <ChoiceChip
+              key={section.key}
+              label={section.label}
+              selected={activeSection === section.key}
+              onPress={() => setActiveSection(section.key)}
+            />
+          ))}
+        </View>
+        <View style={styles.inlineSection}>
+          <Caption>
+            Tap a section above to move between creating passes, live approvals, visit history, and the security desk.
+          </Caption>
+        </View>
+      </SurfaceCard>
+
+      {activeSection === 'approvals' && featuredLiveApproval ? (
+        (() => {
+          const { request, unit, createdBy } = featuredLiveApproval;
+          const conversation = conversationsByRequestId.get(request.id) ?? [];
+          const latestRing = [...conversation].reverse().find(({ log }) => log.action === 'ringRequested');
+          const gatePhone = createdBy?.phone ?? securityContacts[0]?.phone;
+
+          return (
+            <SurfaceCard style={styles.liveApprovalCard}>
+              <View style={styles.liveApprovalBackdrop}>
+                <View style={styles.liveApprovalPulseLarge} />
+                <View style={styles.liveApprovalPulseSmall} />
+              </View>
+              <View style={styles.rowBetween}>
+                <View style={styles.liveApprovalCopy}>
+                  <Pill
+                    label={latestRing ? 'Incoming gate call' : 'Gate desk waiting'}
+                    tone="warning"
+                  />
+                  <Text style={styles.cardTitle}>Live approval for {request.guestName}</Text>
+                  <Caption>
+                    {unit?.code ?? 'Resident unit'} · {createdBy?.name ?? 'Security desk'}
+                    {latestRing ? ` · rang at ${formatLongDate(latestRing.log.createdAt)}` : ''}
+                  </Caption>
+                </View>
+                <Pill
+                  label={humanizeSecurityGuestRequestStatus(request.status)}
+                  tone={getSecurityGuestRequestTone(request.status)}
+                />
+              </View>
+              <Caption>
+                {request.purpose}
+                {request.phone ? ` · ${request.phone}` : ''}
+                {request.vehicleNumber ? ` · ${request.vehicleNumber}` : ''}
+              </Caption>
+              <View style={styles.queuePhotoRow}>
+                {request.guestPhotoDataUrl ? (
+                  <View style={styles.queueMediaCard}>
+                    <Image source={{ uri: request.guestPhotoDataUrl }} style={styles.securityThreadPhoto} />
+                    <Caption>Guest photo</Caption>
+                  </View>
+                ) : null}
+                {request.vehiclePhotoDataUrl ? (
+                  <View style={styles.queueMediaCard}>
+                    <Image source={{ uri: request.vehiclePhotoDataUrl }} style={styles.securityThreadPhoto} />
+                    <Caption>Vehicle photo</Caption>
+                  </View>
+                ) : null}
+              </View>
+              <View style={styles.heroActions}>
+                <ActionButton
+                  label={state.isSyncing ? 'Updating...' : 'Approve now'}
+                  onPress={() =>
+                    actions.reviewSecurityGuestRequest(societyId, request.id, { decision: 'approve' })
+                  }
+                  disabled={state.isSyncing}
+                />
+                <ActionButton
+                  label="Deny"
+                  onPress={() =>
+                    actions.reviewSecurityGuestRequest(societyId, request.id, { decision: 'deny' })
+                  }
+                  disabled={state.isSyncing}
+                  variant="danger"
+                />
+                {gatePhone ? (
+                  <ActionButton
+                    label="Call gate"
+                    onPress={() => handleCallGate(gatePhone)}
+                    disabled={state.isSyncing}
+                    variant="secondary"
+                  />
+                ) : null}
+                {gatePhone ? (
+                  <ActionButton
+                    label="WhatsApp gate"
+                    onPress={() => handleGateWhatsapp(gatePhone, request.guestName, unit?.code)}
+                    disabled={state.isSyncing}
+                    variant="secondary"
+                  />
+                ) : null}
+              </View>
+            </SurfaceCard>
+          );
+        })()
+      ) : null}
+
+      {activeSection === 'approvals' && pendingSecurityGuestRequests.length > 0 ? (
+        <SurfaceCard>
+          <SectionHeader
+            title="Urgent gate approvals"
+            description="Security has captured these walk-in guests at the gate. Approve or deny quickly so the desk can act without phone chasing."
+          />
+          {pendingSecurityGuestRequests.map(({ request, unit, createdBy }) => {
+            const conversation = conversationsByRequestId.get(request.id) ?? [];
+            const recentConversation = conversation.slice(-6);
+            const gatePhone = createdBy?.phone ?? securityContacts[0]?.phone;
+
+            return (
+            <View key={request.id} style={styles.inlineSection}>
+              <View style={styles.rowBetween}>
+                <Text style={styles.cardTitle}>{request.guestName}</Text>
+                <Pill
+                  label={humanizeSecurityGuestRequestStatus(request.status)}
+                  tone={getSecurityGuestRequestTone(request.status)}
+                />
+              </View>
+              <Caption>
+                {request.category} for {unit?.code ?? 'Resident unit'} · captured by {createdBy?.name ?? 'Security desk'}
+              </Caption>
+              <Caption>
+                Purpose: {request.purpose}{request.phone ? ` · ${request.phone}` : ''}
+              </Caption>
+              {request.gateNotes ? <Caption>Gate note: {request.gateNotes}</Caption> : null}
+              {request.guestPhotoDataUrl || request.vehiclePhotoDataUrl ? (
+                <View style={styles.queuePhotoRow}>
+                  {request.guestPhotoDataUrl ? (
+                    <View style={styles.queueMediaCard}>
+                      <Image source={{ uri: request.guestPhotoDataUrl }} style={styles.securityThreadPhoto} />
+                      <Caption>Guest photo</Caption>
+                    </View>
+                  ) : null}
+                  {request.vehiclePhotoDataUrl ? (
+                    <View style={styles.queueMediaCard}>
+                      <Image source={{ uri: request.vehiclePhotoDataUrl }} style={styles.securityThreadPhoto} />
+                      <Caption>Vehicle photo</Caption>
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
+              <View style={styles.threadPanel}>
+                <Text style={styles.threadTitle}>Gate conversation</Text>
+                {recentConversation.length > 0 ? (
+                  recentConversation.map(({ log, actor }) => (
+                    <View
+                      key={log.id}
+                      style={[
+                        styles.threadBubble,
+                        log.actorRole === 'resident' ? styles.threadBubbleResident : styles.threadBubbleSecurity,
+                      ]}
+                    >
+                      <Text style={styles.threadBubbleTitle}>
+                        {actor?.name ?? (log.actorRole === 'resident' ? 'You' : 'Gate team')}
+                      </Text>
+                      <Caption>{humanizeSecurityGuestLogAction(log.action)}</Caption>
+                      {log.note ? <Text style={styles.threadBubbleMessage}>{log.note}</Text> : null}
+                      <Caption>{formatLongDate(log.createdAt)}</Caption>
+                    </View>
+                  ))
+                ) : (
+                  <Caption>Security messages will appear here as the gate desk updates the request.</Caption>
+                )}
+                <InputField
+                  label="Reply to gate desk"
+                  value={threadDrafts[request.id] ?? ''}
+                  onChangeText={(value) =>
+                    setThreadDrafts((current) => ({
+                      ...current,
+                      [request.id]: value,
+                    }))
+                  }
+                  placeholder="Ask security to verify ID, allow parcel only, or wait at gate..."
+                  multiline
+                />
+                <View style={styles.heroActions}>
+                  <ActionButton
+                    label={state.isSyncing ? 'Sending...' : 'Send reply'}
+                    onPress={() => handleSendThreadMessage(request.id)}
+                    disabled={state.isSyncing || !(threadDrafts[request.id] ?? '').trim()}
+                    variant="secondary"
+                  />
+                  {gatePhone ? (
+                    <ActionButton
+                      label="Call gate"
+                      onPress={() => handleCallGate(gatePhone)}
+                      disabled={state.isSyncing}
+                      variant="secondary"
+                    />
+                  ) : null}
+                  {gatePhone ? (
+                    <ActionButton
+                      label="WhatsApp gate"
+                      onPress={() => handleGateWhatsapp(gatePhone, request.guestName, unit?.code)}
+                      disabled={state.isSyncing}
+                      variant="secondary"
+                    />
+                  ) : null}
+                </View>
+              </View>
+              <View style={styles.heroActions}>
+                <ActionButton
+                  label={state.isSyncing ? 'Updating...' : 'Approve'}
+                  onPress={() =>
+                    actions.reviewSecurityGuestRequest(societyId, request.id, { decision: 'approve' })
+                  }
+                  disabled={state.isSyncing}
+                />
+                <ActionButton
+                  label="Deny"
+                  onPress={() =>
+                    actions.reviewSecurityGuestRequest(societyId, request.id, { decision: 'deny' })
+                  }
+                  disabled={state.isSyncing}
+                  variant="danger"
+                />
+              </View>
+            </View>
+          );
+        })}
+        </SurfaceCard>
+      ) : null}
+
+      {activeSection === 'create' ? (
+      <SurfaceCard>
+        <SectionHeader
+          title="Create a visitor pass"
+          description="This follows the usual industry workflow: resident creates the pass, security checks in the guest, and the exit is logged when they leave."
+        />
+        <Text style={styles.compactTitle}>Select unit</Text>
+        <View style={styles.choiceRow}>
+          {units.map((unit) => (
+            <ChoiceChip
+              key={unit.id}
+              label={unit.code}
+              selected={selectedUnitId === unit.id}
+              onPress={() => setSelectedUnitId(unit.id)}
+            />
+          ))}
+        </View>
+        <Text style={styles.compactTitle}>Visitor type</Text>
+        <View style={styles.choiceRow}>
+          {visitorCategories.map((option) => (
+            <ChoiceChip
+              key={option.key}
+              label={option.label}
+              selected={visitorCategory === option.key}
+              onPress={() => setVisitorCategory(option.key)}
+            />
+          ))}
+        </View>
+        <View style={styles.formGrid}>
+          <View style={styles.formField}>
+            <InputField label="Visitor name" value={visitorName} onChangeText={setVisitorName} placeholder="Rahul Sharma" />
+          </View>
+          <View style={styles.formField}>
+            <InputField label="Phone (optional)" value={visitorPhone} onChangeText={setVisitorPhone} keyboardType="phone-pad" placeholder="+91 98765 43210" />
+          </View>
+          <View style={styles.formField}>
+            <InputField label="Purpose" value={visitorPurpose} onChangeText={setVisitorPurpose} placeholder="Family dinner, parcel drop, electrician visit" />
+          </View>
+          <View style={styles.formField}>
+            <InputField label="Guest count" value={guestCount} onChangeText={setGuestCount} keyboardType="numeric" placeholder="1" />
+          </View>
+          <View style={styles.formField}>
+            <InputField label="Expected arrival" value={expectedAt} onChangeText={setExpectedAt} placeholder="2026-03-24T18:30" />
+          </View>
+          <View style={styles.formField}>
+            <InputField label="Valid until" value={validUntil} onChangeText={setValidUntil} placeholder="2026-03-24T22:00" />
+          </View>
+          <View style={styles.formField}>
+            <InputField label="Vehicle number (optional)" value={vehicleNumber} onChangeText={(value) => setVehicleNumber(value.toUpperCase())} placeholder="GJ01AB1234" autoCapitalize="characters" />
+          </View>
+        </View>
+        <InputField
+          label="Notes for gate desk (optional)"
+          value={visitorNotes}
+          onChangeText={setVisitorNotes}
+          placeholder="Senior citizen visitor, carrying equipment, or parking instructions"
+          multiline
+        />
+        <ActionButton
+          label={state.isSyncing ? 'Creating...' : 'Create visitor pass'}
+          onPress={handleCreateVisitorPass}
+          disabled={state.isSyncing || !selectedUnitId || !visitorName.trim() || !visitorPurpose.trim() || !expectedAt.trim() || !validUntil.trim()}
+        />
+        {securityContacts[0] ? (
+          <Caption>
+            Security contact: {securityContacts[0].name} - {securityContacts[0].phone}
+          </Caption>
+        ) : null}
+      </SurfaceCard>
+      ) : null}
+
+      {activeSection === 'history' ? (
+      <>
+      <SurfaceCard>
+        <SectionHeader
+          title="Active and recent visitor passes"
+          description="Passes stay visible here until security completes the visit or you cancel it before arrival."
+        />
+        {visitorPasses.length > 0 ? (
+          visitorPasses.map(({ visitorPass, unit, createdBy }) => (
+            <View key={visitorPass.id} style={styles.inlineSection}>
+              <View style={styles.rowBetween}>
+                <Text style={styles.cardTitle}>{visitorPass.visitorName}</Text>
+                <Pill label={humanizeVisitorPassStatus(visitorPass.status)} tone={getVisitorPassTone(visitorPass.status)} />
+              </View>
+              <Caption>
+                {humanizeVisitorCategory(visitorPass.category)} for {unit?.code ?? 'Resident unit'} - pass {visitorPass.passCode}
+              </Caption>
+              <Caption>
+                Expected {formatLongDate(visitorPass.expectedAt)}{visitorPass.checkedInAt ? ` - checked in ${formatLongDate(visitorPass.checkedInAt)}` : ''}
+              </Caption>
+              <Caption>
+                Purpose: {visitorPass.purpose}{visitorPass.vehicleNumber ? ` - Vehicle ${visitorPass.vehicleNumber}` : ''}
+              </Caption>
+              {visitorPass.notes ? <Caption>Gate note: {visitorPass.notes}</Caption> : null}
+              {createdBy ? <Caption>Created by {createdBy.name}</Caption> : null}
+              {visitorPass.status === 'scheduled' ? (
+                <View style={styles.heroActions}>
+                  <ActionButton
+                    label={state.isSyncing ? 'Updating...' : 'Cancel pass'}
+                    onPress={() => actions.updateVisitorPassStatus(societyId, visitorPass.id, { status: 'cancelled' })}
+                    disabled={state.isSyncing}
+                    variant="secondary"
+                  />
+                </View>
+              ) : null}
+            </View>
+          ))
+        ) : (
+          <Caption>No visitor pass created yet. Your active and completed gate passes will appear here.</Caption>
+        )}
+      </SurfaceCard>
+      <SurfaceCard>
+        <SectionHeader
+          title="Gate entry history"
+          description="Recent gate movement linked to your unit appears here."
+        />
+        {entryLogs.length > 0 ? (
+          entryLogs.map(({ entry, unit }) => (
+            <View key={entry.id} style={styles.inlineSection}>
+              <Text style={styles.compactTitle}>{entry.subjectName}</Text>
+              <Caption>
+                {entry.subjectType} for {unit?.code ?? 'your unit'} - {entry.status} - {formatLongDate(entry.enteredAt)}
+              </Caption>
+            </View>
+          ))
+        ) : (
+          <Caption>No recent gate history is linked to your household yet.</Caption>
+        )}
+      </SurfaceCard>
+      </>
+      ) : null}
+
+      {activeSection === 'desk' ? (
+      <SurfaceCard>
+        <SectionHeader
+          title="Security desk"
+          description="Use these saved contacts when you need to coordinate directly with the gate team."
+        />
+        {securityContacts.length > 0 ? (
+          securityContacts.map((contact) => (
+            <View key={contact.id} style={styles.inlineSection}>
+              <Text style={styles.compactTitle}>{contact.name}</Text>
+              <Caption>{contact.phone || 'No phone saved'}{contact.notes ? ` - ${contact.notes}` : ''}</Caption>
+            </View>
+          ))
+        ) : (
+          <Caption>No security contact is configured yet for this society.</Caption>
+        )}
+        <Caption>
+          Guards on roster: {getGuardRosterForSociety(state.data, societyId).map(({ guard }) => guard.name).join(', ') || 'Not configured yet'}
+        </Caption>
+      </SurfaceCard>
+      ) : null}
+
+      <SurfaceCard>
+        <SectionHeader
+          title="Security approvals history"
+          description="Walk-in guests captured by security are logged here even when they were not pre-created by you."
+        />
+        {securityGuestRequests.length > 0 ? (
+          securityGuestRequests.map(({ request, unit, createdBy, respondedBy }) => (
+            <View key={request.id} style={styles.inlineSection}>
+              <View style={styles.rowBetween}>
+                <Text style={styles.cardTitle}>{request.guestName}</Text>
+                <Pill
+                  label={humanizeSecurityGuestRequestStatus(request.status)}
+                  tone={getSecurityGuestRequestTone(request.status)}
+                />
+              </View>
+              <Caption>
+                {request.category} for {unit?.code ?? 'Resident unit'} · raised by {createdBy?.name ?? 'Security desk'}
+              </Caption>
+              <Caption>
+                Purpose: {request.purpose}
+                {request.checkedInAt ? ` · entered ${formatLongDate(request.checkedInAt)}` : ''}
+                {request.checkedOutAt ? ` · exited ${formatLongDate(request.checkedOutAt)}` : ''}
+              </Caption>
+              {respondedBy ? <Caption>Responded by {respondedBy.name}</Caption> : null}
+            </View>
+          ))
+        ) : (
+          <Caption>No security-created gate approvals yet.</Caption>
+        )}
+      </SurfaceCard>
+    </>
+  );
+}
+
+function ResidentCommunity({
+  societyId,
+  userId,
+  preferredSection,
+}: {
+  societyId: string;
+  userId: string;
+  preferredSection?: ResidentCommunitySection;
+}) {
+  const { state, actions } = useApp();
+  const [activeSection, setActiveSection] = useState<ResidentCommunitySection>(preferredSection ?? 'members');
+  const [selectedDirectChatUserId, setSelectedDirectChatUserId] = useState('');
+  const [groupMessageDraft, setGroupMessageDraft] = useState('');
+  const [directMessageDraft, setDirectMessageDraft] = useState('');
   const members = getCommunityMembersForSociety(state.data, societyId);
   const vehicles = getVehicleDirectoryForSociety(state.data, societyId);
   const contacts = getImportantContactsForSociety(state.data, societyId);
   const guards = getGuardRosterForSociety(state.data, societyId);
   const staffDirectory = getStaffVerificationDirectory(state.data, societyId);
   const myMembership = getMembershipForSociety(state.data, userId, societyId);
+  const groupThread = getSocietyChatThread(state.data, societyId);
+  const groupMessages = groupThread ? getChatMessagesForThread(state.data, groupThread.id) : [];
+  const directThreads = getDirectChatThreadsForUser(state.data, societyId, userId);
+  const directPeers = useMemo(() => {
+    const threadMap = new Map(
+      directThreads
+        .filter((threadEntry) => threadEntry.peer?.id)
+        .map((threadEntry) => [threadEntry.peer?.id as string, threadEntry]),
+    );
+
+    return members
+      .filter((member) => member.user.id !== userId)
+      .sort((left, right) => {
+        const leftThread = threadMap.get(left.user.id);
+        const rightThread = threadMap.get(right.user.id);
+        const leftRoles = Array.isArray(left.membership.roles) ? left.membership.roles : [];
+        const rightRoles = Array.isArray(right.membership.roles) ? right.membership.roles : [];
+        const leftPriority = leftRoles.includes('chairman') ? 0 : leftRoles.includes('committee') ? 1 : 2;
+        const rightPriority = rightRoles.includes('chairman') ? 0 : rightRoles.includes('committee') ? 1 : 2;
+
+        if (leftPriority !== rightPriority) {
+          return leftPriority - rightPriority;
+        }
+
+        const leftUpdatedAt = leftThread?.latestMessage?.createdAt ?? leftThread?.thread.updatedAt ?? '';
+        const rightUpdatedAt = rightThread?.latestMessage?.createdAt ?? rightThread?.thread.updatedAt ?? '';
+
+        if (leftUpdatedAt && rightUpdatedAt && leftUpdatedAt !== rightUpdatedAt) {
+          return Date.parse(rightUpdatedAt) - Date.parse(leftUpdatedAt);
+        }
+
+        return left.user.name.localeCompare(right.user.name);
+      });
+  }, [directThreads, members, userId]);
+  const selectedDirectPeer = directPeers.find((member) => member.user.id === selectedDirectChatUserId) ?? directPeers[0];
+  const selectedDirectThread = directThreads.find((threadEntry) => threadEntry.peer?.id === selectedDirectPeer?.user.id);
+  const directMessages = selectedDirectThread ? getChatMessagesForThread(state.data, selectedDirectThread.thread.id) : [];
+
+  useEffect(() => {
+    if (!selectedDirectChatUserId && directPeers[0]?.user.id) {
+      setSelectedDirectChatUserId(directPeers[0].user.id);
+      return;
+    }
+
+    if (selectedDirectChatUserId && !directPeers.some((peer) => peer.user.id === selectedDirectChatUserId)) {
+      setSelectedDirectChatUserId(directPeers[0]?.user.id ?? '');
+    }
+  }, [directPeers, selectedDirectChatUserId]);
+
+  useEffect(() => {
+    if (preferredSection) {
+      setActiveSection(preferredSection);
+    }
+  }, [preferredSection]);
+
+  async function handleSendGroupMessage() {
+    const message = groupMessageDraft.trim();
+
+    if (!message) {
+      return;
+    }
+
+    const sent = await actions.sendSocietyChatMessage(societyId, { message });
+
+    if (sent) {
+      setGroupMessageDraft('');
+    }
+  }
+
+  async function handleSendDirectMessage() {
+    const message = directMessageDraft.trim();
+
+    if (!message || !selectedDirectPeer) {
+      return;
+    }
+
+    const sent = await actions.sendDirectChatMessage(societyId, selectedDirectPeer.user.id, { message });
+
+    if (sent) {
+      setDirectMessageDraft('');
+    }
+  }
 
   return (
     <>
       <SectionHeader
         title="Community hub"
-        description="Browse resident contacts, registered vehicles, important society numbers, and staff coverage from one place."
+        description="Browse resident contacts, registered vehicles, important society numbers, staff coverage, and community chats from one place."
       />
       <SurfaceCard>
         <View style={styles.metricGrid}>
-          <MetricCard label="Members" value={String(members.length)} />
-          <MetricCard label="Vehicles" value={String(vehicles.length)} tone="accent" />
-          <MetricCard label="Important contacts" value={String(contacts.length)} tone="blue" />
-          <MetricCard label="Staff and guards" value={String(staffDirectory.length + guards.length)} />
+          <MetricCard
+            label="Members"
+            value={String(members.length)}
+            onPress={() => setActiveSection('members')}
+          />
+          <MetricCard
+            label="Chat rooms"
+            value={String((groupThread ? 1 : 0) + directThreads.length)}
+            tone="blue"
+            onPress={() => setActiveSection('chat')}
+          />
+          <MetricCard
+            label="Vehicles"
+            value={String(vehicles.length)}
+            tone="accent"
+            onPress={() => setActiveSection('vehicles')}
+          />
+          <MetricCard
+            label="Important contacts"
+            value={String(contacts.length)}
+            tone="blue"
+            onPress={() => setActiveSection('contacts')}
+          />
+          <MetricCard
+            label="Staff and guards"
+            value={String(staffDirectory.length + guards.length)}
+            onPress={() => setActiveSection('staff')}
+          />
         </View>
         <View style={styles.inlineSection}>
-          <Text style={styles.compactTitle}>Browse sections</Text>
-          <View style={styles.choiceRow}>
-            {residentCommunitySections.map((section) => (
-              <ChoiceChip
-                key={section.key}
-                label={section.label}
-                selected={activeSection === section.key}
-                onPress={() => setActiveSection(section.key)}
-              />
-            ))}
-          </View>
           <Caption>
-            Your access is based on the current society membership for {myMembership?.unitIds.length ? 'linked units and shared society records.' : 'shared society records.'}
+            Tap a card above to browse {residentCommunitySections.map((s, i) => (
+              <Text key={s.key}>{i > 0 ? ', ' : ''}{s.label.toLowerCase()}</Text>
+            ))}. Your access is based on the current society membership for {myMembership?.unitIds.length ? 'linked units and shared society records.' : 'shared society records.'}
           </Caption>
         </View>
       </SurfaceCard>
@@ -514,6 +1491,18 @@ function ResidentCommunity({ societyId, userId }: { societyId: string; userId: s
               {member.residenceProfile?.alternatePhone ? (
                 <Caption>Alternate mobile: {member.residenceProfile.alternatePhone}</Caption>
               ) : null}
+              {member.user.id !== userId ? (
+                <View style={styles.heroActions}>
+                  <ActionButton
+                    label="Open chat"
+                    onPress={() => {
+                      setActiveSection('chat');
+                      setSelectedDirectChatUserId(member.user.id);
+                    }}
+                    variant="secondary"
+                  />
+                </View>
+              ) : null}
             </SurfaceCard>
           ))
         ) : (
@@ -521,6 +1510,167 @@ function ResidentCommunity({ societyId, userId }: { societyId: string; userId: s
             <Caption>No resident directory entries are available yet.</Caption>
           </SurfaceCard>
         )
+      ) : null}
+
+      {activeSection === 'chat' ? (
+        <>
+          <SurfaceCard>
+            <SectionHeader
+              title="Society group chat"
+              description="Use the shared society room for updates, quick questions, and day-to-day coordination with neighbors and committee members."
+            />
+            <View style={styles.chatHeaderBar}>
+              <View style={styles.chatHeaderIdentity}>
+                <View style={styles.chatHeaderAvatar}>
+                  <Text style={styles.chatHeaderAvatarText}>SG</Text>
+                </View>
+                <View style={styles.chatPeerCopy}>
+                  <Text style={styles.cardTitle}>Society lounge</Text>
+                  <Caption>{groupMessages.length > 0 ? `${groupMessages.length} message(s) · live society room` : 'No messages yet. Start the conversation.'}</Caption>
+                </View>
+              </View>
+              <Pill label="Group" tone="primary" />
+            </View>
+            <View style={styles.chatHistoryPanel}>
+              {groupMessages.length > 0 ? (
+                groupMessages.slice(-20).map(({ message, sender }) => (
+                  <View
+                    key={message.id}
+                    style={[
+                      styles.threadBubble,
+                      message.senderUserId === userId ? styles.threadBubbleResident : styles.threadBubbleSecurity,
+                    ]}
+                  >
+                    {message.senderUserId !== userId ? (
+                      <Text style={styles.threadBubbleTitle}>{sender?.name ?? 'Resident'}</Text>
+                    ) : null}
+                    <Text style={styles.threadBubbleMessage}>{message.body}</Text>
+                    <Caption>{formatLongDate(message.createdAt)}</Caption>
+                  </View>
+                ))
+              ) : (
+                <Caption>The society room is quiet right now. Send the first welcome or coordination message.</Caption>
+              )}
+            </View>
+            <View style={styles.chatComposer}>
+              <InputField
+                label="Message the society room"
+                value={groupMessageDraft}
+                onChangeText={setGroupMessageDraft}
+                placeholder="Ask about maintenance timing, share a quick update, or coordinate with neighbors..."
+                multiline
+              />
+              <ActionButton
+                label={state.isSyncing ? 'Sending...' : 'Send to society'}
+                onPress={handleSendGroupMessage}
+                disabled={state.isSyncing || !groupMessageDraft.trim()}
+              />
+            </View>
+          </SurfaceCard>
+
+          <SurfaceCard>
+            <SectionHeader
+              title="Direct chats"
+              description="Chat one to one with another resident or the chairman without leaving your workspace."
+            />
+            <View style={styles.chatWorkspace}>
+              <View style={styles.chatSidebar}>
+                {directPeers.length > 0 ? directPeers.map((peer) => {
+                  const threadEntry = directThreads.find((directThread) => directThread.peer?.id === peer.user.id);
+
+                  return (
+                    <Pressable
+                      key={peer.user.id}
+                      onPress={() => setSelectedDirectChatUserId(peer.user.id)}
+                      style={({ pressed }) => [
+                        styles.chatListItem,
+                        selectedDirectPeer?.user.id === peer.user.id ? styles.chatListItemActive : null,
+                        pressed ? styles.interactiveCardPressed : null,
+                      ]}
+                    >
+                      <View style={styles.chatListAvatar}>
+                        <Text style={styles.chatListAvatarText}>{peer.user.avatarInitials}</Text>
+                      </View>
+                      <View style={styles.chatListCopy}>
+                        <View style={styles.rowBetween}>
+                          <Text style={styles.inlineTitle}>
+                            {peer.membership.roles.includes('chairman') ? `${peer.user.name} (Chairman)` : peer.user.name}
+                          </Text>
+                          {threadEntry?.latestMessage ? <Caption>{formatLongDate(threadEntry.latestMessage.createdAt)}</Caption> : null}
+                        </View>
+                        <Caption>
+                          {peer.units.length > 0
+                            ? peer.units
+                              .map((unit) => `${unit.code} · ${humanizeResidenceUnitType(unit.unitType)}`)
+                              .join(', ')
+                            : 'Residence pending'}
+                        </Caption>
+                        <Caption>{threadEntry?.latestMessage?.body ?? 'Tap to start chatting privately.'}</Caption>
+                      </View>
+                    </Pressable>
+                  );
+                }) : (
+                  <Caption>No other society member is available for direct chat yet.</Caption>
+                )}
+              </View>
+              <View style={styles.chatConversationPane}>
+            {selectedDirectPeer ? (
+              <>
+                <View style={styles.chatMetaRow}>
+                  <View style={styles.chatPeerCopy}>
+                    <Text style={styles.cardTitle}>{selectedDirectPeer.user.name}</Text>
+                    <Caption>
+                      {selectedDirectPeer.units.map((unit) => unit.code).join(', ') || 'Unit pending'}
+                      {' · '}
+                      {selectedDirectPeer.membership.roles.map((role) => humanizeRole(role)).join(', ')}
+                    </Caption>
+                  </View>
+                <Pill
+                    label={selectedDirectPeer.membership.roles.includes('chairman') ? 'Chairman' : 'Resident'}
+                    tone={selectedDirectPeer.membership.roles.includes('chairman') ? 'warning' : 'accent'}
+                  />
+                </View>
+                <View style={styles.chatPanel}>
+                  {directMessages.length > 0 ? (
+                    directMessages.slice(-12).map(({ message, sender }) => (
+                      <View
+                        key={message.id}
+                        style={[
+                          styles.threadBubble,
+                          message.senderUserId === userId ? styles.threadBubbleResident : styles.threadBubbleSecurity,
+                        ]}
+                      >
+                        <Text style={styles.threadBubbleTitle}>{sender?.name ?? 'Resident'}</Text>
+                        <Text style={styles.threadBubbleMessage}>{message.body}</Text>
+                        <Caption>{formatLongDate(message.createdAt)}</Caption>
+                      </View>
+                    ))
+                  ) : (
+                    <Caption>Start a direct conversation with {selectedDirectPeer.user.name}. The first message will open the private chat.</Caption>
+                  )}
+                </View>
+                <InputField
+                  label={`Message ${selectedDirectPeer.user.name}`}
+                  value={directMessageDraft}
+                  onChangeText={setDirectMessageDraft}
+                  placeholder="Hello, can we coordinate on a society issue or quick update?"
+                  multiline
+                />
+                <View style={styles.heroActions}>
+                  <ActionButton
+                    label={state.isSyncing ? 'Sending...' : 'Send direct message'}
+                    onPress={handleSendDirectMessage}
+                    disabled={state.isSyncing || !directMessageDraft.trim()}
+                  />
+                </View>
+              </>
+            ) : (
+              <Caption>No other society member is available for direct chat yet.</Caption>
+            )}
+              </View>
+            </View>
+          </SurfaceCard>
+        </>
       ) : null}
 
       {activeSection === 'vehicles' ? (
@@ -611,7 +1761,30 @@ function ResidentCommunity({ societyId, userId }: { societyId: string; userId: s
   );
 }
 
-function ResidentBilling({ societyId, userId }: { societyId: string; userId: string }) {
+function humanizeResidenceUnitType(unitType: SeedData['units'][number]['unitType']) {
+  switch (unitType) {
+    case 'flat':
+      return 'Flat';
+    case 'plot':
+      return 'Plot';
+    case 'office':
+      return 'Office';
+    case 'shed':
+      return 'Shed';
+    default:
+      return unitType;
+  }
+}
+
+function ResidentBilling({
+  societyId,
+  userId,
+  preferredSection,
+}: {
+  societyId: string;
+  userId: string;
+  preferredSection?: ResidentBillingSection;
+}) {
   const { state, actions } = useApp();
   const overview = getResidentOverview(state.data, userId, societyId);
   const paymentHistory = getPaymentsForUserSociety(state.data, userId, societyId);
@@ -629,7 +1802,14 @@ function ResidentBilling({ societyId, userId }: { societyId: string; userId: str
   const [upiProofImageDataUrl, setUpiProofImageDataUrl] = useState('');
   const [upiHelperText, setUpiHelperText] = useState('');
   const [receiptActionMessage, setReceiptActionMessage] = useState('');
+  const [activeSection, setActiveSection] = useState<ResidentBillingSection>(preferredSection ?? 'pay');
   const hasUpiSetup = Boolean(plan?.upiId || plan?.upiMobileNumber || plan?.upiQrCodeDataUrl);
+
+  useEffect(() => {
+    if (preferredSection) {
+      setActiveSection(preferredSection);
+    }
+  }, [preferredSection]);
 
   const pendingInvoiceIds = new Set(
     paymentHistory
@@ -732,19 +1912,34 @@ function ResidentBilling({ societyId, userId }: { societyId: string; userId: str
 
   return (
     <>
+      <SectionHeader
+        title="Maintenance billing"
+        description="Track dues, payment flags, reminders, and history from one billing hub that follows the same layout as the other resident modules."
+      />
       <SurfaceCard>
-        <SectionHeader
-          title="Maintenance billing"
-          description="Pay using the society QR, UPI ID, or payment mobile number, or use the manual review flow for cash and offline transfers."
-        />
         <View style={styles.metricGrid}>
           <MetricCard label="Outstanding dues" value={formatCurrency(overview.totalDue)} tone="accent" />
           <MetricCard label="Payment flags" value={String(overview.myPendingPayments.length)} tone="primary" />
           <MetricCard label="Reminder notices" value={String(reminders.length)} tone="blue" />
         </View>
+        <View style={styles.choiceRow}>
+          {residentBillingSections.map((section) => (
+            <ChoiceChip
+              key={section.key}
+              label={section.label}
+              selected={activeSection === section.key}
+              onPress={() => setActiveSection(section.key)}
+            />
+          ))}
+        </View>
+        <View style={styles.inlineSection}>
+          <Caption>
+            Choose a billing section to pay now, review reminders, inspect outstanding invoices, or open receipt history.
+          </Caption>
+        </View>
       </SurfaceCard>
 
-      {reminders.length > 0 ? (
+      {activeSection === 'reminders' && reminders.length > 0 ? (
         <SurfaceCard>
           <SectionHeader title="Recent payment reminders" />
           {reminders.map(({ reminder, invoices, units, sentBy }) => (
@@ -763,6 +1958,8 @@ function ResidentBilling({ societyId, userId }: { societyId: string; userId: str
         </SurfaceCard>
       ) : null}
 
+      {activeSection === 'pay' ? (
+      <>
       <SurfaceCard>
         <SectionHeader
           title="Society payment details"
@@ -936,8 +2133,17 @@ function ResidentBilling({ societyId, userId }: { societyId: string; userId: str
           <Caption>No unpaid maintenance invoices are linked to your units right now.</Caption>
         )}
       </SurfaceCard>
+      </>
+      ) : null}
 
-      <SectionHeader title="Outstanding invoices" />
+      {activeSection === 'outstanding' ? (
+      <>
+      <SurfaceCard>
+        <SectionHeader
+          title="Outstanding invoices"
+          description="Review unpaid and overdue maintenance cycles in the same subsection card pattern used across the resident workspace."
+        />
+      </SurfaceCard>
       {overview.outstandingInvoices.length > 0 ? overview.outstandingInvoices.map((invoice) => {
         const relatedPayment = paymentHistory.find(({ invoice: paymentInvoice }) => paymentInvoice.id === invoice.id);
         return (
@@ -959,9 +2165,18 @@ function ResidentBilling({ societyId, userId }: { societyId: string; userId: str
       }) : (
         <SurfaceCard><Caption>No outstanding maintenance invoices.</Caption></SurfaceCard>
       )}
+      </>
+      ) : null}
 
-      <SectionHeader title="Payment history" />
-      {receiptActionMessage ? <Caption>{receiptActionMessage}</Caption> : null}
+      {activeSection === 'history' ? (
+      <>
+      <SurfaceCard>
+        <SectionHeader
+          title="Payment history"
+          description="Confirmed payments, receipt access, and proof snapshots stay grouped in one history section."
+        />
+        {receiptActionMessage ? <Caption>{receiptActionMessage}</Caption> : null}
+      </SurfaceCard>
       {paymentHistory.length > 0 ? paymentHistory.map(({ payment, invoice, unit, receipt, reviewedBy }) => {
         const receiptDetails = receipt ? buildMaintenanceReceiptDetails(state.data, payment.id) : null;
 
@@ -995,6 +2210,8 @@ function ResidentBilling({ societyId, userId }: { societyId: string; userId: str
       }) : (
         <SurfaceCard><Caption>No payment history yet.</Caption></SurfaceCard>
       )}
+      </>
+      ) : null}
     </>
   );
 }
@@ -1004,12 +2221,32 @@ function ResidentNotices({ societyId, userId }: { societyId: string; userId: str
   const membership = getMembershipForSociety(state.data, userId, societyId);
   const announcements = getAnnouncementsForSociety(state.data, societyId, membership?.roles);
   const rules = getRulesForSociety(state.data, societyId);
+  const unreadAnnouncements = announcements.filter((announcement) => !announcement.readByUserIds.includes(userId));
+  const highPriorityAnnouncements = announcements.filter((announcement) => announcement.priority === 'high').length;
 
   return (
     <>
       <SectionHeader
-        title="Announcements"
-        description="Important society communication should support audience targeting, read receipts, and priority labels."
+        title="Notice board"
+        description="Stay on top of announcements, unread communication, rules, and resident-facing documents from one notice hub."
+      />
+      <SurfaceCard>
+        <View style={styles.metricGrid}>
+          <MetricCard label="Announcements" value={String(announcements.length)} tone="primary" />
+          <MetricCard label="Unread" value={String(unreadAnnouncements.length)} tone="accent" />
+          <MetricCard label="High priority" value={String(highPriorityAnnouncements)} tone="blue" />
+          <MetricCard label="Rules" value={String(rules.length)} tone="primary" />
+        </View>
+        <View style={styles.inlineSection}>
+          <Caption>
+            Read the latest society communication here, then review the current rulebook and acknowledgement status below.
+          </Caption>
+        </View>
+      </SurfaceCard>
+
+      <SectionHeader
+        title="Society announcements"
+        description="Tap an unread notice to mark it as read and keep your resident communication queue current."
       />
       {announcements.map((announcement) => {
         const isUnread = !announcement.readByUserIds.includes(userId);
@@ -1043,7 +2280,12 @@ function ResidentNotices({ societyId, userId }: { societyId: string; userId: str
         );
       })}
 
-      <SectionHeader title="Rules and documents" />
+      <SurfaceCard>
+        <SectionHeader
+          title="Rules and documents"
+          description="Resident-facing policies, acknowledgements, and current rule versions live together in this document section."
+        />
+      </SurfaceCard>
       {rules.map((rule) => (
         <SurfaceCard key={rule.id}>
           <Text style={styles.cardTitle}>{rule.title}</Text>
@@ -1062,7 +2304,15 @@ function ResidentNotices({ societyId, userId }: { societyId: string; userId: str
   );
 }
 
-function ResidentBookings({ societyId, userId }: { societyId: string; userId: string }) {
+function ResidentBookings({
+  societyId,
+  userId,
+  preferredSection,
+}: {
+  societyId: string;
+  userId: string;
+  preferredSection?: ResidentBookingsSection;
+}) {
   const { state, actions } = useApp();
   const membership = getMembershipForSociety(state.data, userId, societyId);
   const units = getUnitsForSociety(state.data, societyId).filter((unit) => membership?.unitIds.includes(unit.id));
@@ -1075,10 +2325,20 @@ function ResidentBookings({ societyId, userId }: { societyId: string; userId: st
   const [startTime, setStartTime] = useState('18:00');
   const [endTime, setEndTime] = useState('20:00');
   const [guests, setGuests] = useState('4');
+  const [activeSection, setActiveSection] = useState<ResidentBookingsSection>(preferredSection ?? 'booking');
   const selectedAmenity = bookableAmenities.find((amenity) => amenity.id === selectedAmenityId) ?? null;
   const selectedAmenityRules = state.data.amenityScheduleRules.filter(
     (rule) => rule.amenityId === selectedAmenity?.id,
   );
+
+  useEffect(() => {
+    if (preferredSection) {
+      setActiveSection(preferredSection);
+    }
+  }, [preferredSection]);
+
+  const pendingBookings = bookings.filter((booking) => booking.status === 'pending').length;
+  const approvedBookings = bookings.filter((booking) => booking.status === 'approved').length;
 
   async function handleCreateBooking() {
     if (!selectedAmenity) {
@@ -1102,9 +2362,39 @@ function ResidentBookings({ societyId, userId }: { societyId: string; userId: st
   return (
     <>
       <SectionHeader
-        title="Raise an amenity booking"
-        description="Choose the amenity, slot, and linked unit here. The same request then appears in the admin amenities module for review."
+        title="Bookings hub"
+        description="Create amenity requests, explore available spaces, and review your reservations from the same bookings layout used across the resident workspace."
       />
+      <SurfaceCard>
+        <View style={styles.metricGrid}>
+          <MetricCard label="Bookable amenities" value={String(bookableAmenities.length)} tone="accent" />
+          <MetricCard label="My bookings" value={String(bookings.length)} tone="primary" />
+          <MetricCard label="Pending" value={String(pendingBookings)} tone="blue" />
+          <MetricCard label="Approved" value={String(approvedBookings)} tone="primary" />
+        </View>
+        <View style={styles.choiceRow}>
+          {residentBookingSections.map((section) => (
+            <ChoiceChip
+              key={section.key}
+              label={section.label}
+              selected={activeSection === section.key}
+              onPress={() => setActiveSection(section.key)}
+            />
+          ))}
+        </View>
+        <View style={styles.inlineSection}>
+          <Caption>
+            Open a section above to create a booking, browse amenities, or review the reservations already linked to your unit.
+          </Caption>
+        </View>
+      </SurfaceCard>
+
+      {activeSection === 'booking' ? (
+        <>
+          <SectionHeader
+            title="Raise an amenity booking"
+            description="Choose the amenity, slot, and linked unit here. The same request then appears in the admin amenities module for review."
+          />
       <SurfaceCard>
         {bookableAmenities.length > 0 ? (
           <View style={styles.inlineSection}>
@@ -1166,12 +2456,16 @@ function ResidentBookings({ societyId, userId }: { societyId: string; userId: st
           <Caption>No bookable amenities are configured yet. Info-only amenities remain visible below but cannot be reserved.</Caption>
         )}
       </SurfaceCard>
+        </>
+      ) : null}
 
+      {activeSection === 'amenities' ? (
+        <>
       <SectionHeader
         title="Amenity discovery"
         description="Amenities can be exclusive slot-based, capacity-based, or simply informational."
       />
-      {amenities.map((amenity) => (
+      {amenities.length > 0 ? amenities.map((amenity) => (
         <SurfaceCard key={amenity.id}>
           <View style={styles.rowBetween}>
             <Text style={styles.cardTitle}>{amenity.name}</Text>
@@ -1181,9 +2475,20 @@ function ResidentBookings({ societyId, userId }: { societyId: string; userId: st
             Approval: {amenity.approvalMode} {amenity.capacity ? `· Capacity ${amenity.capacity}` : ''}
           </Caption>
         </SurfaceCard>
-      ))}
+      )) : (
+        <SurfaceCard><Caption>No amenities are configured yet.</Caption></SurfaceCard>
+      )}
+        </>
+      ) : null}
 
-      <SectionHeader title="My bookings" />
+      {activeSection === 'history' ? (
+        <>
+      <SurfaceCard>
+        <SectionHeader
+          title="My bookings"
+          description="Track every amenity request, approval, and schedule in one booking history section."
+        />
+      </SurfaceCard>
       {bookings.length > 0 ? bookings.map((booking) => {
         const amenity = amenities.find((item) => item.id === booking.amenityId);
 
@@ -1202,6 +2507,8 @@ function ResidentBookings({ societyId, userId }: { societyId: string; userId: st
       }) : (
         <SurfaceCard><Caption>No amenity bookings raised yet.</Caption></SurfaceCard>
       )}
+        </>
+      ) : null}
     </>
   );
 }
@@ -1223,6 +2530,12 @@ function ResidentHelpdesk({ societyId, userId }: { societyId: string; userId: st
     societyId,
     category,
     selectedUnit?.code ?? 'your unit',
+  );
+  const openComplaints = complaints.filter((complaint) => complaint.status !== 'resolved');
+  const resolvedComplaints = complaints.filter((complaint) => complaint.status === 'resolved');
+  const complaintUpdateCount = complaints.reduce(
+    (total, complaint) => total + getComplaintUpdatesForComplaint(state.data, complaint.id).length,
+    0,
   );
 
   async function handleRaiseComplaint() {
@@ -1247,8 +2560,26 @@ function ResidentHelpdesk({ societyId, userId }: { societyId: string; userId: st
   return (
     <>
       <SectionHeader
-        title="Helpdesk tickets"
-        description="Raise a ticket here and it flows into the chairman helpdesk queue with the linked unit and issue details."
+        title="Helpdesk hub"
+        description="Raise tickets, follow progress, and review resolution history from the same summary-led design used across the resident modules."
+      />
+      <SurfaceCard>
+        <View style={styles.metricGrid}>
+          <MetricCard label="Open tickets" value={String(openComplaints.length)} tone="accent" />
+          <MetricCard label="Resolved" value={String(resolvedComplaints.length)} tone="primary" />
+          <MetricCard label="Updates" value={String(complaintUpdateCount)} tone="blue" />
+          <MetricCard label="Linked units" value={String(userUnits.length)} tone="primary" />
+        </View>
+        <View style={styles.inlineSection}>
+          <Caption>
+            Start with a new ticket below, then use the same page to monitor assigned work and the latest society updates.
+          </Caption>
+        </View>
+      </SurfaceCard>
+
+      <SectionHeader
+        title="Raise and track tickets"
+        description="New issues flow into the chairman helpdesk queue with the linked unit and complaint details."
       />
       <SurfaceCard>
         <View style={styles.inlineSection}>
@@ -1367,7 +2698,14 @@ function ResidentHelpdesk({ societyId, userId }: { societyId: string; userId: st
   );
 }
 
-function ResidentProfile({ societyId, userId }: { societyId: string; userId: string }) {
+function ResidentProfile({
+  societyId,
+  userId,
+}: {
+  societyId: string;
+  userId: string;
+  preferredSection?: ResidentProfileSection;
+}) {
   const { state, actions } = useApp();
   const currentUser = getCurrentUser(state.data, userId);
   const membership = getMembershipForSociety(state.data, userId, societyId);
@@ -1642,7 +2980,39 @@ function ResidentProfile({ societyId, userId }: { societyId: string; userId: str
 
   return (
     <>
-      <SectionHeader title="Membership and household" />
+      <SectionHeader
+        title="Resident profile"
+        description="Review household access, residence verification, vehicles, and staff records from one profile hub that matches the newer resident module design."
+      />
+      <SurfaceCard>
+        <View style={styles.metricGrid}>
+          <MetricCard label="Linked units" value={String(units.length)} tone="primary" />
+          <MetricCard label="Saved vehicles" value={String(userVehicles.length)} tone="accent" />
+          <MetricCard label="Staff records" value={String(staff.length)} tone="blue" />
+          <MetricCard
+            label="Emergency contacts"
+            value={String(
+              [
+                profileEmergencyContactPhone,
+                profileSecondaryEmergencyContactPhone,
+              ].filter((value) => value.trim()).length,
+            )}
+            tone="primary"
+          />
+        </View>
+        <View style={styles.inlineSection}>
+          <Caption>
+            Keep your household identity, verification details, vehicles, privacy consent, and domestic staff information current in this profile section.
+          </Caption>
+        </View>
+      </SurfaceCard>
+
+      <SurfaceCard>
+        <SectionHeader
+          title="Membership and household"
+          description="Core household identity, role access, and unit mapping stay grouped together before the editable profile details."
+        />
+      </SurfaceCard>
       <SurfaceCard>
         <Text style={styles.cardTitle}>Roles in this society</Text>
         <View style={styles.pillRow}>
@@ -2000,6 +3370,192 @@ function ResidentProfile({ societyId, userId }: { societyId: string; userId: str
 }
 
 const styles = StyleSheet.create({
+  compactWorkspaceCard: {
+    gap: spacing.sm,
+    backgroundColor: '#FFF8F0',
+  },
+  compactWorkspaceTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    flexWrap: 'wrap',
+  },
+  compactWorkspaceTitleWrap: {
+    flex: 1,
+    gap: spacing.xs,
+  },
+  compactWorkspaceTitle: {
+    fontSize: 22,
+    lineHeight: 26,
+    fontWeight: '900',
+    color: palette.ink,
+  },
+  compactWorkspaceStatsRow: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+    width: '100%',
+  },
+  compactWorkspaceStat: {
+    flex: 1,
+    minWidth: 0,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E8DCCB',
+    backgroundColor: '#FFFDF9',
+    alignItems: 'center',
+    gap: 2,
+  },
+  compactWorkspaceStatValue: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: palette.accent,
+  },
+  compactWorkspaceActionRow: {
+    flexDirection: 'column',
+    gap: spacing.xs,
+  },
+  residentNavigationCard: {
+    gap: spacing.md,
+    backgroundColor: '#FFFAF4',
+  },
+  moduleHeroCard: {
+    gap: spacing.md,
+    backgroundColor: '#FFF8F0',
+  },
+  moduleHeroTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+    flexWrap: 'wrap',
+  },
+  moduleHeroTitleWrap: {
+    flex: 1,
+    minWidth: 220,
+    gap: spacing.sm,
+  },
+  moduleHeroTitle: {
+    fontSize: 28,
+    lineHeight: 32,
+    fontWeight: '800',
+    color: palette.ink,
+  },
+  moduleHeroStats: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    flexWrap: 'wrap',
+  },
+  moduleHeroStatChip: {
+    minWidth: 82,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 20,
+    backgroundColor: '#FFF1E3',
+    borderWidth: 1,
+    borderColor: '#F0D9BF',
+    alignItems: 'center',
+    gap: 2,
+  },
+  moduleHeroStatValue: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: palette.accent,
+  },
+  moduleHeroStatLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: palette.mutedInk,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  bottomNavigationCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    borderRadius: 28,
+    borderWidth: 1,
+    borderColor: '#E8DCCB',
+    backgroundColor: 'rgba(255, 252, 248, 0.98)',
+    ...{
+      shadowColor: '#7E6148',
+      shadowOpacity: 0.12,
+      shadowRadius: 20,
+      shadowOffset: { width: 0, height: 10 },
+      elevation: 6,
+    },
+  },
+  bottomNavigationCardCompact: {
+    paddingHorizontal: spacing.xs,
+    paddingVertical: spacing.xs,
+    borderRadius: 22,
+    gap: 4,
+  },
+  bottomNavigationItem: {
+    flex: 1,
+    minHeight: 58,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 22,
+    gap: 5,
+    paddingHorizontal: spacing.xs,
+  },
+  bottomNavigationItemCompact: {
+    minHeight: 50,
+    borderRadius: 16,
+    gap: 3,
+    paddingHorizontal: 2,
+  },
+  bottomNavigationItemActive: {
+    backgroundColor: '#FFF3E8',
+  },
+  bottomNavigationItemHover: {
+    transform: [{ translateY: -2 }, { scale: 1.01 }],
+  },
+  bottomNavigationItemPressed: {
+    opacity: 0.92,
+    transform: [{ scale: 0.985 }],
+  },
+  bottomNavigationBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F1E6D7',
+  },
+  bottomNavigationBadgeCompact: {
+    width: 24,
+    height: 24,
+    borderRadius: 8,
+  },
+  bottomNavigationBadgeActive: {
+    backgroundColor: palette.accent,
+  },
+  bottomNavigationBadgeText: {
+    color: palette.ink,
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  bottomNavigationBadgeTextActive: {
+    color: palette.white,
+  },
+  bottomNavigationLabel: {
+    color: palette.mutedInk,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  bottomNavigationLabelCompact: {
+    fontSize: 10,
+  },
+  bottomNavigationLabelActive: {
+    color: palette.accent,
+  },
   heroActions: {
     flexDirection: 'row',
     gap: spacing.sm,
@@ -2028,19 +3584,20 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   interactiveCard: {
-    backgroundColor: palette.surface,
+    backgroundColor: '#FFFBF7',
     borderRadius: 24,
     padding: spacing.lg,
     gap: spacing.sm,
     borderWidth: 1,
-    borderColor: palette.border,
+    borderColor: '#E8DDCF',
+    ...shadow.card,
   },
   interactiveCardPressed: {
     opacity: 0.92,
   },
   noticeUnreadCard: {
-    borderColor: palette.blue,
-    backgroundColor: '#F6FBFF',
+    borderColor: '#F2C68F',
+    backgroundColor: '#FFF8EA',
   },
   compactRow: {
     flexDirection: 'row',
@@ -2064,9 +3621,216 @@ const styles = StyleSheet.create({
   },
   inlineSection: {
     gap: spacing.sm,
-    paddingTop: spacing.sm,
+    paddingTop: spacing.md,
     borderTopWidth: 1,
-    borderTopColor: '#EFE5D9',
+    borderTopColor: '#F0E5D8',
+  },
+  liveApprovalCard: {
+    overflow: 'hidden',
+    gap: spacing.md,
+  },
+  liveApprovalBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    pointerEvents: 'none',
+  },
+  liveApprovalPulseLarge: {
+    position: 'absolute',
+    top: -40,
+    right: -30,
+    width: 170,
+    height: 170,
+    borderRadius: 85,
+    backgroundColor: 'rgba(242, 106, 79, 0.12)',
+  },
+  liveApprovalPulseSmall: {
+    position: 'absolute',
+    bottom: -28,
+    left: -18,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: 'rgba(27, 57, 87, 0.08)',
+  },
+  liveApprovalCopy: {
+    flex: 1,
+    gap: spacing.xs,
+  },
+  chatMetaRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: spacing.sm,
+    flexWrap: 'wrap',
+  },
+  chatPeerCopy: {
+    flex: 1,
+    gap: spacing.xs,
+    minWidth: 220,
+  },
+  chatHeaderBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: spacing.md,
+    flexWrap: 'wrap',
+  },
+  chatHeaderIdentity: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    flex: 1,
+    minWidth: 260,
+  },
+  chatHeaderAvatar: {
+    width: 52,
+    height: 52,
+    borderRadius: radius.pill,
+    backgroundColor: palette.primarySoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chatHeaderAvatarText: {
+    color: palette.primary,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  chatPanel: {
+    marginTop: spacing.sm,
+    padding: spacing.md,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#E8DDCF',
+    backgroundColor: '#FBF7EF',
+    gap: spacing.sm,
+  },
+  chatHistoryPanel: {
+    marginTop: spacing.sm,
+    padding: spacing.md,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#E8DDCF',
+    backgroundColor: '#FBF7EF',
+    gap: spacing.sm,
+    minHeight: 180,
+  },
+  chatComposer: {
+    marginTop: spacing.sm,
+    gap: spacing.sm,
+  },
+  chatWorkspace: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.md,
+  },
+  chatSidebar: {
+    flexBasis: 280,
+    flexGrow: 1,
+    gap: spacing.sm,
+  },
+  chatConversationPane: {
+    flexBasis: 420,
+    flexGrow: 2,
+    gap: spacing.sm,
+    minWidth: 280,
+  },
+  chatListItem: {
+    flexDirection: 'row',
+    gap: spacing.md,
+    alignItems: 'center',
+    padding: spacing.md,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#E8DDCF',
+    backgroundColor: palette.surface,
+  },
+  chatListItemActive: {
+    borderColor: '#C8D9EE',
+    backgroundColor: '#F2F7FD',
+  },
+  chatListAvatar: {
+    width: 46,
+    height: 46,
+    borderRadius: radius.pill,
+    backgroundColor: palette.accentSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chatListAvatarText: {
+    color: palette.accent,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  chatListCopy: {
+    flex: 1,
+    gap: spacing.xs,
+    minWidth: 0,
+  },
+  chatPreviewList: {
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  chatPreviewCard: {
+    padding: spacing.md,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#E8DDCF',
+    backgroundColor: palette.surface,
+    gap: spacing.xs,
+  },
+  queuePhotoRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.md,
+  },
+  queueMediaCard: {
+    gap: spacing.xs,
+  },
+  securityThreadPhoto: {
+    width: 116,
+    height: 116,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: palette.border,
+    backgroundColor: palette.surfaceMuted,
+  },
+  threadPanel: {
+    padding: spacing.md,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#E8DDCF',
+    backgroundColor: '#FBF7EF',
+    gap: spacing.sm,
+  },
+  threadTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: palette.ink,
+  },
+  threadBubble: {
+    padding: spacing.md,
+    borderRadius: 18,
+    gap: spacing.xs,
+    maxWidth: '92%',
+  },
+  threadBubbleSecurity: {
+    alignSelf: 'flex-start',
+    backgroundColor: palette.blueSoft,
+    borderTopLeftRadius: 8,
+  },
+  threadBubbleResident: {
+    alignSelf: 'flex-end',
+    backgroundColor: palette.accentSoft,
+    borderTopRightRadius: 8,
+  },
+  threadBubbleTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: palette.ink,
+  },
+  threadBubbleMessage: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: palette.ink,
   },
   choiceRow: {
     flexDirection: 'row',
@@ -2125,12 +3889,12 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: '#E6DED2',
-    backgroundColor: '#FCFAF6',
+    borderColor: '#E7D9C6',
+    backgroundColor: '#FFF9F1',
   },
   helpdeskLatestUpdateCard: {
-    borderColor: '#F2B66C',
-    backgroundColor: '#FFF4DF',
+    borderColor: '#F0C07C',
+    backgroundColor: '#FFF2DC',
   },
   helpdeskLatestUpdateLabel: {
     fontSize: 12,
@@ -2163,8 +3927,8 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: palette.border,
-    backgroundColor: palette.surfaceMuted,
+    borderColor: '#E8D9C9',
+    backgroundColor: '#FFF7EE',
   },
   profileVehicleImage: {
     width: 200,
@@ -2394,6 +4158,48 @@ function getComplaintTone(status: 'open' | 'inProgress' | 'resolved') {
   }
 }
 
+function humanizeVisitorCategory(category: VisitorCategory) {
+  switch (category) {
+    case 'family':
+      return 'Family';
+    case 'service':
+      return 'Service';
+    case 'delivery':
+      return 'Delivery';
+    case 'guest':
+    default:
+      return 'Guest';
+  }
+}
+
+function humanizeVisitorPassStatus(status: 'scheduled' | 'checkedIn' | 'completed' | 'cancelled') {
+  switch (status) {
+    case 'checkedIn':
+      return 'Checked in';
+    case 'completed':
+      return 'Completed';
+    case 'cancelled':
+      return 'Cancelled';
+    case 'scheduled':
+    default:
+      return 'Scheduled';
+  }
+}
+
+function getVisitorPassTone(status: 'scheduled' | 'checkedIn' | 'completed' | 'cancelled') {
+  switch (status) {
+    case 'checkedIn':
+      return 'primary' as const;
+    case 'completed':
+      return 'success' as const;
+    case 'cancelled':
+      return 'accent' as const;
+    case 'scheduled':
+    default:
+      return 'warning' as const;
+  }
+}
+
 async function pickWebImageAsDataUrl() {
   if (Platform.OS !== 'web' || typeof document === 'undefined') {
     throw new Error('Payment screenshot upload is available from the web workspace right now.');
@@ -2434,5 +4240,11 @@ function todayString() {
 function nowDateTimeInputValue() {
   const value = new Date();
   value.setSeconds(0, 0);
+  return value.toISOString().slice(0, 16);
+}
+
+function addHoursToDateTimeInputValue(hours: number) {
+  const value = new Date();
+  value.setHours(value.getHours() + hours, 0, 0, 0);
   return value.toISOString().slice(0, 16);
 }

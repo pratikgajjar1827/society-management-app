@@ -7,11 +7,16 @@ import {
   MembershipRole,
   ResidenceProfile,
   RoleProfile,
+  SecurityGuestLog,
+  SecurityGuestLogAction,
+  SecurityGuestRequest,
+  SecurityGuestRequestStatus,
   SeedData,
   SocietySetupDraft,
   SocietyStructureOption,
   SocietyWorkspace,
   UserProfile,
+  VisitorPass,
 } from '../types/domain';
 
 export type AdminRecommendationTab =
@@ -65,17 +70,31 @@ export function isResidentRole(role: MembershipRole) {
   return role === 'owner' || role === 'tenant' || role === 'family' || role === 'authorizedOccupant';
 }
 
+export function isSecurityRole(role: MembershipRole) {
+  return role === 'security';
+}
+
 export function humanizeRole(role: MembershipRole) {
   switch (role) {
     case 'authorizedOccupant':
       return 'Authorized occupant';
+    case 'security':
+      return 'Security';
     default:
       return role.charAt(0).toUpperCase() + role.slice(1);
   }
 }
 
 export function humanizeProfile(profile: RoleProfile) {
-  return profile === 'admin' ? 'Admin view' : 'Resident view';
+  switch (profile) {
+    case 'admin':
+      return 'Admin view';
+    case 'security':
+      return 'Security workspace';
+    case 'resident':
+    default:
+      return 'Resident view';
+  }
 }
 
 function doesAnnouncementReachRoles(
@@ -243,7 +262,16 @@ export function deriveProfiles(roles: MembershipRole[]): RoleProfile[] {
     profiles.push('admin');
   }
 
+  if (roles.some(isSecurityRole)) {
+    profiles.push('security');
+  }
+
   return profiles;
+}
+
+export function getSecurityMembershipForSociety(data: SeedData, userId: string, societyId: string) {
+  const membership = getMembershipForSociety(data, userId, societyId);
+  return membership && membership.roles.includes('security') ? membership : undefined;
 }
 
 export function getCurrentUser(data: SeedData, userId?: string) {
@@ -368,6 +396,9 @@ export function getAdminOverview(data: SeedData, societyId: string) {
     ).length +
     data.joinRequests.filter(
       (joinRequest) => joinRequest.societyId === societyId && joinRequest.status === 'pending',
+    ).length +
+    data.securityGuestRequests.filter(
+      (request) => request.societyId === societyId && request.status === 'pendingApproval',
     ).length;
 
   return {
@@ -1035,6 +1066,69 @@ export function getCommunityMembersForSociety(data: SeedData, societyId: string)
   }>;
 }
 
+export function getSocietyChatThread(data: SeedData, societyId: string) {
+  return [...(Array.isArray(data.chatThreads) ? data.chatThreads : [])]
+    .filter((thread) => thread.societyId === societyId && thread.type === 'society')
+    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
+}
+
+function normalizeChatParticipantUserIds(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.map((participantUserId) => String(participantUserId ?? '').trim()).filter(Boolean);
+  }
+
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed)
+        ? parsed.map((participantUserId) => String(participantUserId ?? '').trim()).filter(Boolean)
+        : [];
+    } catch (error) {
+      return [];
+    }
+  }
+
+  return [];
+}
+
+export function getChatMessagesForThread(data: SeedData, threadId: string) {
+  return [...(Array.isArray(data.chatMessages) ? data.chatMessages : [])]
+    .filter((message) => message.threadId === threadId)
+    .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt))
+    .map((message) => ({
+      message,
+      sender: getCurrentUser(data, message.senderUserId),
+    }));
+}
+
+export function getDirectChatThreadsForUser(data: SeedData, societyId: string, userId: string) {
+  return [...(Array.isArray(data.chatThreads) ? data.chatThreads : [])]
+    .map((thread) => ({
+      ...thread,
+      participantUserIds: normalizeChatParticipantUserIds(thread.participantUserIds),
+    }))
+    .filter(
+      (thread) =>
+        thread.societyId === societyId
+        && thread.type === 'direct'
+        && thread.participantUserIds.includes(userId),
+    )
+    .sort((left, right) => Date.parse(right.lastMessageAt ?? right.updatedAt) - Date.parse(left.lastMessageAt ?? left.updatedAt))
+    .map((thread) => {
+      const peerUserId = thread.participantUserIds.find((participantUserId) => participantUserId !== userId) ?? '';
+      const peer = peerUserId ? getCurrentUser(data, peerUserId) : undefined;
+      const latestMessage = [...(Array.isArray(data.chatMessages) ? data.chatMessages : [])]
+        .filter((message) => message.threadId === thread.id)
+        .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))[0];
+
+      return {
+        thread,
+        peer,
+        latestMessage,
+      };
+    });
+}
+
 export function getVehicleDirectoryForSociety(data: SeedData, societyId: string) {
   return [...(Array.isArray(data.vehicleRegistrations) ? data.vehicleRegistrations : [])]
     .filter((vehicle) => vehicle.societyId === societyId)
@@ -1113,6 +1207,170 @@ export function getEntryLogsForSociety(data: SeedData, societyId: string) {
     }));
 }
 
+export function getVisitorPassesForSociety(data: SeedData, societyId: string) {
+  return [...(Array.isArray(data.visitorPasses) ? data.visitorPasses : [])]
+    .filter((visitorPass) => visitorPass.societyId === societyId)
+    .sort((left, right) => Date.parse(right.expectedAt) - Date.parse(left.expectedAt))
+    .map((visitorPass) => ({
+      visitorPass,
+      unit: data.units.find((unit) => unit.id === visitorPass.unitId),
+      createdBy: getCurrentUser(data, visitorPass.createdByUserId),
+    }));
+}
+
+export function getVisitorPassesForUserSociety(data: SeedData, userId: string, societyId: string) {
+  const membership = getMembershipForSociety(data, userId, societyId);
+  const unitIds = new Set(membership?.unitIds ?? []);
+
+  return getVisitorPassesForSociety(data, societyId).filter(
+    ({ visitorPass }) =>
+      visitorPass.createdByUserId === userId || unitIds.has(visitorPass.unitId),
+  );
+}
+
+export function getSecurityGuestRequestsForSociety(data: SeedData, societyId: string) {
+  return [...(Array.isArray(data.securityGuestRequests) ? data.securityGuestRequests : [])]
+    .filter((request) => request.societyId === societyId)
+    .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
+    .map((request) => ({
+      request,
+      unit: data.units.find((unit) => unit.id === request.unitId),
+      resident: getCurrentUser(data, request.residentUserId),
+      createdBy: getCurrentUser(data, request.createdByUserId),
+      respondedBy: request.respondedByUserId ? getCurrentUser(data, request.respondedByUserId) : undefined,
+      visitorPass: request.visitorPassId
+        ? data.visitorPasses.find((visitorPass) => visitorPass.id === request.visitorPassId)
+        : undefined,
+    }));
+}
+
+export function getSecurityGuestRequestsForResident(data: SeedData, userId: string, societyId: string) {
+  const membership = getMembershipForSociety(data, userId, societyId);
+  const residentUnitIds = new Set(membership?.unitIds ?? []);
+
+  return getSecurityGuestRequestsForSociety(data, societyId).filter(
+    ({ request }) =>
+      request.residentUserId === userId ||
+      (residentUnitIds.size > 0 && residentUnitIds.has(request.unitId)),
+  );
+}
+
+export function getPendingSecurityGuestRequestsForResident(data: SeedData, userId: string, societyId: string) {
+  return getSecurityGuestRequestsForResident(data, userId, societyId).filter(
+    ({ request }) => request.status === 'pendingApproval',
+  );
+}
+
+export function getSecurityGuestLogsForSociety(data: SeedData, societyId: string) {
+  return [...(Array.isArray(data.securityGuestLogs) ? data.securityGuestLogs : [])]
+    .filter((log) => log.societyId === societyId)
+    .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt))
+    .map((log) => ({
+      log,
+      actor: log.actorUserId ? getCurrentUser(data, log.actorUserId) : undefined,
+      request: data.securityGuestRequests.find((request) => request.id === log.requestId),
+    }));
+}
+
+export function getSecurityGuestConversationForRequest(data: SeedData, requestId: string) {
+  return [...(Array.isArray(data.securityGuestLogs) ? data.securityGuestLogs : [])]
+    .filter((log) => log.requestId === requestId)
+    .sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt))
+    .map((log) => ({
+      log,
+      actor: log.actorUserId ? getCurrentUser(data, log.actorUserId) : undefined,
+      request: data.securityGuestRequests.find((request) => request.id === log.requestId),
+    }));
+}
+
+export function getSecurityResidentsForSociety(data: SeedData, societyId: string) {
+  const unitsById = new Map(
+    data.units.filter((unit) => unit.societyId === societyId).map((unit) => [unit.id, unit]),
+  );
+
+  return data.memberships
+    .filter(
+      (membership) =>
+        membership.societyId === societyId &&
+        membership.roles.some(isResidentRole) &&
+        membership.unitIds.some((unitId) => unitsById.has(unitId)),
+    )
+    .map((membership) => ({
+      membership,
+      user: getCurrentUser(data, membership.userId),
+      units: membership.unitIds
+        .map((unitId) => unitsById.get(unitId))
+        .filter((unit): unit is SeedData['units'][number] => Boolean(unit)),
+    }))
+    .filter((entry) => Boolean(entry.user))
+    .sort((left, right) =>
+      (left.user?.name ?? '').localeCompare(right.user?.name ?? '', undefined, { sensitivity: 'base' }),
+    ) as Array<{
+    membership: Membership;
+    user: NonNullable<ReturnType<typeof getCurrentUser>>;
+    units: SeedData['units'];
+  }>;
+}
+
+export function humanizeSecurityGuestRequestStatus(status: SecurityGuestRequestStatus) {
+  switch (status) {
+    case 'pendingApproval':
+      return 'Awaiting approval';
+    case 'approved':
+      return 'Approved';
+    case 'denied':
+      return 'Denied';
+    case 'checkedIn':
+      return 'Checked in';
+    case 'completed':
+      return 'Completed';
+    case 'cancelled':
+      return 'Cancelled';
+    default:
+      return status;
+  }
+}
+
+export function getSecurityGuestRequestTone(status: SecurityGuestRequestStatus) {
+  switch (status) {
+    case 'pendingApproval':
+      return 'warning' as const;
+    case 'approved':
+      return 'success' as const;
+    case 'checkedIn':
+      return 'primary' as const;
+    case 'completed':
+      return 'primary' as const;
+    case 'denied':
+    case 'cancelled':
+    default:
+      return 'accent' as const;
+  }
+}
+
+export function humanizeSecurityGuestLogAction(action: SecurityGuestLogAction) {
+  switch (action) {
+    case 'created':
+      return 'Guest captured at gate';
+    case 'approved':
+      return 'Resident approved';
+    case 'denied':
+      return 'Resident denied';
+    case 'checkedIn':
+      return 'Guest checked in';
+    case 'checkedOut':
+      return 'Guest checked out';
+    case 'cancelled':
+      return 'Request cancelled';
+    case 'message':
+      return 'Chat update';
+    case 'ringRequested':
+      return 'Live approval ring sent';
+    default:
+      return action;
+  }
+}
+
 export function getAuditEvents(data: SeedData, societyId: string) {
   const announcementEvents = data.announcements
     .filter((announcement) => announcement.societyId === societyId)
@@ -1173,7 +1431,16 @@ export function getAuditEvents(data: SeedData, societyId: string) {
       createdAt: entry.enteredAt,
     }));
 
-  return [...announcementEvents, ...paymentEvents, ...reminderEvents, ...complaintEvents, ...expenseEvents, ...securityEvents].sort(
+  const securityGuestEvents = data.securityGuestLogs
+    .filter((log) => log.societyId === societyId)
+    .map((log) => ({
+      id: `${log.id}-audit`,
+      title: humanizeSecurityGuestLogAction(log.action),
+      subtitle: log.note || `Role: ${log.actorRole}`,
+      createdAt: log.createdAt,
+    }));
+
+  return [...announcementEvents, ...paymentEvents, ...reminderEvents, ...complaintEvents, ...expenseEvents, ...securityEvents, ...securityGuestEvents].sort(
     (left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt),
   );
 }

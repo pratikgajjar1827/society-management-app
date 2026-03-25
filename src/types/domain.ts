@@ -18,9 +18,10 @@ export type MembershipRole =
   | 'owner'
   | 'tenant'
   | 'family'
-  | 'authorizedOccupant';
+  | 'authorizedOccupant'
+  | 'security';
 
-export type RoleProfile = 'resident' | 'admin';
+export type RoleProfile = 'resident' | 'admin' | 'security';
 
 export type AnnouncementAudience = 'all' | 'residents' | 'committee' | 'owners' | 'tenants';
 export type AnnouncementPriority = 'critical' | 'high' | 'normal';
@@ -38,6 +39,25 @@ export type VerificationState = 'pending' | 'verified' | 'expired';
 export type EntrySubjectType = 'staff' | 'visitor' | 'delivery';
 export type EntryStatus = 'inside' | 'exited';
 export type VehicleType = 'car' | 'bike' | 'scooter';
+export type VisitorCategory = 'guest' | 'family' | 'service' | 'delivery';
+export type VisitorPassStatus = 'scheduled' | 'checkedIn' | 'completed' | 'cancelled';
+export type SecurityGuestRequestStatus =
+  | 'pendingApproval'
+  | 'approved'
+  | 'denied'
+  | 'checkedIn'
+  | 'completed'
+  | 'cancelled';
+export type SecurityGuestLogAction =
+  | 'created'
+  | 'approved'
+  | 'denied'
+  | 'checkedIn'
+  | 'checkedOut'
+  | 'cancelled'
+  | 'message'
+  | 'ringRequested';
+export type ChatThreadType = 'society' | 'direct';
 export type ImportantContactCategory =
   | 'management'
   | 'security'
@@ -363,6 +383,89 @@ export interface EntryLog {
   status: EntryStatus;
 }
 
+export interface VisitorPass {
+  id: string;
+  societyId: string;
+  unitId: string;
+  createdByUserId: string;
+  visitorName: string;
+  phone?: string;
+  category: VisitorCategory;
+  purpose: string;
+  guestCount: number;
+  expectedAt: string;
+  validUntil: string;
+  vehicleNumber?: string;
+  notes?: string;
+  passCode: string;
+  status: VisitorPassStatus;
+  createdAt: string;
+  checkedInAt?: string;
+  checkedOutAt?: string;
+  updatedAt: string;
+}
+
+export interface SecurityGuestRequest {
+  id: string;
+  societyId: string;
+  unitId: string;
+  residentUserId: string;
+  createdByUserId: string;
+  visitorPassId?: string;
+  guestName: string;
+  phone?: string;
+  category: VisitorCategory;
+  purpose: string;
+  guestCount: number;
+  vehicleNumber?: string;
+  guestPhotoDataUrl?: string;
+  guestPhotoCapturedAt?: string;
+  vehiclePhotoDataUrl?: string;
+  vehiclePhotoCapturedAt?: string;
+  gateNotes?: string;
+  status: SecurityGuestRequestStatus;
+  createdAt: string;
+  respondedAt?: string;
+  respondedByUserId?: string;
+  checkedInAt?: string;
+  checkedOutAt?: string;
+  updatedAt: string;
+}
+
+export interface SecurityGuestLog {
+  id: string;
+  societyId: string;
+  requestId: string;
+  actorUserId?: string;
+  actorRole: RoleProfile | 'system';
+  action: SecurityGuestLogAction;
+  note?: string;
+  createdAt: string;
+}
+
+export interface ChatThread {
+  id: string;
+  societyId: string;
+  type: ChatThreadType;
+  title?: string;
+  createdByUserId?: string;
+  participantUserIds: string[];
+  directKey?: string;
+  createdAt: string;
+  lastMessageAt?: string;
+  updatedAt: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  threadId: string;
+  societyId: string;
+  senderUserId: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface JoinRequest {
   id: string;
   societyId: string;
@@ -448,4 +551,9 @@ export interface SeedData {
   securityGuards: SecurityGuardProfile[];
   securityShifts: SecurityShift[];
   entryLogs: EntryLog[];
+  visitorPasses: VisitorPass[];
+  securityGuestRequests: SecurityGuestRequest[];
+  securityGuestLogs: SecurityGuestLog[];
+  chatThreads: ChatThread[];
+  chatMessages: ChatMessage[];
 }
