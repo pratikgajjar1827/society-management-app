@@ -307,10 +307,10 @@ export async function fetchSessionSnapshot(sessionToken: string) {
   });
 }
 
-export async function requestOtp(intent: AuthIntent, channel: AuthChannel, destination: string) {
+export async function requestOtp(intent: AuthIntent, channel: AuthChannel, destination: string, forceDevelopment?: boolean) {
   return requestJson<AuthChallenge>('/api/auth/request-otp', {
     method: 'POST',
-    body: JSON.stringify({ intent, channel, destination }),
+    body: JSON.stringify({ intent, channel, destination, forceDevelopment }),
   });
 }
 

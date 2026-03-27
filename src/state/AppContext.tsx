@@ -735,9 +735,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
           pendingChallenge: challenge,
           apiError: undefined,
           noticeMessage:
-            challenge.provider === 'development'
-              ? 'SMS delivery is not configured on this backend yet. Use the local development OTP shown on the login screen.'
-              : undefined,
+            challenge.provider === 'development' && challenge.developmentCode
+              ? `Development OTP: ${challenge.developmentCode} — SMS is not configured on this backend.`
+              : challenge.provider === 'development'
+                ? 'SMS delivery is not configured on this backend yet. Use the local development OTP shown on the login screen.'
+                : undefined,
           session: {
             ...currentState.session,
             authChannel: challenge.channel,
@@ -762,8 +764,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         pendingChallenge: undefined,
       }));
 
+      let challenge: Awaited<ReturnType<typeof requestOtpRequest>> | undefined;
+
       try {
-        const challenge = await requestOtpRequest('auto', 'sms', destination);
+        challenge = await requestOtpRequest('auto', 'sms', destination, true);
 
         if (challenge.provider !== 'development' || !challenge.developmentCode) {
           setState((currentState) => ({
@@ -772,12 +776,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
             pendingChallenge: challenge,
             apiError: undefined,
             noticeMessage:
-              challenge.provider === 'development'
+              challenge!.provider === 'development'
                 ? 'Development OTP is unavailable for this request. Use the regular OTP flow.'
                 : 'This backend is using real OTP delivery. Use the regular OTP flow to continue.',
             session: {
               ...currentState.session,
-              authChannel: challenge.channel,
+              authChannel: challenge!.channel,
               verifiedDestination: undefined,
             },
           }));
@@ -813,8 +817,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setState((currentState) => ({
           ...currentState,
           isSyncing: false,
+          pendingChallenge: challenge ?? currentState.pendingChallenge,
           apiError: getErrorMessage(error),
-          noticeMessage: undefined,
+          noticeMessage: challenge?.developmentCode
+            ? `Auto-login failed. Use the development OTP manually: ${challenge.developmentCode}`
+            : undefined,
         }));
       }
     },

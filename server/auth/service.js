@@ -506,10 +506,10 @@ async function sendTwilioRequest(path, body) {
   return payload;
 }
 
-async function dispatchOtp(channel, destination) {
+async function dispatchOtp(channel, destination, forceDevelopment = false) {
   const config = getTwilioConfig();
 
-  if (!config) {
+  if (!config || forceDevelopment) {
     return {
       provider: 'development',
       providerReference: null,
@@ -1098,7 +1098,7 @@ function buildAuthPayload(userId, sessionToken) {
   };
 }
 
-async function requestOtp(intentInput, channelInput, destinationInput) {
+async function requestOtp(intentInput, channelInput, destinationInput, forceDevelopment = false) {
   cleanupExpiredRecords();
   const intent = normalizeAuthIntent(intentInput);
   const channel = normalizeAuthChannel(channelInput);
@@ -1113,7 +1113,7 @@ async function requestOtp(intentInput, channelInput, destinationInput) {
     throw new HttpError(409, buildExistingAccountMessage(channel, existingIdentity.userId));
   }
 
-  const providerResponse = await dispatchOtp(channel, destination);
+  const providerResponse = await dispatchOtp(channel, destination, forceDevelopment);
   const challengeId = nextId('challenge');
   const createdAt = nowIso();
   const expiresAt = addMinutes(new Date(), OTP_TTL_MINUTES);

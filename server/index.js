@@ -312,7 +312,7 @@ async function requestHandler(request, response) {
 
     if (request.method === 'POST' && url.pathname === '/api/auth/request-otp') {
       const body = await parseBody(request);
-      const challenge = await requestOtp(body.intent, body.channel, body.destination);
+      const challenge = await requestOtp(body.intent, body.channel, body.destination, Boolean(body.forceDevelopment));
       sendJson(response, 200, challenge);
       return;
     }
