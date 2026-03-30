@@ -1,4 +1,4 @@
-import { ReactNode, createContext, useContext, useEffect, useState } from 'react';
+﻿import { ReactNode, createContext, useContext, useEffect, useState } from 'react';
 
 import {
   clearPersistedApiBaseUrl,
@@ -7,6 +7,7 @@ import {
   createAnnouncement as createAnnouncementRequest,
   createAmenityBooking as createAmenityBookingRequest,
   createComplaintTicket as createComplaintTicketRequest,
+  createSocietyDocument as createSocietyDocumentRequest,
   createEntryLogRecord as createEntryLogRecordRequest,
   createExpenseRecord as createExpenseRecordRequest,
   createSecurityGuard as createSecurityGuardRequest,
@@ -37,6 +38,8 @@ import {
   sendSecurityGuestMessage as sendSecurityGuestMessageRequest,
   submitResidentPayment as submitResidentPaymentRequest,
   ringSecurityGuestRequest as ringSecurityGuestRequestRequest,
+  updateLeadershipRole as updateLeadershipRoleRequest,
+  updateLeadershipProfile as updateLeadershipProfileRequest,
   updateResidenceProfile as updateResidenceProfileRequest,
   updateMaintenancePlanSettings as updateMaintenancePlanSettingsRequest,
   updateSocietyProfile as updateSocietyProfileRequest,
@@ -46,7 +49,9 @@ import {
   updateVisitorPassStatus as updateVisitorPassStatusRequest,
   verifyOtp as verifyOtpRequest,
   type AnnouncementCreateInput,
+  type LeadershipProfileInput,
   type ResidenceProfileInput,
+  type SocietyDocumentCreateInput,
   type SecurityGuestRequestCreateInput,
   type VisitorPassCreateInput,
 } from '../api/client';
@@ -228,6 +233,20 @@ interface VisitorPassStatusInput {
   status: 'scheduled' | 'checkedIn' | 'completed' | 'cancelled';
 }
 
+interface SocietyMeetingInput {
+  title: string;
+  meetingType: 'agm' | 'sgm' | 'committee' | 'emergency';
+  scheduledAt: string;
+  venue: string;
+  summary?: string;
+}
+
+interface MeetingAgendaItemInput {
+  title: string;
+  description?: string;
+  requiresVoting: boolean;
+}
+
 interface SocietyMutationResponse {
   currentUserId: string;
   chairmanAssigned: boolean;
@@ -270,7 +289,6 @@ interface AppContextValue {
   state: AppState;
   actions: {
     requestOtp: (destination: string) => Promise<void>;
-    loginWithDevelopmentOtp: (destination: string) => Promise<void>;
     verifyOtp: (code: string) => Promise<void>;
     retryBackendConnection: () => Promise<boolean>;
     saveApiBaseUrl: (value: string) => Promise<boolean>;
@@ -299,6 +317,14 @@ interface AppContextValue {
       unitIds: string[],
       residentType: 'owner' | 'tenant',
     ) => Promise<boolean>;
+    updateLeadershipRole: (
+      societyId: string,
+      input: {
+        targetUserId: string;
+        role: 'chairman' | 'committee';
+        enabled: boolean;
+      },
+    ) => Promise<boolean>;
     createAmenityBooking: (societyId: string, input: ResidentBookingInput) => Promise<boolean>;
     reviewAmenityBooking: (
       societyId: string,
@@ -324,6 +350,8 @@ interface AppContextValue {
     markAnnouncementRead: (societyId: string, announcementId: string) => Promise<boolean>;
     updateSocietyProfile: (societyId: string, input: SocietyProfileInput) => Promise<boolean>;
     updateResidenceProfile: (societyId: string, input: ResidenceProfileInput) => Promise<boolean>;
+    updateLeadershipProfile: (societyId: string, input: LeadershipProfileInput) => Promise<boolean>;
+    createSocietyDocument: (societyId: string, input: SocietyDocumentCreateInput) => Promise<boolean>;
     updateMaintenanceBillingConfig: (
       societyId: string,
       planId: string,
@@ -386,6 +414,14 @@ interface AppContextValue {
       visitorPassId: string,
       input: VisitorPassStatusInput,
     ) => Promise<boolean>;
+    createSocietyMeeting: (societyId: string, input: SocietyMeetingInput) => Promise<boolean>;
+    uploadMeetingMinutes: (societyId: string, meetingId: string, dataUrl: string) => Promise<boolean>;
+    addMeetingAgendaItem: (societyId: string, meetingId: string, input: MeetingAgendaItemInput) => Promise<boolean>;
+    openMeetingVoting: (societyId: string, agendaItemId: string) => Promise<boolean>;
+    closeMeetingVoting: (societyId: string, agendaItemId: string, resolution: 'passed' | 'rejected' | 'deferred') => Promise<boolean>;
+    castMeetingVote: (societyId: string, agendaItemId: string, meetingId: string, vote: 'yes' | 'no' | 'abstain') => Promise<boolean>;
+    signMeeting: (societyId: string, meetingId: string, signatureText: string) => Promise<boolean>;
+    completeSocietyMeeting: (societyId: string, meetingId: string) => Promise<boolean>;
   };
 }
 
@@ -408,6 +444,34 @@ const initialState: AppState = {
 };
 
 const AppContext = createContext<AppContextValue | undefined>(undefined);
+
+function getAuthChallengeNoticeMessage(challenge?: AuthChallenge) {
+  if (!challenge || challenge.provider !== 'development') {
+    return undefined;
+  }
+
+  if (challenge.developmentCode) {
+    return `Local OTP ready: ${challenge.developmentCode}. SMS is not configured on this backend.`;
+  }
+
+  return 'SMS is not configured on this backend yet. Use the local OTP shown on the login screen.';
+}
+
+function shouldForceDevelopmentOtp(apiBaseUrl: string) {
+  if (typeof __DEV__ !== 'undefined' && __DEV__) {
+    return true;
+  }
+
+  return /localhost|127\.0\.0\.1|10\.0\.2\.2/i.test(apiBaseUrl);
+}
+
+function shouldResetPersistedApiBaseUrlForDevelopment(persistedApiBaseUrl: string | null) {
+  if (typeof __DEV__ === 'undefined' || !__DEV__ || !persistedApiBaseUrl) {
+    return false;
+  }
+
+  return persistedApiBaseUrl !== getDefaultApiBaseUrl();
+}
 
 function getErrorMessage(error: unknown) {
   if (error instanceof Error) {
@@ -437,6 +501,16 @@ function resolveScreen(onboarding?: OnboardingState): Screen {
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AppState>(initialState);
+
+  function mergeServerData(serverData: typeof initialState.data, currentData: typeof initialState.data) {
+    return {
+      ...serverData,
+      societyMeetings: currentData.societyMeetings?.length ? currentData.societyMeetings : (serverData.societyMeetings ?? []),
+      meetingAgendaItems: currentData.meetingAgendaItems?.length ? currentData.meetingAgendaItems : (serverData.meetingAgendaItems ?? []),
+      meetingVotes: currentData.meetingVotes?.length ? currentData.meetingVotes : (serverData.meetingVotes ?? []),
+      meetingAttendeeSigns: currentData.meetingAttendeeSigns?.length ? currentData.meetingAttendeeSigns : (serverData.meetingAttendeeSigns ?? []),
+    };
+  }
 
   async function refreshBackendConnection({
     loadingMode = 'sync',
@@ -478,7 +552,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
       setState((currentState) => ({
         ...currentState,
-        data: sessionResponse?.data ?? bootstrapResponse.data,
+        data: mergeServerData(sessionResponse?.data ?? bootstrapResponse.data, currentState.data),
         chairmanAssigned: sessionResponse?.chairmanAssigned ?? bootstrapResponse.chairmanAssigned,
         amenityLibrary: sessionResponse?.amenityLibrary ?? bootstrapResponse.amenityLibrary,
         defaultSetupDraft: sessionResponse?.defaultSetupDraft ?? bootstrapResponse.defaultSetupDraft,
@@ -521,6 +595,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     async function hydrate() {
       const persistedApiBaseUrl = await loadPersistedApiBaseUrl();
+      const shouldResetPersistedApiBaseUrl = shouldResetPersistedApiBaseUrlForDevelopment(persistedApiBaseUrl);
+      const nextApiBaseUrl = shouldResetPersistedApiBaseUrl
+        ? await clearPersistedApiBaseUrl()
+        : persistedApiBaseUrl ?? getDefaultApiBaseUrl();
 
       if (!active) {
         return;
@@ -528,8 +606,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
       await refreshBackendConnection({
         loadingMode: 'hydrate',
-        apiBaseUrl: persistedApiBaseUrl ?? getDefaultApiBaseUrl(),
-        hasCustomApiBaseUrl: Boolean(persistedApiBaseUrl),
+        apiBaseUrl: nextApiBaseUrl,
+        hasCustomApiBaseUrl: shouldResetPersistedApiBaseUrl ? false : Boolean(persistedApiBaseUrl),
       });
     }
 
@@ -560,7 +638,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         setState((currentState) => ({
           ...currentState,
-          data: response.data,
+          data: mergeServerData(response.data, currentState.data),
           chairmanAssigned: response.chairmanAssigned,
           amenityLibrary: response.amenityLibrary,
           defaultSetupDraft: response.defaultSetupDraft,
@@ -637,7 +715,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
       setState((currentState) => ({
         ...currentState,
-        data: response.data,
+        data: mergeServerData(response.data, currentState.data),
         chairmanAssigned: response.chairmanAssigned,
         amenityLibrary: response.amenityLibrary,
         defaultSetupDraft: response.defaultSetupDraft,
@@ -727,19 +805,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }));
 
       try {
-        const challenge = await requestOtpRequest('auto', 'sms', destination);
+        const challenge = await requestOtpRequest(
+          'auto',
+          'sms',
+          destination,
+          shouldForceDevelopmentOtp(state.apiBaseUrl),
+        );
 
         setState((currentState) => ({
           ...currentState,
           isSyncing: false,
           pendingChallenge: challenge,
           apiError: undefined,
-          noticeMessage:
-            challenge.provider === 'development' && challenge.developmentCode
-              ? `Development OTP: ${challenge.developmentCode} — SMS is not configured on this backend.`
-              : challenge.provider === 'development'
-                ? 'SMS delivery is not configured on this backend yet. Use the local development OTP shown on the login screen.'
-                : undefined,
+          noticeMessage: getAuthChallengeNoticeMessage(challenge),
           session: {
             ...currentState.session,
             authChannel: challenge.channel,
@@ -752,76 +830,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
           isSyncing: false,
           apiError: getErrorMessage(error),
           noticeMessage: undefined,
-        }));
-      }
-    },
-    loginWithDevelopmentOtp: async (destination) => {
-      setState((currentState) => ({
-        ...currentState,
-        isSyncing: true,
-        apiError: undefined,
-        noticeMessage: undefined,
-        pendingChallenge: undefined,
-      }));
-
-      let challenge: Awaited<ReturnType<typeof requestOtpRequest>> | undefined;
-
-      try {
-        challenge = await requestOtpRequest('auto', 'sms', destination, true);
-
-        if (challenge.provider !== 'development' || !challenge.developmentCode) {
-          setState((currentState) => ({
-            ...currentState,
-            isSyncing: false,
-            pendingChallenge: challenge,
-            apiError: undefined,
-            noticeMessage:
-              challenge!.provider === 'development'
-                ? 'Development OTP is unavailable for this request. Use the regular OTP flow.'
-                : 'This backend is using real OTP delivery. Use the regular OTP flow to continue.',
-            session: {
-              ...currentState.session,
-              authChannel: challenge!.channel,
-              verifiedDestination: undefined,
-            },
-          }));
-          return;
-        }
-
-        const response = await verifyOtpRequest('auto', challenge.challengeId, challenge.developmentCode);
-
-        setState((currentState) => ({
-          ...currentState,
-          data: response.data,
-          chairmanAssigned: response.chairmanAssigned,
-          amenityLibrary: response.amenityLibrary,
-          defaultSetupDraft: response.defaultSetupDraft,
-          pendingChallenge: undefined,
-          onboarding: response.onboarding,
-          screen: resolveScreen(response.onboarding),
-          isSyncing: false,
-          apiError: undefined,
-          noticeMessage: 'Logged in with the backend development OTP shortcut.',
-          dataSource: 'remote',
-          session: {
-            userId: response.currentUserId,
-            sessionToken: response.sessionToken,
-            authChannel: response.verifiedChannel,
-            verifiedDestination: response.verifiedDestination,
-            accountRole: response.onboarding.preferredRole ?? undefined,
-            selectedSocietyId: undefined,
-            selectedProfile: undefined,
-          },
-        }));
-      } catch (error) {
-        setState((currentState) => ({
-          ...currentState,
-          isSyncing: false,
-          pendingChallenge: challenge ?? currentState.pendingChallenge,
-          apiError: getErrorMessage(error),
-          noticeMessage: challenge?.developmentCode
-            ? `Auto-login failed. Use the development OTP manually: ${challenge.developmentCode}`
-            : undefined,
         }));
       }
     },
@@ -848,7 +856,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         setState((currentState) => ({
           ...currentState,
-          data: response.data,
+          data: mergeServerData(response.data, currentState.data),
           chairmanAssigned: response.chairmanAssigned,
           amenityLibrary: response.amenityLibrary,
           defaultSetupDraft: response.defaultSetupDraft,
@@ -966,6 +974,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }));
 
       try {
+        const isChairmanClaim = residentType === 'chairman';
         const response = await enrollIntoSocietyRequest(
           sessionToken,
           societyId,
@@ -976,7 +985,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         setState((currentState) => ({
           ...currentState,
-          data: response.data,
+          data: mergeServerData(response.data, currentState.data),
           chairmanAssigned: response.chairmanAssigned,
           amenityLibrary: response.amenityLibrary,
           defaultSetupDraft: response.defaultSetupDraft,
@@ -985,7 +994,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           isSyncing: false,
           apiError: undefined,
           noticeMessage:
-            'Your access request has been sent to the chairman for approval. You will be able to enter the workspace after confirmation.',
+            isChairmanClaim
+              ? 'Your first-chairman claim has been sent to the super user for approval. You can enter the admin workspace after confirmation.'
+              : 'Your access request has been sent to the chairman for approval. You will be able to enter the workspace after confirmation.',
           session: {
             ...currentState.session,
             accountRole: response.preferredRole,
@@ -1027,7 +1038,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         setState((currentState) => ({
           ...currentState,
-          data: response.data,
+          data: mergeServerData(response.data, currentState.data),
           chairmanAssigned: response.chairmanAssigned,
           amenityLibrary: response.amenityLibrary,
           defaultSetupDraft: response.defaultSetupDraft,
@@ -1048,6 +1059,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return false;
       }
     },
+    updateLeadershipProfile: async (societyId, input) =>
+      runSocietyMutation(
+        societyId,
+        (sessionToken) => updateLeadershipProfileRequest(sessionToken, societyId, input),
+        'Public leadership profile saved for residents.',
+      ),
     reviewJoinRequest: async (joinRequestId, decision) => {
       const sessionToken = state.session.sessionToken;
 
@@ -1069,11 +1086,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }));
 
       try {
+        const joinRequest = state.data.joinRequests.find((entry) => entry.id === joinRequestId);
+        const isChairmanClaim = joinRequest?.residentType === 'chairman';
         const response = await reviewJoinRequestRequest(sessionToken, joinRequestId, decision);
 
         setState((currentState) => ({
           ...currentState,
-          data: response.data,
+          data: mergeServerData(response.data, currentState.data),
           chairmanAssigned: response.chairmanAssigned,
           amenityLibrary: response.amenityLibrary,
           defaultSetupDraft: response.defaultSetupDraft,
@@ -1082,8 +1101,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           apiError: undefined,
           noticeMessage:
             decision === 'approve'
-              ? 'Join request approved. The requested units are now linked to that member.'
-              : 'Join request rejected.',
+              ? isChairmanClaim
+                ? 'First-chairman claim approved. The member can now open the admin workspace.'
+                : 'Join request approved. The requested units are now linked to that member.'
+              : isChairmanClaim
+                ? 'First-chairman claim rejected.'
+                : 'Join request rejected.',
         }));
       } catch (error) {
         setState((currentState) => ({
@@ -1216,7 +1239,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         setState((currentState) => ({
           ...currentState,
-          data: response.data,
+          data: mergeServerData(response.data, currentState.data),
           chairmanAssigned: response.chairmanAssigned,
           amenityLibrary: response.amenityLibrary,
           defaultSetupDraft: response.defaultSetupDraft,
@@ -1224,7 +1247,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           screen: 'role',
           isSyncing: false,
           dataSource: 'remote',
-          noticeMessage: undefined,
+          noticeMessage: 'Society created. The local chairman can now claim this society from the join flow for super user approval.',
           session: {
             ...currentState.session,
             userId: response.currentUserId,
@@ -1285,7 +1308,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         setState((currentState) => ({
           ...currentState,
-          data: response.data,
+          data: mergeServerData(response.data, currentState.data),
           chairmanAssigned: response.chairmanAssigned,
           amenityLibrary: response.amenityLibrary,
           defaultSetupDraft: response.defaultSetupDraft,
@@ -1324,6 +1347,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
         societyId,
         (sessionToken) => assignChairmanResidenceRequest(sessionToken, societyId, unitIds, residentType),
         'Chairman property selection updated.',
+      ),
+    updateLeadershipRole: async (societyId, input) =>
+      runSocietyMutation(
+        societyId,
+        (sessionToken) => updateLeadershipRoleRequest(sessionToken, societyId, input),
+        input.role === 'chairman'
+          ? 'Chairman role reassigned successfully.'
+          : input.enabled
+            ? 'Committee access granted.'
+            : 'Committee access removed.',
       ),
     createAmenityBooking: async (societyId, input) =>
       runSocietyMutation(
@@ -1410,7 +1443,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
           setState((currentState) => ({
             ...currentState,
-            data: response.data,
+            data: mergeServerData(response.data, currentState.data),
             chairmanAssigned: response.chairmanAssigned,
             amenityLibrary: response.amenityLibrary,
             defaultSetupDraft: response.defaultSetupDraft,
@@ -1452,6 +1485,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           return false;
         }
       },
+    createSocietyDocument: async (societyId, input) =>
+      runSocietyMutation(
+        societyId,
+        (sessionToken) => createSocietyDocumentRequest(sessionToken, societyId, input),
+        'Society compliance document uploaded.',
+      ),
     updateComplaintTicket: async (societyId, complaintId, input) =>
       runSocietyMutation(
         societyId,
@@ -1494,7 +1533,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         setState((currentState) => ({
           ...currentState,
-          data: response.data,
+          data: mergeServerData(response.data, currentState.data),
           chairmanAssigned: response.chairmanAssigned,
           amenityLibrary: response.amenityLibrary,
           defaultSetupDraft: response.defaultSetupDraft,
@@ -1651,6 +1690,224 @@ export function AppProvider({ children }: { children: ReactNode }) {
               ? 'Visitor pass cancelled.'
               : 'Visitor pass updated.',
       ),
+    createSocietyMeeting: async (societyId, input) => {
+      const userId = state.session.userId;
+
+      if (!userId) {
+        return false;
+      }
+
+      const newMeeting = {
+        id: `meeting-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+        societyId,
+        title: input.title.trim(),
+        meetingType: input.meetingType,
+        scheduledAt: input.scheduledAt,
+        venue: input.venue.trim(),
+        status: 'scheduled' as const,
+        summary: input.summary?.trim() || undefined,
+        minutesDocumentDataUrl: null,
+        createdByUserId: userId,
+        createdAt: new Date().toISOString(),
+      };
+
+      setState((currentState) => ({
+        ...currentState,
+        data: {
+          ...currentState.data,
+          societyMeetings: [...(currentState.data.societyMeetings ?? []), newMeeting],
+        },
+        noticeMessage: 'Society meeting scheduled.',
+        apiError: undefined,
+      }));
+
+      return true;
+    },
+    uploadMeetingMinutes: async (societyId, meetingId, dataUrl) => {
+      setState((currentState) => ({
+        ...currentState,
+        data: {
+          ...currentState.data,
+          societyMeetings: (currentState.data.societyMeetings ?? []).map((meeting) =>
+            meeting.id === meetingId && meeting.societyId === societyId
+              ? { ...meeting, minutesDocumentDataUrl: dataUrl }
+              : meeting,
+          ),
+        },
+        noticeMessage: 'Meeting minutes document uploaded.',
+        apiError: undefined,
+      }));
+
+      return true;
+    },
+    addMeetingAgendaItem: async (societyId, meetingId, input) => {
+      const existingItems = (state.data.meetingAgendaItems ?? []).filter((item) => item.meetingId === meetingId);
+      const nextSortOrder = existingItems.length + 1;
+
+      const newItem = {
+        id: `agenda-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+        meetingId,
+        societyId,
+        title: input.title.trim(),
+        description: input.description?.trim() || undefined,
+        requiresVoting: input.requiresVoting,
+        votingStatus: (input.requiresVoting ? 'pending' : 'notRequired') as 'pending' | 'notRequired',
+        sortOrder: nextSortOrder,
+      };
+
+      setState((currentState) => ({
+        ...currentState,
+        data: {
+          ...currentState.data,
+          meetingAgendaItems: [...(currentState.data.meetingAgendaItems ?? []), newItem],
+        },
+        noticeMessage: 'Agenda item added.',
+        apiError: undefined,
+      }));
+
+      return true;
+    },
+    openMeetingVoting: async (societyId, agendaItemId) => {
+      setState((currentState) => ({
+        ...currentState,
+        data: {
+          ...currentState.data,
+          meetingAgendaItems: (currentState.data.meetingAgendaItems ?? []).map((item) =>
+            item.id === agendaItemId && item.societyId === societyId
+              ? { ...item, votingStatus: 'open' as const }
+              : item,
+          ),
+        },
+        noticeMessage: 'Voting opened for this agenda item.',
+        apiError: undefined,
+      }));
+
+      return true;
+    },
+    closeMeetingVoting: async (societyId, agendaItemId, resolution) => {
+      setState((currentState) => ({
+        ...currentState,
+        data: {
+          ...currentState.data,
+          meetingAgendaItems: (currentState.data.meetingAgendaItems ?? []).map((item) =>
+            item.id === agendaItemId && item.societyId === societyId
+              ? { ...item, votingStatus: 'closed' as const, resolution }
+              : item,
+          ),
+        },
+        noticeMessage: `Voting closed. Resolution: ${resolution}.`,
+        apiError: undefined,
+      }));
+
+      return true;
+    },
+    castMeetingVote: async (societyId, agendaItemId, meetingId, vote) => {
+      const userId = state.session.userId;
+
+      if (!userId) {
+        return false;
+      }
+
+      const alreadyVoted = (state.data.meetingVotes ?? []).some(
+        (v) => v.agendaItemId === agendaItemId && v.userId === userId,
+      );
+
+      if (alreadyVoted) {
+        setState((currentState) => ({
+          ...currentState,
+          data: {
+            ...currentState.data,
+            meetingVotes: (currentState.data.meetingVotes ?? []).map((v) =>
+              v.agendaItemId === agendaItemId && v.userId === userId
+                ? { ...v, vote, castAt: new Date().toISOString() }
+                : v,
+            ),
+          },
+          noticeMessage: 'Your vote has been updated.',
+          apiError: undefined,
+        }));
+      } else {
+        const newVote = {
+          id: `vote-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+          agendaItemId,
+          meetingId,
+          societyId,
+          userId,
+          vote,
+          castAt: new Date().toISOString(),
+        };
+
+        setState((currentState) => ({
+          ...currentState,
+          data: {
+            ...currentState.data,
+            meetingVotes: [...(currentState.data.meetingVotes ?? []), newVote],
+          },
+          noticeMessage: 'Your vote has been recorded.',
+          apiError: undefined,
+        }));
+      }
+
+      return true;
+    },
+    signMeeting: async (societyId, meetingId, signatureText) => {
+      const userId = state.session.userId;
+
+      if (!userId) {
+        return false;
+      }
+
+      const alreadySigned = (state.data.meetingAttendeeSigns ?? []).some(
+        (s) => s.meetingId === meetingId && s.userId === userId,
+      );
+
+      if (alreadySigned) {
+        setState((currentState) => ({
+          ...currentState,
+          apiError: 'You have already signed this meeting.',
+          noticeMessage: undefined,
+        }));
+        return false;
+      }
+
+      const newSign = {
+        id: `sign-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+        meetingId,
+        societyId,
+        userId,
+        signatureText: signatureText.trim(),
+        signedAt: new Date().toISOString(),
+      };
+
+      setState((currentState) => ({
+        ...currentState,
+        data: {
+          ...currentState.data,
+          meetingAttendeeSigns: [...(currentState.data.meetingAttendeeSigns ?? []), newSign],
+        },
+        noticeMessage: 'Meeting signed digitally.',
+        apiError: undefined,
+      }));
+
+      return true;
+    },
+    completeSocietyMeeting: async (societyId, meetingId) => {
+      setState((currentState) => ({
+        ...currentState,
+        data: {
+          ...currentState.data,
+          societyMeetings: (currentState.data.societyMeetings ?? []).map((meeting) =>
+            meeting.id === meetingId && meeting.societyId === societyId
+              ? { ...meeting, status: 'completed' as const }
+              : meeting,
+          ),
+        },
+        noticeMessage: 'Meeting marked as completed.',
+        apiError: undefined,
+      }));
+
+      return true;
+    },
   };
 
   return <AppContext.Provider value={{ state, actions }}>{children}</AppContext.Provider>;
@@ -1665,3 +1922,8 @@ export function useApp() {
 
   return context;
 }
+
+
+
+
+

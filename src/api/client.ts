@@ -18,6 +18,7 @@ import {
   OnboardingState,
   PaymentMethod,
   ComplaintCategory,
+  SocietyDocumentCategory,
   SeedData,
   SecurityGuestRequestStatus,
   SocietySetupDraft,
@@ -119,6 +120,26 @@ export interface AnnouncementCreateInput {
   priority: AnnouncementPriority;
 }
 
+export interface LeadershipProfileInput {
+  displayName: string;
+  roleLabel: string;
+  phone: string;
+  email?: string;
+  availability?: string;
+  bio?: string;
+  photoDataUrl?: string;
+}
+
+export interface SocietyDocumentCreateInput {
+  category: SocietyDocumentCategory;
+  title: string;
+  fileName: string;
+  fileDataUrl: string;
+  summary?: string;
+  issuedOn?: string;
+  validUntil?: string;
+}
+
 export interface VisitorPassCreateInput {
   unitId: string;
   visitorName: string;
@@ -171,28 +192,34 @@ function normalizeSeedDataSnapshot(data: unknown) {
   }
 
   const snapshot = data as SeedData & {
+    userProfiles?: unknown;
     residenceProfiles?: unknown;
     vehicleRegistrations?: unknown;
     importantContacts?: unknown;
+    leadershipProfiles?: unknown;
     complaintUpdates?: unknown;
     visitorPasses?: unknown;
     securityGuestRequests?: unknown;
     securityGuestLogs?: unknown;
     chatThreads?: unknown;
     chatMessages?: unknown;
+    societyDocuments?: unknown;
   };
 
   return {
     ...snapshot,
+    userProfiles: Array.isArray(snapshot.userProfiles) ? snapshot.userProfiles : [],
     residenceProfiles: Array.isArray(snapshot.residenceProfiles) ? snapshot.residenceProfiles : [],
     vehicleRegistrations: Array.isArray(snapshot.vehicleRegistrations) ? snapshot.vehicleRegistrations : [],
     importantContacts: Array.isArray(snapshot.importantContacts) ? snapshot.importantContacts : [],
+    leadershipProfiles: Array.isArray(snapshot.leadershipProfiles) ? snapshot.leadershipProfiles : [],
     complaintUpdates: Array.isArray(snapshot.complaintUpdates) ? snapshot.complaintUpdates : [],
     visitorPasses: Array.isArray(snapshot.visitorPasses) ? snapshot.visitorPasses : [],
     securityGuestRequests: Array.isArray(snapshot.securityGuestRequests) ? snapshot.securityGuestRequests : [],
     securityGuestLogs: Array.isArray(snapshot.securityGuestLogs) ? snapshot.securityGuestLogs : [],
     chatThreads: Array.isArray(snapshot.chatThreads) ? snapshot.chatThreads : [],
     chatMessages: Array.isArray(snapshot.chatMessages) ? snapshot.chatMessages : [],
+    societyDocuments: Array.isArray(snapshot.societyDocuments) ? snapshot.societyDocuments : [],
   };
 }
 
@@ -206,6 +233,78 @@ function normalizeApiPayload<T>(payload: T): T {
   return {
     ...responseWithData,
     data: normalizeSeedDataSnapshot(responseWithData.data),
+  };
+}
+
+function normalizeAuthChallengeDestination(channel: AuthChannel, value: string | undefined) {
+  const normalized = String(value ?? '').trim();
+
+  if (!normalized) {
+    return '';
+  }
+
+  if (channel !== 'sms') {
+    return normalized.toLowerCase();
+  }
+
+  const digits = normalized.replace(/\D/g, '');
+
+  if (digits.length === 10) {
+    return `+91${digits}`;
+  }
+
+  if (digits.length === 12 && digits.startsWith('91')) {
+    return `+${digits}`;
+  }
+
+  if (digits.length >= 11 && digits.length <= 15) {
+    return `+${digits}`;
+  }
+
+  return normalized;
+}
+
+function normalizeAuthChallengePayload(
+  payload: AuthChallenge & {
+    id?: string;
+    code?: string;
+    phone?: string;
+    phoneNumber?: string;
+    mobile?: string;
+    mobileNumber?: string;
+    to?: string;
+  },
+  requestedChannel: AuthChannel,
+  requestedDestination: string,
+): AuthChallenge {
+  const developmentCode =
+    typeof payload.developmentCode === 'string'
+      ? payload.developmentCode
+      : typeof payload.code === 'string'
+        ? payload.code
+        : undefined;
+  const channel = payload.channel === 'email' ? 'email' : requestedChannel;
+  const destination =
+    payload.destination ||
+    payload.phone ||
+    payload.phoneNumber ||
+    payload.mobile ||
+    payload.mobileNumber ||
+    payload.to ||
+    normalizeAuthChallengeDestination(channel, requestedDestination);
+
+  return {
+    challengeId: payload.challengeId || payload.id || '',
+    channel,
+    destination: normalizeAuthChallengeDestination(channel, destination),
+    provider:
+      payload.provider === 'development' || developmentCode
+        ? 'development'
+        : payload.provider === 'twilio'
+          ? 'twilio'
+          : 'twilio',
+    expiresAt: payload.expiresAt || new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+    developmentCode,
   };
 }
 
@@ -308,10 +407,22 @@ export async function fetchSessionSnapshot(sessionToken: string) {
 }
 
 export async function requestOtp(intent: AuthIntent, channel: AuthChannel, destination: string, forceDevelopment?: boolean) {
-  return requestJson<AuthChallenge>('/api/auth/request-otp', {
+  const payload = await requestJson<
+    AuthChallenge & {
+      id?: string;
+      code?: string;
+      phone?: string;
+      phoneNumber?: string;
+      mobile?: string;
+      mobileNumber?: string;
+      to?: string;
+    }
+  >('/api/auth/request-otp', {
     method: 'POST',
     body: JSON.stringify({ intent, channel, destination, forceDevelopment }),
   });
+
+  return normalizeAuthChallengePayload(payload, channel, destination);
 }
 
 export async function verifyOtp(intent: AuthIntent, challengeId: string, code: string) {
@@ -350,6 +461,21 @@ export async function updateResidenceProfile(
 ) {
   return requestJson<SocietyAdminMutationResponse>(
     `/api/societies/${encodeURIComponent(societyId)}/residence-profile`,
+    {
+      method: 'POST',
+      headers: createAuthHeaders(sessionToken),
+      body: JSON.stringify(profile),
+    },
+  );
+}
+
+export async function updateLeadershipProfile(
+  sessionToken: string,
+  societyId: string,
+  profile: LeadershipProfileInput,
+) {
+  return requestJson<SocietyAdminMutationResponse>(
+    `/api/societies/${encodeURIComponent(societyId)}/leadership-profile`,
     {
       method: 'POST',
       headers: createAuthHeaders(sessionToken),
@@ -405,6 +531,25 @@ export async function assignChairmanResidence(
   );
 }
 
+export async function updateLeadershipRole(
+  sessionToken: string,
+  societyId: string,
+  input: {
+    targetUserId: string;
+    role: 'chairman' | 'committee';
+    enabled: boolean;
+  },
+) {
+  return requestJson<SocietyAdminMutationResponse>(
+    `/api/societies/${encodeURIComponent(societyId)}/leadership-role`,
+    {
+      method: 'POST',
+      headers: createAuthHeaders(sessionToken),
+      body: JSON.stringify(input),
+    },
+  );
+}
+
 export async function updateSocietyProfile(
   sessionToken: string,
   societyId: string,
@@ -439,6 +584,21 @@ export async function createAnnouncement(
       method: 'POST',
       headers: createAuthHeaders(sessionToken),
       body: JSON.stringify(announcement),
+    },
+  );
+}
+
+export async function createSocietyDocument(
+  sessionToken: string,
+  societyId: string,
+  document: SocietyDocumentCreateInput,
+) {
+  return requestJson<SocietyAdminMutationResponse>(
+    `/api/societies/${encodeURIComponent(societyId)}/documents`,
+    {
+      method: 'POST',
+      headers: createAuthHeaders(sessionToken),
+      body: JSON.stringify(document),
     },
   );
 }

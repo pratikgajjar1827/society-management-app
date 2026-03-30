@@ -13,8 +13,10 @@ import {
 import { useApp } from '../state/AppContext';
 import { palette, spacing } from '../theme/tokens';
 import {
+  doesSocietyHaveChairman,
   formatLongDate,
   formatCurrency,
+  humanizeJoinRequestRole,
   getCurrentUser,
   getMembershipForSociety,
   getPendingJoinRequestsForUser,
@@ -89,7 +91,7 @@ export function WorkspaceSelectionScreen() {
         title="Your societies"
         description={
           canCreateSociety
-            ? 'The super user can review every society workspace from one list and delete any society without joining it as a resident.'
+            ? 'The super user can review every society workspace from one list, create societies, approve first-chairman claims, and delete society workspaces when needed.'
             : 'Each card below represents one society workspace tied to your login. The same person can safely move across communities without new accounts.'
         }
       />
@@ -98,19 +100,25 @@ export function WorkspaceSelectionScreen() {
         <SurfaceCard>
           <SectionHeader
             title="Pending access requests"
-            description="These unit or space claims are waiting for chairman approval before they become active workspaces."
+            description="These requests are waiting for chairman or super user approval before they become active workspaces."
           />
           {pendingRequests.map((request) => (
             <View key={request.joinRequest.id} style={styles.pendingRequestCard}>
               <Text style={styles.societyName}>{request.society?.name ?? 'Requested society'}</Text>
               <Caption>
-                Requested as {request.joinRequest.residentType} on {formatLongDate(request.joinRequest.createdAt)}
+                Requested as {humanizeJoinRequestRole(request.joinRequest.residentType)} on {formatLongDate(request.joinRequest.createdAt)}
               </Caption>
+              {request.joinRequest.residentType === 'chairman' ? (
+                <Caption>Approval path: Super user must confirm the first chairman for this society.</Caption>
+              ) : null}
               <Caption>
                 Units or spaces: {request.units.map((unit) => unit?.code).filter(Boolean).join(', ') || 'Pending mapping'}
               </Caption>
               <View style={styles.roleRow}>
-                <Pill label="Awaiting chairman approval" tone="warning" />
+                <Pill
+                  label={request.joinRequest.residentType === 'chairman' ? 'Awaiting super user approval' : 'Awaiting chairman approval'}
+                  tone="warning"
+                />
               </View>
             </View>
           ))}
@@ -140,6 +148,17 @@ export function WorkspaceSelectionScreen() {
 
       {options.map((option) => (
         <SurfaceCard key={option.society.id} style={isCompact ? styles.workspaceCardCompact : null}>
+          {(() => {
+            const hasChairman = doesSocietyHaveChairman(state.data, option.society.id);
+            const pendingChairmanClaims = state.data.joinRequests.filter(
+              (request) =>
+                request.societyId === option.society.id &&
+                request.status === 'pending' &&
+                request.residentType === 'chairman',
+            ).length;
+
+            return (
+              <>
           <View style={[styles.societyHeader, isCompact ? styles.societyHeaderCompact : null]}>
             <View style={styles.societyHeadingBlock}>
               <Text style={styles.societyName}>{option.society.name}</Text>
@@ -169,6 +188,8 @@ export function WorkspaceSelectionScreen() {
           </View>
 
           <View style={styles.roleRow}>
+            {!hasChairman ? <Pill label="Chairman pending" tone="warning" /> : null}
+            {pendingChairmanClaims > 0 ? <Pill label={`${pendingChairmanClaims} chairman claim pending`} tone="accent" /> : null}
             {canCreateSociety ? (
               <>
                 <Pill label="Super user control" tone="accent" />
@@ -182,6 +203,11 @@ export function WorkspaceSelectionScreen() {
               ))
             )}
           </View>
+          {!hasChairman ? (
+            <Caption>
+              This society is ready for enrollment, but resident approvals will start only after the first local chairman is approved.
+            </Caption>
+          ) : null}
           {canCreateSociety && pendingDeleteSocietyId === option.society.id ? (
             <Caption style={styles.deleteWarning}>
               This permanently removes the society workspace and its linked units, notices, bills,
@@ -223,6 +249,9 @@ export function WorkspaceSelectionScreen() {
               )
             ) : null}
           </View>
+              </>
+            );
+          })()}
         </SurfaceCard>
       ))}
     </Page>

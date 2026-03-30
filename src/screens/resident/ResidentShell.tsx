@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Image, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Image, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type ImageSourcePropType } from 'react-native';
 
 import {
   ActionButton,
   Caption,
   ChoiceChip,
+  DateTimeField,
   InputField,
   MetricCard,
   NavigationStrip,
@@ -20,6 +21,7 @@ import { useApp } from '../../state/AppContext';
 import { palette, radius, shadow, spacing } from '../../theme/tokens';
 import { openPhoneDialer, openWhatsAppConversation, startRingAlert, stopRingAlert } from '../../utils/communication';
 import {
+  openUploadedFileDataUrl,
   openWebDataUrlInNewTab,
   pickWebFileAsDataUrl,
   tryDetectVehicleRegistrationFromDataUrl,
@@ -33,6 +35,7 @@ import {
   getAmenitiesForSociety,
   getAnnouncementsForSociety,
   getChatMessagesForThread,
+  getBookingsForSociety,
   getBookingsForUserSociety,
   getComplaintUpdatesForComplaint,
   getComplaintsForUserSociety,
@@ -41,7 +44,12 @@ import {
   getDirectChatThreadsForUser,
   getEntryLogsForSociety,
   getGuardRosterForSociety,
+  getLeadershipProfilesForSociety,
   getImportantContactsForSociety,
+  getMeetingAgendaItems,
+  getMeetingSignatures,
+  getMeetingsForSociety,
+  getMeetingVotesForItem,
   getMembershipForSociety,
   getPaymentRemindersForUser,
   getPendingSecurityGuestRequestsForResident,
@@ -49,6 +57,7 @@ import {
   getResidenceProfileForUserSociety,
   getResidentOverview,
   getRulesForSociety,
+  getSocietyDocuments,
   getSocietyChatThread,
   getSecurityGuestConversationForRequest,
   getSecurityGuestRequestTone,
@@ -58,6 +67,9 @@ import {
   getUnitsForSociety,
   getVehicleDirectoryForSociety,
   getVisitorPassesForUserSociety,
+  humanizeMeetingStatus,
+  humanizeMeetingType,
+  getMeetingStatusTone,
   humanizeRole,
   humanizeSecurityGuestLogAction,
   humanizeSecurityGuestRequestStatus,
@@ -71,12 +83,14 @@ import {
   VisitorCategory,
 } from '../../types/domain';
 
-type ResidentTab = 'home' | 'visitors' | 'community' | 'billing' | 'notices' | 'bookings' | 'helpdesk' | 'profile';
+type ResidentTab = 'home' | 'visitors' | 'community' | 'billing' | 'notices' | 'bookings' | 'meetings' | 'helpdesk' | 'profile';
 type ResidentCommunitySection = 'members' | 'vehicles' | 'contacts' | 'staff' | 'chat';
 type ResidentVisitorsSection = 'create' | 'approvals' | 'history' | 'desk';
 type ResidentBillingSection = 'pay' | 'reminders' | 'outstanding' | 'history';
+type ResidentNoticeSection = 'announcements' | 'unread' | 'priority' | 'rules' | 'documents';
 type ResidentBookingsSection = 'booking' | 'amenities' | 'history';
-type ResidentProfileSection = 'household' | 'vehicles' | 'staff';
+type ResidentProfileSection = 'household' | 'contacts' | 'vehicles';
+type AmenityRecord = SeedData['amenities'][number];
 type EditableVehicleDraft = {
   id: string;
   unitId: string;
@@ -95,6 +109,7 @@ const residentTabs: Array<{ key: ResidentTab; label: string }> = [
   { key: 'billing', label: 'Billing' },
   { key: 'notices', label: 'Notices' },
   { key: 'bookings', label: 'Bookings' },
+  { key: 'meetings', label: 'Meetings' },
   { key: 'helpdesk', label: 'Helpdesk' },
   { key: 'profile', label: 'Profile' },
 ];
@@ -104,7 +119,7 @@ const residentBottomTabs: Array<{
   label: string;
   badge: string;
 }> = [
-  { key: 'home', label: 'My Hood', badge: 'HM' },
+  { key: 'home', label: 'Home', badge: 'HM' },
   { key: 'community', label: 'Society', badge: 'SC' },
   { key: 'bookings', label: 'Services', badge: 'SV' },
   { key: 'billing', label: 'Bills', badge: 'BL' },
@@ -138,12 +153,132 @@ const residentBookingSections: Array<{ key: ResidentBookingsSection; label: stri
   { key: 'amenities', label: 'Amenities' },
   { key: 'history', label: 'My bookings' },
 ];
+const residentAmenityCategories = [
+  {
+    key: 'social',
+    title: 'Social and hosting',
+    amenities: ['Clubhouse Hall', 'Banquet Hall', 'Community Hall', 'Party Lawn', 'Guest Suites', 'Cafe Lounge', 'BBQ Deck'],
+  },
+  {
+    key: 'work',
+    title: 'Work and lounge',
+    amenities: ['Coworking Lounge', 'Business Lounge', 'Indoor Games Lounge', 'Senior Citizen Lounge'],
+  },
+  {
+    key: 'wellness',
+    title: 'Wellness and recreation',
+    amenities: ['Gym', 'Swimming Pool', 'Yoga Deck', 'Walking Track', 'Garden'],
+  },
+  {
+    key: 'sports',
+    title: 'Sports courts',
+    amenities: ['Badminton Court', 'Squash Court', 'Tennis Court', 'Basketball Court'],
+  },
+  {
+    key: 'family',
+    title: 'Family and children',
+    amenities: ['Childrens Play Area'],
+  },
+  {
+    key: 'pet',
+    title: 'Pet and mobility',
+    amenities: ['Pet Park', 'Guest Parking'],
+  },
+] as const;
 
 const residentProfileSections: Array<{ key: ResidentProfileSection; label: string }> = [
   { key: 'household', label: 'Household' },
+  { key: 'contacts', label: 'Contacts' },
   { key: 'vehicles', label: 'Vehicles' },
-  { key: 'staff', label: 'Staff' },
 ];
+
+function getAmenityVisual(amenityName: string): {
+  module: string;
+  color: string;
+  background: string;
+  border: string;
+  accent: string;
+} {
+  const normalized = amenityName.toLowerCase();
+
+  if (normalized.includes('gym') || normalized.includes('pool') || normalized.includes('yoga') || normalized.includes('track') || normalized.includes('garden')) {
+    return {
+      module: 'AM',
+      color: palette.blue,
+      background: '#E8F1FD',
+      border: '#D2E1F6',
+      accent: '#B9D3F7',
+    };
+  }
+
+  if (normalized.includes('court') || normalized.includes('games')) {
+    return {
+      module: 'SV',
+      color: palette.primary,
+      background: '#E7EDF5',
+      border: '#D6E0EB',
+      accent: '#C2D1E3',
+    };
+  }
+
+  if (normalized.includes('coworking') || normalized.includes('business') || normalized.includes('lounge')) {
+    return {
+      module: 'CP',
+      color: palette.primary,
+      background: '#EBF0F6',
+      border: '#DCE4EE',
+      accent: '#C8D6E7',
+    };
+  }
+
+  if (normalized.includes('pet') || normalized.includes('parking')) {
+    return {
+      module: 'MV',
+      color: palette.accent,
+      background: '#FDEEE8',
+      border: '#F2D7CC',
+      accent: '#F6C3AF',
+    };
+  }
+
+  return {
+    module: 'BK',
+    color: palette.warning,
+    background: '#FFF1DB',
+    border: '#F0DEC0',
+    accent: '#F5CC84',
+  };
+}
+
+function getAmenityPhotoUri(amenityName: string) {
+  const photoByAmenity: Record<string, ImageSourcePropType> = {
+    'Clubhouse Hall': require('../../../assets/amenities/clubhouse-hall.jpg'),
+    'Banquet Hall': require('../../../assets/amenities/banquet-hall.jpg'),
+    'Community Hall': require('../../../assets/amenities/community-hall.jpg'),
+    'Party Lawn': require('../../../assets/amenities/party-lawn.jpg'),
+    'Guest Suites': require('../../../assets/amenities/guest-suites.jpg'),
+    'Cafe Lounge': require('../../../assets/amenities/cafe-lounge.jpg'),
+    'BBQ Deck': require('../../../assets/amenities/bbq-deck.jpg'),
+    'Coworking Lounge': require('../../../assets/amenities/coworking-lounge.jpg'),
+    'Business Lounge': require('../../../assets/amenities/business-lounge.jpg'),
+    'Indoor Games Lounge': require('../../../assets/amenities/indoor-games-lounge.jpg'),
+    'Senior Citizen Lounge': require('../../../assets/amenities/senior-citizen-lounge.jpg'),
+    Gym: require('../../../assets/amenities/gym.jpg'),
+    'Swimming Pool': require('../../../assets/amenities/swimming-pool.jpg'),
+    'Yoga Deck': require('../../../assets/amenities/yoga-deck.jpg'),
+    'Walking Track': require('../../../assets/amenities/walking-track.jpg'),
+    Garden: require('../../../assets/amenities/garden.jpg'),
+    'Badminton Court': require('../../../assets/amenities/badminton-court.jpg'),
+    'Squash Court': require('../../../assets/amenities/squash-court.jpg'),
+    'Tennis Court': require('../../../assets/amenities/tennis-court.jpg'),
+    'Basketball Court': require('../../../assets/amenities/basketball-court.jpg'),
+    'Childrens Play Area': require('../../../assets/amenities/childrens-play-area.jpg'),
+    'Pet Park': require('../../../assets/amenities/pet-park.jpg'),
+    'Guest Parking': require('../../../assets/amenities/guest-parking.jpg'),
+  };
+
+  return photoByAmenity[amenityName] ?? require('../../../assets/amenities/clubhouse-hall.jpg');
+}
 
 function getResidentBottomTabKey(
   activeTab: ResidentTab,
@@ -172,6 +307,8 @@ function getResidentTabDescription(activeTab: ResidentTab) {
       return 'Read society announcements, updates, and resident-facing policy information.';
     case 'bookings':
       return 'Manage amenity requests, schedules, and service-oriented daily actions.';
+    case 'meetings':
+      return 'Stay informed on society meetings, vote on resolutions, and sign digitally.';
     case 'helpdesk':
       return 'Raise issues, track updates, and follow service requests to resolution.';
     case 'profile':
@@ -194,13 +331,6 @@ function createEditableVehicleDraft(unitId = ''): EditableVehicleDraft {
     statusMessage: '',
   };
 }
-
-const staffCategories = [
-  { key: 'domesticHelp' as const, label: 'Domestic help' },
-  { key: 'cook' as const, label: 'Cook' },
-  { key: 'driver' as const, label: 'Driver' },
-  { key: 'vendor' as const, label: 'Vendor' },
-];
 
 const paymentMethods = [
   { key: 'upi' as const, label: 'UPI' },
@@ -429,8 +559,10 @@ export function ResidentShell() {
   const [preferredBillingSection, setPreferredBillingSection] = useState<ResidentBillingSection>('pay');
   const [preferredBookingsSection, setPreferredBookingsSection] = useState<ResidentBookingsSection>('booking');
   const [preferredProfileSection, setPreferredProfileSection] = useState<ResidentProfileSection>('household');
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const { width } = useWindowDimensions();
   const isCompact = width < 768;
+  const isPhone = width < 420;
 
   if (!state.session.userId || !state.session.selectedSocietyId) {
     return null;
@@ -454,9 +586,10 @@ export function ResidentShell() {
   const activeBottomTab = getResidentBottomTabKey(activeTab);
 
   return (
-    <PageFrame
-      footer={
-        <View style={[styles.bottomNavigationCard, isCompact ? styles.bottomNavigationCardCompact : null]}>
+    <View style={styles.shellRoot}>
+      <PageFrame
+      footer={!isPhone ? (
+        <View style={[styles.bottomNavigationCard, isCompact ? styles.bottomNavigationCardCompact : null, isPhone ? styles.bottomNavigationCardPhone : null]}>
           {residentBottomTabs.map((item) => {
             const isActive = activeBottomTab === item.key;
 
@@ -467,6 +600,7 @@ export function ResidentShell() {
                 style={(state) => [
                   styles.bottomNavigationItem,
                   isCompact ? styles.bottomNavigationItemCompact : null,
+                  isPhone ? styles.bottomNavigationItemPhone : null,
                   isActive ? styles.bottomNavigationItemActive : null,
                   (state as { hovered?: boolean }).hovered ? styles.bottomNavigationItemHover : null,
                   state.pressed ? styles.bottomNavigationItemPressed : null,
@@ -476,6 +610,7 @@ export function ResidentShell() {
                   style={[
                     styles.bottomNavigationBadge,
                     isCompact ? styles.bottomNavigationBadgeCompact : null,
+                    isPhone ? styles.bottomNavigationBadgePhone : null,
                     isActive ? styles.bottomNavigationBadgeActive : null,
                   ]}
                 >
@@ -489,8 +624,12 @@ export function ResidentShell() {
                   style={[
                     styles.bottomNavigationLabel,
                     isCompact ? styles.bottomNavigationLabelCompact : null,
+                    isPhone ? styles.bottomNavigationLabelPhone : null,
                     isActive ? styles.bottomNavigationLabelActive : null,
                   ]}
+                  numberOfLines={1}
+                  adjustsFontSizeToFit
+                  minimumFontScale={0.8}
                 >
                   {item.label}
                 </Text>
@@ -498,36 +637,39 @@ export function ResidentShell() {
             );
           })}
         </View>
-      }
+      ) : undefined}
     >
       {isCompact ? (
-        <SurfaceCard style={styles.compactWorkspaceCard}>
-          <View style={styles.compactWorkspaceTopRow}>
+        <SurfaceCard style={[styles.compactWorkspaceCard, isPhone ? styles.compactWorkspaceCardPhone : null]}>
+          <View style={[styles.compactWorkspaceTopRow, isPhone ? styles.compactWorkspaceTopRowPhone : null]}>
             <View style={styles.compactWorkspaceTitleWrap}>
               <Pill label="Resident" tone="accent" />
-              <Text style={styles.compactWorkspaceTitle}>{society.name}</Text>
+              <Text style={[styles.compactWorkspaceTitle, isPhone ? styles.compactWorkspaceTitlePhone : null]}>{society.name}</Text>
               <Caption>{user.name.split(' ')[0]} | {residentTabs.find((item) => item.key === activeTab)?.label ?? 'Home'}</Caption>
             </View>
             <View style={styles.compactWorkspaceStatsRow}>
-              <View style={styles.compactWorkspaceStat}>
-                <Text style={styles.compactWorkspaceStatValue}>{overview.unreadAnnouncements.length}</Text>
+              <View style={[styles.compactWorkspaceStat, isPhone ? styles.compactWorkspaceStatPhone : null]}>
+                <Text style={[styles.compactWorkspaceStatValue, isPhone ? styles.compactWorkspaceStatValuePhone : null]}>{overview.unreadAnnouncements.length}</Text>
                 <Caption>Unread</Caption>
               </View>
-              <View style={styles.compactWorkspaceStat}>
-                <Text style={styles.compactWorkspaceStatValue}>
+              <View style={[styles.compactWorkspaceStat, isPhone ? styles.compactWorkspaceStatPhone : null]}>
+                <Text style={[styles.compactWorkspaceStatValue, isPhone ? styles.compactWorkspaceStatValuePhone : null]}>
                   {overview.myComplaints.filter((item) => item.status !== 'resolved').length}
                 </Text>
                 <Caption>Open</Caption>
               </View>
             </View>
           </View>
-          <View style={styles.compactWorkspaceActionRow}>
+          <View style={[styles.compactWorkspaceActionRow, isPhone ? styles.compactWorkspaceActionRowPhone : null]}>
+            {activeTab !== 'home' ? (
+              <ActionButton label="← Back" onPress={() => setActiveTab('home')} variant="secondary" />
+            ) : null}
             <ActionButton label="Societies" onPress={actions.goToWorkspaces} variant="secondary" />
             {canUseAdmin ? (
               <ActionButton label="Admin" onPress={actions.goToRoleSelection} variant="secondary" />
             ) : null}
           </View>
-          <NavigationStrip items={residentTabs} activeKey={activeTab} onChange={setActiveTab} />
+          {!isPhone ? <NavigationStrip items={residentTabs} activeKey={activeTab} onChange={setActiveTab} /> : null}
         </SurfaceCard>
       ) : null}
 
@@ -592,13 +734,14 @@ export function ResidentShell() {
           </View>
         </View>
         <View style={styles.heroActions}>
+          <ActionButton label="← Back" onPress={() => setActiveTab('home')} variant="secondary" />
           <ActionButton label="Workspaces" onPress={actions.goToWorkspaces} variant="secondary" />
           {canUseAdmin ? (
             <ActionButton label="Switch to Admin" onPress={actions.goToRoleSelection} variant="primary" />
           ) : null}
         </View>
         <View style={styles.metricGrid}>
-          <MetricCard label="Outstanding dues" value={formatCurrency(overview.totalDue)} tone="accent" />
+          <MetricCard label="Outstanding dues" value={formatCurrency(overview.totalDue)} tone="accent" onPress={() => setActiveTab('billing')} />
           <MetricCard
             label="Unread notices"
             value={String(overview.unreadAnnouncements.length)}
@@ -653,6 +796,7 @@ export function ResidentShell() {
           preferredSection={preferredBookingsSection}
         />
       ) : null}
+      {activeTab === 'meetings' ? <ResidentMeetings societyId={society.id} userId={user.id} /> : null}
       {activeTab === 'helpdesk' ? <ResidentHelpdesk societyId={society.id} userId={user.id} /> : null}
       {activeTab === 'profile' ? (
         <ResidentProfile
@@ -662,6 +806,62 @@ export function ResidentShell() {
         />
       ) : null}
     </PageFrame>
+
+    {isPhone ? (
+      <>
+        {!isDrawerOpen ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setIsDrawerOpen(true)}
+            style={({ pressed }) => [styles.leftDrawerHandle, pressed ? styles.leftDrawerHandlePressed : null]}
+          >
+            <Text style={styles.leftDrawerHandleText}>Menu</Text>
+          </Pressable>
+        ) : null}
+
+        {isDrawerOpen ? (
+          <Pressable style={styles.drawerBackdrop} onPress={() => setIsDrawerOpen(false)} />
+        ) : null}
+
+        <View style={[styles.sideDrawer, isDrawerOpen ? styles.sideDrawerOpen : null]}>
+          <View style={styles.sideDrawerHeader}>
+            <View style={styles.sideDrawerTitleWrap}>
+              <Pill label="Resident" tone="accent" />
+              <Text style={styles.sideDrawerTitle}>Resident Menu</Text>
+            </View>
+            <Pressable onPress={() => setIsDrawerOpen(false)} style={({ pressed }) => [styles.sideDrawerClose, pressed ? styles.pressed : null]}>
+              <Text style={styles.sideDrawerCloseText}>Close</Text>
+            </Pressable>
+          </View>
+          <Caption style={styles.sideDrawerCaption}>Choose a module and jump directly into the workspace.</Caption>
+          <ScrollView style={styles.sideDrawerScroller} contentContainerStyle={styles.sideDrawerList} showsVerticalScrollIndicator={false}>
+            {residentTabs.map((item) => {
+              const isActive = activeTab === item.key;
+
+              return (
+                <Pressable
+                  key={item.key}
+                  onPress={() => {
+                    setActiveTab(item.key);
+                    setIsDrawerOpen(false);
+                  }}
+                  style={({ pressed }) => [
+                    styles.sideDrawerItem,
+                    isActive ? styles.sideDrawerItemActive : null,
+                    pressed ? styles.pressed : null,
+                  ]}
+                >
+                  <Text style={[styles.sideDrawerItemText, isActive ? styles.sideDrawerItemTextActive : null]}>
+                    {item.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+      </>
+    ) : null}
+    </View>
   );
 }
 
@@ -691,6 +891,7 @@ function ResidentHome({
           <ActionButton label="Community" onPress={() => onOpenTab('community')} variant="secondary" />
           <ActionButton label="Pay maintenance" onPress={() => onOpenTab('billing')} variant="secondary" />
           <ActionButton label="Book amenity" onPress={() => onOpenTab('bookings')} variant="secondary" />
+          <ActionButton label="View meetings" onPress={() => onOpenTab('meetings')} variant="secondary" />
           <ActionButton label="Raise complaint" onPress={() => onOpenTab('helpdesk')} variant="secondary" />
           <ActionButton label="Register staff" onPress={() => onOpenTab('profile')} variant="secondary" />
         </View>
@@ -898,10 +1099,10 @@ function ResidentVisitors({
       />
       <SurfaceCard>
         <View style={styles.metricGrid}>
-          <MetricCard label="Scheduled passes" value={String(scheduledPasses.length)} tone="accent" />
-          <MetricCard label="Checked in" value={String(activePasses.length)} tone="blue" />
-          <MetricCard label="Completed visits" value={String(visitorPasses.filter(({ visitorPass }) => visitorPass.status === 'completed').length)} />
-          <MetricCard label="Gate approvals" value={String(pendingSecurityGuestRequests.length)} tone="accent" />
+          <MetricCard label="Scheduled passes" value={String(scheduledPasses.length)} tone="accent" onPress={() => setActiveSection('create')} />
+          <MetricCard label="Checked in" value={String(activePasses.length)} tone="blue" onPress={() => setActiveSection('history')} />
+          <MetricCard label="Completed visits" value={String(visitorPasses.filter(({ visitorPass }) => visitorPass.status === 'completed').length)} onPress={() => setActiveSection('history')} />
+          <MetricCard label="Gate approvals" value={String(pendingSecurityGuestRequests.length)} tone="accent" onPress={() => setActiveSection('approvals')} />
         </View>
         <View style={styles.choiceRow}>
           {residentVisitorSections.map((section) => (
@@ -1174,10 +1375,10 @@ function ResidentVisitors({
             <InputField label="Guest count" value={guestCount} onChangeText={setGuestCount} keyboardType="numeric" placeholder="1" />
           </View>
           <View style={styles.formField}>
-            <InputField label="Expected arrival" value={expectedAt} onChangeText={setExpectedAt} placeholder="2026-03-24T18:30" />
+            <DateTimeField label="Expected arrival" value={expectedAt} onChangeText={setExpectedAt} placeholder="2026-03-24T18:30" mode="datetime" />
           </View>
           <View style={styles.formField}>
-            <InputField label="Valid until" value={validUntil} onChangeText={setValidUntil} placeholder="2026-03-24T22:00" />
+            <DateTimeField label="Valid until" value={validUntil} onChangeText={setValidUntil} placeholder="2026-03-24T22:00" mode="datetime" />
           </View>
           <View style={styles.formField}>
             <InputField label="Vehicle number (optional)" value={vehicleNumber} onChangeText={(value) => setVehicleNumber(value.toUpperCase())} placeholder="GJ01AB1234" autoCapitalize="characters" />
@@ -1331,16 +1532,28 @@ function ResidentCommunity({
   preferredSection?: ResidentCommunitySection;
 }) {
   const { state, actions } = useApp();
+  const { width } = useWindowDimensions();
+  const isCompact = width < 768;
+  const isPhone = width < 420;
   const [activeSection, setActiveSection] = useState<ResidentCommunitySection>(preferredSection ?? 'members');
   const [selectedDirectChatUserId, setSelectedDirectChatUserId] = useState('');
   const [groupMessageDraft, setGroupMessageDraft] = useState('');
   const [directMessageDraft, setDirectMessageDraft] = useState('');
   const members = getCommunityMembersForSociety(state.data, societyId);
+  const leadershipDirectory = getLeadershipProfilesForSociety(state.data, societyId);
+  const society = getSelectedSociety(state.data, societyId);
   const vehicles = getVehicleDirectoryForSociety(state.data, societyId);
   const contacts = getImportantContactsForSociety(state.data, societyId);
   const guards = getGuardRosterForSociety(state.data, societyId);
   const staffDirectory = getStaffVerificationDirectory(state.data, societyId);
   const myMembership = getMembershipForSociety(state.data, userId, societyId);
+  const residentDirectoryMembers = members.filter(
+    ({ membership }) => !membership.roles.includes('chairman') && !membership.roles.includes('committee'),
+  );
+  const chairmanMember = leadershipDirectory.find(({ membership }) => membership.roles.includes('chairman'));
+  const committeeMembers = leadershipDirectory.filter(
+    ({ membership }) => membership.roles.includes('committee') && !membership.roles.includes('chairman'),
+  );
   const groupThread = getSocietyChatThread(state.data, societyId);
   const groupMessages = groupThread ? getChatMessagesForThread(state.data, groupThread.id) : [];
   const directThreads = getDirectChatThreadsForUser(state.data, societyId, userId);
@@ -1424,17 +1637,28 @@ function ResidentCommunity({
     }
   }
 
+  function openDirectChatForMember(memberUserId: string) {
+    setActiveSection('chat');
+    setSelectedDirectChatUserId(memberUserId);
+  }
+
   return (
     <>
       <SectionHeader
         title="Community hub"
-        description="Browse resident contacts, registered vehicles, important society numbers, staff coverage, and community chats from one place."
+        description="Browse the chairman and committee directory, resident contacts, vehicles, important society numbers, staff coverage, and community chats from one place."
       />
       <SurfaceCard>
-        <View style={styles.metricGrid}>
+        <View style={[styles.metricGrid, isPhone ? styles.metricGridPhone : null]}>
+          <MetricCard
+            label="Leadership"
+            value={String(leadershipDirectory.length)}
+            tone="accent"
+            onPress={() => setActiveSection('members')}
+          />
           <MetricCard
             label="Members"
-            value={String(members.length)}
+            value={String(residentDirectoryMembers.length)}
             onPress={() => setActiveSection('members')}
           />
           <MetricCard
@@ -1461,50 +1685,232 @@ function ResidentCommunity({
             onPress={() => setActiveSection('staff')}
           />
         </View>
-        <View style={styles.inlineSection}>
-          <Caption>
+        <View style={[styles.inlineSection, isPhone ? styles.inlineSectionPhone : null]}>
+          <Caption style={isPhone ? styles.communityHintPhone : undefined}>
             Tap a card above to browse {residentCommunitySections.map((s, i) => (
               <Text key={s.key}>{i > 0 ? ', ' : ''}{s.label.toLowerCase()}</Text>
-            ))}. Your access is based on the current society membership for {myMembership?.unitIds.length ? 'linked units and shared society records.' : 'shared society records.'}
+            ))}. Your access is based on the current society membership for {myMembership?.unitIds.length ? 'linked units, society leadership cards, and shared records.' : 'shared society records.'}
           </Caption>
         </View>
       </SurfaceCard>
 
       {activeSection === 'members' ? (
         members.length > 0 ? (
-          members.map((member) => (
-            <SurfaceCard key={member.membership.id}>
-              <View style={styles.rowBetween}>
-                <Text style={styles.cardTitle}>{member.user.name}</Text>
-                <Pill
-                  label={member.units.map((unit) => unit.code).join(', ') || 'Unit pending'}
-                  tone="accent"
+          <>
+            {leadershipDirectory.length > 0 ? (
+              <SurfaceCard style={styles.leadershipDeskCard}>
+                <SectionHeader
+                  title="Society leadership directory"
+                  description="Quick access cards for the chairman and committee members. Residents can find photo, unit, availability, and direct contact details here."
                 />
-              </View>
-              <View style={styles.pillRow}>
-                {member.membership.roles.map((role) => (
-                  <Pill key={`${member.membership.id}-${role}`} label={humanizeRole(role)} tone="primary" />
-                ))}
-              </View>
-              <Caption>{member.user.phone}</Caption>
-              <Caption>{member.residenceProfile?.email ?? member.user.email}</Caption>
-              {member.residenceProfile?.alternatePhone ? (
-                <Caption>Alternate mobile: {member.residenceProfile.alternatePhone}</Caption>
-              ) : null}
-              {member.user.id !== userId ? (
-                <View style={styles.heroActions}>
-                  <ActionButton
-                    label="Open chat"
-                    onPress={() => {
-                      setActiveSection('chat');
-                      setSelectedDirectChatUserId(member.user.id);
-                    }}
-                    variant="secondary"
-                  />
+                <View style={styles.leadershipOverviewRow}>
+                  <View style={[styles.leadershipOverviewCard, !isCompact ? styles.leadershipOverviewCardDesktop : null]}>
+                    <Caption>Chairman</Caption>
+                    <Text style={styles.leadershipOverviewValue}>
+                      {chairmanMember
+                        ? chairmanMember.leadershipProfile?.displayName ?? chairmanMember.user.name
+                        : 'Not assigned'}
+                    </Text>
+                  </View>
+                  <View style={[styles.leadershipOverviewCard, !isCompact ? styles.leadershipOverviewCardDesktop : null]}>
+                    <Caption>Committee members</Caption>
+                    <Text style={styles.leadershipOverviewValue}>{committeeMembers.length}</Text>
+                  </View>
+                  <View style={[styles.leadershipOverviewCard, !isCompact ? styles.leadershipOverviewCardDesktop : null]}>
+                    <Caption>Help desk contact</Caption>
+                    <Text style={styles.leadershipOverviewValue}>
+                      {society?.name ?? 'Society team'}
+                    </Text>
+                  </View>
                 </View>
-              ) : null}
+                <View style={styles.leadershipFeatureGrid}>
+                  {leadershipDirectory.map((entry) => {
+                    const publicName = entry.leadershipProfile?.displayName ?? entry.user.name;
+                    const publicRole = entry.leadershipProfile?.roleLabel
+                      ?? (entry.membership.roles.includes('chairman') ? 'Chairman' : 'Committee member');
+                    const publicPhone = entry.leadershipProfile?.phone ?? entry.user.phone;
+                    const publicEmail = entry.leadershipProfile?.email;
+                    const unitLabel = entry.units.map((unit) => unit.code).join(', ') || 'Unit pending';
+                    const canOpenChat = entry.user.id !== userId;
+
+                    return (
+                      <View key={`leadership-${entry.user.id}`} style={styles.leadershipFeatureCard}>
+                        <View style={styles.leadershipFeatureHeader}>
+                          {entry.leadershipProfile?.photoDataUrl ? (
+                            <Image source={{ uri: entry.leadershipProfile.photoDataUrl }} style={styles.leadershipFeatureImage} />
+                          ) : (
+                            <View style={styles.leadershipFeatureAvatar}>
+                              <Text style={styles.leadershipFeatureAvatarText}>{entry.user.avatarInitials}</Text>
+                            </View>
+                          )}
+                          <View style={styles.compactText}>
+                            <Text style={styles.directoryMemberName}>{publicName}</Text>
+                            <Caption>{publicRole}</Caption>
+                            <Caption>{unitLabel}</Caption>
+                          </View>
+                          <Pill
+                            label={entry.membership.roles.includes('chairman') ? 'Chairman' : 'Committee'}
+                            tone={entry.membership.roles.includes('chairman') ? 'warning' : 'primary'}
+                          />
+                        </View>
+                        <View style={styles.leadershipDetailGrid}>
+                          <View style={styles.leadershipDetailCard}>
+                            <Caption>Phone</Caption>
+                            <Text style={styles.leadershipDetailValue}>{publicPhone}</Text>
+                          </View>
+                          <View style={styles.leadershipDetailCard}>
+                            <Caption>Unit</Caption>
+                            <Text style={styles.leadershipDetailValue}>{unitLabel}</Text>
+                          </View>
+                          {entry.leadershipProfile?.availability ? (
+                            <View style={styles.leadershipDetailCard}>
+                              <Caption>Availability</Caption>
+                              <Text style={styles.leadershipDetailValue}>{entry.leadershipProfile.availability}</Text>
+                            </View>
+                          ) : null}
+                        </View>
+                        {publicEmail ? <Caption>{publicEmail}</Caption> : null}
+                        <Caption>
+                          {entry.leadershipProfile?.bio
+                            ?? 'Available for society approvals, billing questions, maintenance follow-up, and shared community operations.'}
+                        </Caption>
+                        <View style={styles.directoryActionRow}>
+                          {canOpenChat ? (
+                            <Pressable
+                              accessibilityRole="button"
+                              onPress={() => openDirectChatForMember(entry.user.id)}
+                              style={({ pressed }) => [styles.memberQuickAction, pressed ? styles.interactiveCardPressed : null]}
+                            >
+                              <Text style={styles.memberQuickActionText}>Chat</Text>
+                            </Pressable>
+                          ) : null}
+                          <Pressable
+                            accessibilityRole="button"
+                            onPress={() => {
+                              void openPhoneDialer(publicPhone);
+                            }}
+                            style={({ pressed }) => [styles.memberQuickAction, pressed ? styles.interactiveCardPressed : null]}
+                          >
+                            <Text style={styles.memberQuickActionText}>Call</Text>
+                          </Pressable>
+                          <Pressable
+                            accessibilityRole="button"
+                            onPress={() => {
+                              void openWhatsAppConversation(
+                                publicPhone,
+                                `Hello ${publicName.split(' ')[0]}, I am messaging from the resident app.`,
+                              );
+                            }}
+                            style={({ pressed }) => [styles.memberQuickAction, pressed ? styles.interactiveCardPressed : null]}
+                          >
+                            <Text style={styles.memberQuickActionText}>WhatsApp</Text>
+                          </Pressable>
+                          {publicEmail ? (
+                            <Pressable
+                              accessibilityRole="button"
+                              onPress={() => {
+                                void openEmailComposer(
+                                  publicEmail,
+                                  `${publicRole} - ${society?.name ?? societyId}`,
+                                );
+                              }}
+                              style={({ pressed }) => [styles.memberQuickAction, pressed ? styles.interactiveCardPressed : null]}
+                            >
+                              <Text style={styles.memberQuickActionText}>Email</Text>
+                            </Pressable>
+                          ) : null}
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+              </SurfaceCard>
+            ) : null}
+            <SurfaceCard>
+              <SectionHeader
+                title={leadershipDirectory.length > 0 ? 'Resident directory' : 'Community members'}
+                description={
+                  leadershipDirectory.length > 0
+                    ? 'Leadership contacts stay above for quick access. Browse the remaining resident contacts here.'
+                    : 'Browse resident contacts for this society.'
+                }
+              />
+              {residentDirectoryMembers.length > 0 ? (
+                <View style={styles.directoryGrid}>
+                  {residentDirectoryMembers.map((member) => {
+                    const unitLabel = member.units.map((unit) => unit.code).join(', ') || 'Unit pending';
+                    const canOpenChat = member.user.id !== userId;
+                    const cardContent = (
+                      <SurfaceCard
+                        style={[
+                          styles.directoryCard,
+                          canOpenChat ? styles.directoryCardInteractive : null,
+                        ]}
+                      >
+                        <View style={styles.directoryCardHeader}>
+                          <View style={styles.directoryCardIdentity}>
+                            <Text style={styles.directoryMemberName}>{member.user.name}</Text>
+                            <Caption>{member.user.phone}</Caption>
+                          </View>
+                          <Pill label={unitLabel} tone="accent" />
+                        </View>
+                        <View style={styles.pillRow}>
+                          {member.membership.roles.map((role) => (
+                            <Pill key={`${member.membership.id}-${role}`} label={humanizeRole(role)} tone="primary" />
+                          ))}
+                        </View>
+                        <View style={styles.directoryActionRow}>
+                          {canOpenChat ? (
+                            <Pressable
+                              accessibilityRole="button"
+                              onPress={() => openDirectChatForMember(member.user.id)}
+                              style={({ pressed }) => [styles.memberQuickAction, pressed ? styles.interactiveCardPressed : null]}
+                            >
+                              <Text style={styles.memberQuickActionText}>Chat</Text>
+                            </Pressable>
+                          ) : null}
+                          <Pressable
+                            accessibilityRole="button"
+                            onPress={() => {
+                              void openPhoneDialer(member.user.phone);
+                            }}
+                            style={({ pressed }) => [styles.memberQuickAction, pressed ? styles.interactiveCardPressed : null]}
+                          >
+                            <Text style={styles.memberQuickActionText}>Call</Text>
+                          </Pressable>
+                          {canOpenChat ? (
+                            <Pressable
+                              accessibilityRole="button"
+                              onPress={() => {
+                                void openWhatsAppConversation(
+                                  member.user.phone,
+                                  `Hi ${member.user.name.split(' ')[0]}, messaging from the society app.`,
+                                );
+                              }}
+                              style={({ pressed }) => [styles.memberQuickAction, pressed ? styles.interactiveCardPressed : null]}
+                            >
+                              <Text style={styles.memberQuickActionText}>WhatsApp</Text>
+                            </Pressable>
+                          ) : null}
+                        </View>
+                      </SurfaceCard>
+                    );
+
+                    return (
+                      <View
+                        key={member.membership.id}
+                        style={[styles.directoryCardSlot, !isCompact ? styles.directoryCardSlotDesktop : null]}
+                      >
+                        {cardContent}
+                      </View>
+                    );
+                  })}
+                </View>
+              ) : (
+                <Caption>No other resident directory entries are available yet.</Caption>
+              )}
             </SurfaceCard>
-          ))
+          </>
         ) : (
           <SurfaceCard>
             <Caption>No resident directory entries are available yet.</Caption>
@@ -1918,9 +2324,9 @@ function ResidentBilling({
       />
       <SurfaceCard>
         <View style={styles.metricGrid}>
-          <MetricCard label="Outstanding dues" value={formatCurrency(overview.totalDue)} tone="accent" />
-          <MetricCard label="Payment flags" value={String(overview.myPendingPayments.length)} tone="primary" />
-          <MetricCard label="Reminder notices" value={String(reminders.length)} tone="blue" />
+          <MetricCard label="Outstanding dues" value={formatCurrency(overview.totalDue)} tone="accent" onPress={() => setActiveSection('outstanding')} />
+          <MetricCard label="Payment flags" value={String(overview.myPendingPayments.length)} tone="primary" onPress={() => setActiveSection('pay')} />
+          <MetricCard label="Reminder notices" value={String(reminders.length)} tone="blue" onPress={() => setActiveSection('reminders')} />
         </View>
         <View style={styles.choiceRow}>
           {residentBillingSections.map((section) => (
@@ -2023,7 +2429,7 @@ function ResidentBilling({
                     </View>
                     <View style={styles.formGrid}>
                       <View style={styles.formField}>
-                        <InputField label="Paid on" value={upiPaidAt} onChangeText={setUpiPaidAt} placeholder="2026-03-20T10:30" />
+                        <DateTimeField label="Paid on" value={upiPaidAt} onChangeText={setUpiPaidAt} placeholder="2026-03-20T10:30" mode="datetime" />
                       </View>
                       <View style={styles.formField}>
                         <InputField
@@ -2107,7 +2513,7 @@ function ResidentBilling({
                 </Caption>
                 <View style={styles.formGrid}>
                   <View style={styles.formField}>
-                    <InputField label="Paid on" value={manualPaidAt} onChangeText={setManualPaidAt} placeholder="2026-03-20T10:30" />
+                    <DateTimeField label="Paid on" value={manualPaidAt} onChangeText={setManualPaidAt} placeholder="2026-03-20T10:30" mode="datetime" />
                   </View>
                   <View style={styles.formField}>
                     <InputField
@@ -2218,37 +2624,60 @@ function ResidentBilling({
 
 function ResidentNotices({ societyId, userId }: { societyId: string; userId: string }) {
   const { state, actions } = useApp();
+  const [activeSection, setActiveSection] = useState<ResidentNoticeSection>('announcements');
   const membership = getMembershipForSociety(state.data, userId, societyId);
   const announcements = getAnnouncementsForSociety(state.data, societyId, membership?.roles);
   const rules = getRulesForSociety(state.data, societyId);
+  const societyDocuments = getSocietyDocuments(state.data, societyId);
   const unreadAnnouncements = announcements.filter((announcement) => !announcement.readByUserIds.includes(userId));
-  const highPriorityAnnouncements = announcements.filter((announcement) => announcement.priority === 'high').length;
+  const highPriorityAnnouncementList = announcements.filter((announcement) => announcement.priority === 'high');
+  const visibleAnnouncements =
+    activeSection === 'unread'
+      ? unreadAnnouncements
+      : activeSection === 'priority'
+        ? highPriorityAnnouncementList
+        : announcements;
+  const announcementSectionTitle =
+    activeSection === 'unread'
+      ? 'Unread announcements'
+      : activeSection === 'priority'
+        ? 'High priority announcements'
+        : 'Society announcements';
+  const announcementSectionDescription =
+    activeSection === 'unread'
+      ? 'Open unread notices here and tap them once to mark them as read.'
+      : activeSection === 'priority'
+        ? 'Priority communication from the society team stays grouped here for quick review.'
+        : 'Tap an unread notice to mark it as read and keep your resident communication queue current.';
 
   return (
     <>
       <SectionHeader
         title="Notice board"
-        description="Stay on top of announcements, unread communication, rules, and resident-facing documents from one notice hub."
+        description="Stay on top of announcements, unread communication, rules, and resident-facing office documents from one notice hub."
       />
       <SurfaceCard>
         <View style={styles.metricGrid}>
-          <MetricCard label="Announcements" value={String(announcements.length)} tone="primary" />
-          <MetricCard label="Unread" value={String(unreadAnnouncements.length)} tone="accent" />
-          <MetricCard label="High priority" value={String(highPriorityAnnouncements)} tone="blue" />
-          <MetricCard label="Rules" value={String(rules.length)} tone="primary" />
+          <MetricCard label="Announcements" value={String(announcements.length)} tone="primary" onPress={() => setActiveSection('announcements')} />
+          <MetricCard label="Unread" value={String(unreadAnnouncements.length)} tone="accent" onPress={() => setActiveSection('unread')} />
+          <MetricCard label="High priority" value={String(highPriorityAnnouncementList.length)} tone="blue" onPress={() => setActiveSection('priority')} />
+          <MetricCard label="Rules" value={String(rules.length)} tone="primary" onPress={() => setActiveSection('rules')} />
+          <MetricCard label="Shared docs" value={String(societyDocuments.length)} tone="accent" onPress={() => setActiveSection('documents')} />
         </View>
         <View style={styles.inlineSection}>
           <Caption>
-            Read the latest society communication here, then review the current rulebook and acknowledgement status below.
+            Tap a card above to open announcements, unread notices, high-priority updates, rules, or shared documents.
           </Caption>
         </View>
       </SurfaceCard>
 
+      {activeSection === 'announcements' || activeSection === 'unread' || activeSection === 'priority' ? (
+        <>
       <SectionHeader
-        title="Society announcements"
-        description="Tap an unread notice to mark it as read and keep your resident communication queue current."
+        title={announcementSectionTitle}
+        description={announcementSectionDescription}
       />
-      {announcements.map((announcement) => {
+      {visibleAnnouncements.map((announcement) => {
         const isUnread = !announcement.readByUserIds.includes(userId);
 
         return (
@@ -2279,14 +2708,29 @@ function ResidentNotices({ societyId, userId }: { societyId: string; userId: str
           </Pressable>
         );
       })}
+      {visibleAnnouncements.length === 0 ? (
+        <SurfaceCard>
+          <Caption>
+            {activeSection === 'unread'
+              ? 'You have no unread announcements right now.'
+              : activeSection === 'priority'
+                ? 'No high-priority announcements are active right now.'
+                : 'No society announcements are available yet.'}
+          </Caption>
+        </SurfaceCard>
+      ) : null}
+        </>
+      ) : null}
 
+      {activeSection === 'rules' ? (
+        <>
       <SurfaceCard>
         <SectionHeader
           title="Rules and documents"
           description="Resident-facing policies, acknowledgements, and current rule versions live together in this document section."
         />
       </SurfaceCard>
-      {rules.map((rule) => (
+      {rules.length > 0 ? rules.map((rule) => (
         <SurfaceCard key={rule.id}>
           <Text style={styles.cardTitle}>{rule.title}</Text>
           <Caption>
@@ -2299,7 +2743,51 @@ function ResidentNotices({ societyId, userId }: { societyId: string; userId: str
               : 'Acknowledgement pending'}
           </Caption>
         </SurfaceCard>
-      ))}
+      )) : (
+        <SurfaceCard>
+          <Caption>No society rules have been published yet.</Caption>
+        </SurfaceCard>
+      )}
+        </>
+      ) : null}
+      {activeSection === 'documents' ? (
+        <>
+      <SurfaceCard>
+        <SectionHeader
+          title="Society office and compliance records"
+          description="Lift licenses, common-light bills, water bills, and other shared documents published by the admin team stay here for every residence."
+        />
+      </SurfaceCard>
+      {societyDocuments.length > 0 ? societyDocuments.map((document) => (
+        <SurfaceCard key={document.id}>
+          <View style={styles.rowBetween}>
+            <Text style={styles.cardTitle}>{document.title}</Text>
+            <Pill label={humanizeSocietyDocumentCategory(document.category)} tone="warning" />
+          </View>
+          <Caption>{document.fileName}</Caption>
+          {document.summary ? <Caption>{document.summary}</Caption> : null}
+          <Caption>
+            Uploaded {formatLongDate(document.uploadedAt)}
+            {document.issuedOn ? ` | Issued ${document.issuedOn}` : ''}
+            {document.validUntil ? ` | Valid until ${document.validUntil}` : ''}
+          </Caption>
+          <View style={styles.heroActions}>
+            <ActionButton
+              label="Open document"
+              variant="secondary"
+              onPress={() => {
+                void openUploadedFileDataUrl(document.fileDataUrl);
+              }}
+            />
+          </View>
+        </SurfaceCard>
+      )) : (
+        <SurfaceCard>
+          <Caption>No office or compliance records have been published yet.</Caption>
+        </SurfaceCard>
+      )}
+        </>
+      ) : null}
     </>
   );
 }
@@ -2313,12 +2801,35 @@ function ResidentBookings({
   userId: string;
   preferredSection?: ResidentBookingsSection;
 }) {
+  const { width } = useWindowDimensions();
+  const isPhone = width < 420;
   const { state, actions } = useApp();
   const membership = getMembershipForSociety(state.data, userId, societyId);
   const units = getUnitsForSociety(state.data, societyId).filter((unit) => membership?.unitIds.includes(unit.id));
   const amenities = getAmenitiesForSociety(state.data, societyId);
+  const amenityBookings = getBookingsForSociety(state.data, societyId);
   const bookings = getBookingsForUserSociety(state.data, userId, societyId);
   const bookableAmenities = amenities.filter((amenity) => amenity.bookingType !== 'info');
+  const categorizedAmenitySections = residentAmenityCategories
+    .map((section) => ({
+      ...section,
+      amenities: section.amenities
+        .map((amenityName) => bookableAmenities.find((amenity) => amenity.name === amenityName) ?? null)
+        .filter((amenity): amenity is typeof bookableAmenities[number] => amenity !== null),
+    }))
+    .filter((section) => section.amenities.length > 0);
+  const categorizedAmenityIds = new Set(
+    categorizedAmenitySections.flatMap((section) => section.amenities.map((amenity) => amenity.id)),
+  );
+  const uncategorizedBookableAmenities = bookableAmenities.filter(
+    (amenity) => !categorizedAmenityIds.has(amenity.id),
+  );
+  const amenityPhoneSections = [
+    ...categorizedAmenitySections,
+    ...(uncategorizedBookableAmenities.length > 0
+      ? [{ key: 'other', title: 'Other amenities', amenities: uncategorizedBookableAmenities }]
+      : []),
+  ];
   const [selectedAmenityId, setSelectedAmenityId] = useState<string | null>(bookableAmenities[0]?.id ?? null);
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(units[0]?.id ?? null);
   const [bookingDate, setBookingDate] = useState(todayString());
@@ -2326,10 +2837,19 @@ function ResidentBookings({
   const [endTime, setEndTime] = useState('20:00');
   const [guests, setGuests] = useState('4');
   const [activeSection, setActiveSection] = useState<ResidentBookingsSection>(preferredSection ?? 'booking');
+  const [activeAmenityCategoryKey, setActiveAmenityCategoryKey] = useState<string>(amenityPhoneSections[0]?.key ?? '');
   const selectedAmenity = bookableAmenities.find((amenity) => amenity.id === selectedAmenityId) ?? null;
   const selectedAmenityRules = state.data.amenityScheduleRules.filter(
     (rule) => rule.amenityId === selectedAmenity?.id,
   );
+  const selectedAmenityVisibleBookings = selectedAmenity
+    ? amenityBookings.filter(
+      ({ booking, amenity }) =>
+        amenity?.id === selectedAmenity.id &&
+        booking.date === bookingDate &&
+        (booking.status === 'pending' || booking.status === 'confirmed'),
+    )
+    : [];
 
   useEffect(() => {
     if (preferredSection) {
@@ -2337,8 +2857,53 @@ function ResidentBookings({
     }
   }, [preferredSection]);
 
+  useEffect(() => {
+    if (selectedAmenityRules.length === 0) {
+      return;
+    }
+
+    setStartTime(selectedAmenityRules[0].startTime);
+    setEndTime(selectedAmenityRules[0].endTime);
+  }, [selectedAmenityId]);
+
+  useEffect(() => {
+    if (!amenityPhoneSections.some((section) => section.key === activeAmenityCategoryKey)) {
+      setActiveAmenityCategoryKey(amenityPhoneSections[0]?.key ?? '');
+    }
+  }, [activeAmenityCategoryKey, amenityPhoneSections]);
+
+  useEffect(() => {
+    if (!isPhone) {
+      return;
+    }
+
+    const activeSectionAmenities = amenityPhoneSections.find(
+      (section) => section.key === activeAmenityCategoryKey,
+    )?.amenities ?? [];
+
+    const hasSelectedAmenityInActiveSection = activeSectionAmenities.some(
+      (amenity) => amenity.id === selectedAmenityId,
+    );
+
+    if (!hasSelectedAmenityInActiveSection && activeSectionAmenities[0]) {
+      setSelectedAmenityId(activeSectionAmenities[0].id);
+    }
+  }, [activeAmenityCategoryKey, amenityPhoneSections, isPhone, selectedAmenityId]);
+
   const pendingBookings = bookings.filter((booking) => booking.status === 'pending').length;
   const confirmedBookings = bookings.filter((booking) => booking.status === 'confirmed').length;
+  const visiblePhoneAmenities = amenityPhoneSections.find((section) => section.key === activeAmenityCategoryKey)?.amenities
+    ?? bookableAmenities;
+
+  function handleSelectAmenityCategory(sectionKey: string) {
+    setActiveAmenityCategoryKey(sectionKey);
+
+    const nextAmenity = amenityPhoneSections.find((section) => section.key === sectionKey)?.amenities[0];
+
+    if (nextAmenity) {
+      setSelectedAmenityId(nextAmenity.id);
+    }
+  }
 
   async function handleCreateBooking() {
     if (!selectedAmenity) {
@@ -2366,11 +2931,11 @@ function ResidentBookings({
         description="Create amenity requests, explore available spaces, and review your reservations from the same bookings layout used across the resident workspace."
       />
       <SurfaceCard>
-        <View style={styles.metricGrid}>
-          <MetricCard label="Bookable amenities" value={String(bookableAmenities.length)} tone="accent" />
-          <MetricCard label="My bookings" value={String(bookings.length)} tone="primary" />
-          <MetricCard label="Pending" value={String(pendingBookings)} tone="blue" />
-          <MetricCard label="Confirmed" value={String(confirmedBookings)} tone="primary" />
+        <View style={[styles.metricGrid, isPhone ? styles.metricGridPhone : null]}>
+          <MetricCard label="Bookable amenities" value={String(bookableAmenities.length)} tone="accent" onPress={() => setActiveSection('amenities')} />
+          <MetricCard label="My bookings" value={String(bookings.length)} tone="primary" onPress={() => setActiveSection('history')} />
+          {!isPhone ? <MetricCard label="Pending" value={String(pendingBookings)} tone="blue" onPress={() => setActiveSection('history')} /> : null}
+          {!isPhone ? <MetricCard label="Confirmed" value={String(confirmedBookings)} tone="primary" onPress={() => setActiveSection('history')} /> : null}
         </View>
         <View style={styles.choiceRow}>
           {residentBookingSections.map((section) => (
@@ -2392,23 +2957,93 @@ function ResidentBookings({
       {activeSection === 'booking' ? (
         <>
           <SectionHeader
-            title="Raise an amenity booking"
-            description="Choose the amenity, slot, and linked unit here. The same request then appears in the admin amenities module for review."
+            title={isPhone ? 'Book an amenity' : 'Raise an amenity booking'}
+            description={isPhone ? 'Pick an amenity, confirm the slot, and submit the request from one compact phone layout.' : 'Choose the amenity, slot, and linked unit here. The same request then appears in the admin amenities module for review.'}
           />
       <SurfaceCard>
         {bookableAmenities.length > 0 ? (
-          <View style={styles.inlineSection}>
+          <View style={[styles.inlineSection, isPhone ? styles.inlineSectionPhone : null]}>
             <Text style={styles.compactTitle}>Amenity</Text>
-            <View style={styles.choiceRow}>
-              {bookableAmenities.map((amenity) => (
-                <ChoiceChip
-                  key={amenity.id}
-                  label={amenity.name}
-                  selected={selectedAmenity?.id === amenity.id}
-                  onPress={() => setSelectedAmenityId(amenity.id)}
-                />
-              ))}
-            </View>
+            {isPhone ? (
+              <>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.amenityCategoryScroller}>
+                  {amenityPhoneSections.map((section) => (
+                    <ChoiceChip
+                      key={section.key}
+                      label={section.title}
+                      selected={activeAmenityCategoryKey === section.key}
+                      onPress={() => handleSelectAmenityCategory(section.key)}
+                    />
+                  ))}
+                </ScrollView>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.amenityCardScroller}>
+                  {visiblePhoneAmenities.map((amenity) => (
+                    <AmenityBookingCard
+                      key={amenity.id}
+                      amenity={amenity}
+                      selected={selectedAmenity?.id === amenity.id}
+                      onPress={() => setSelectedAmenityId(amenity.id)}
+                      compact
+                    />
+                  ))}
+                </ScrollView>
+              </>
+            ) : (
+              <>
+                {categorizedAmenitySections.map((section) => (
+                  <View key={section.key} style={styles.inlineSection}>
+                    <Text style={styles.inlineTitle}>{section.title}</Text>
+                    <View style={styles.amenityCardGrid}>
+                      {section.amenities.map((amenity) => (
+                        <AmenityBookingCard
+                          key={amenity.id}
+                          amenity={amenity}
+                          selected={selectedAmenity?.id === amenity.id}
+                          onPress={() => setSelectedAmenityId(amenity.id)}
+                        />
+                      ))}
+                    </View>
+                  </View>
+                ))}
+                {uncategorizedBookableAmenities.length > 0 ? (
+                  <View style={styles.inlineSection}>
+                    <Text style={styles.inlineTitle}>Other amenities</Text>
+                    <View style={styles.amenityCardGrid}>
+                      {uncategorizedBookableAmenities.map((amenity) => (
+                        <AmenityBookingCard
+                          key={amenity.id}
+                          amenity={amenity}
+                          selected={selectedAmenity?.id === amenity.id}
+                          onPress={() => setSelectedAmenityId(amenity.id)}
+                        />
+                      ))}
+                    </View>
+                  </View>
+                ) : null}
+              </>
+            )}
+            {selectedAmenity ? (
+              <View style={[styles.amenitySelectionSummary, isPhone ? styles.amenitySelectionSummaryPhone : null]}>
+                <View style={styles.amenitySelectionSummaryHeader}>
+                  <AmenityThumbnail amenityName={selectedAmenity.name} compact={isPhone} />
+                  <View style={styles.amenitySelectionSummaryCopy}>
+                    <Text style={styles.inlineTitle}>{selectedAmenity.name}</Text>
+                    <Caption>
+                      {selectedAmenity.approvalMode === 'committee' ? 'Chairman review' : 'Auto confirm'}
+                      {' · '}
+                      {selectedAmenity.reservationScope === 'fullDay' ? 'Full-day booking' : 'Slot-wise booking'}
+                    </Caption>
+                  </View>
+                </View>
+                {selectedAmenityRules.length > 0 ? (
+                  <View style={styles.choiceRow}>
+                    {selectedAmenityRules.map((rule) => (
+                      <Pill key={rule.id} label={`${rule.slotLabel} ${rule.startTime}-${rule.endTime}`} tone="primary" />
+                    ))}
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
             <Text style={styles.compactTitle}>Linked resident number</Text>
             <View style={styles.choiceRow}>
               {units.map((unit) => (
@@ -2420,30 +3055,45 @@ function ResidentBookings({
                 />
               ))}
             </View>
-            <View style={styles.formGrid}>
-              <View style={styles.formField}>
-                <InputField label="Booking date" value={bookingDate} onChangeText={setBookingDate} placeholder="2026-03-24" />
+            <View style={[styles.formGrid, isPhone ? styles.formGridPhone : null]}>
+              <View style={[styles.formField, isPhone ? styles.formFieldPhone : null]}>
+                <DateTimeField label="Booking date" value={bookingDate} onChangeText={setBookingDate} placeholder="2026-03-24" mode="date" />
               </View>
-              <View style={styles.formField}>
-                <InputField label="Start time" value={startTime} onChangeText={setStartTime} placeholder="18:00" />
+              <View style={[styles.formField, isPhone ? styles.formFieldPhone : null]}>
+                <DateTimeField label="Start time" value={startTime} onChangeText={setStartTime} placeholder="18:00" mode="time" />
               </View>
-              <View style={styles.formField}>
-                <InputField label="End time" value={endTime} onChangeText={setEndTime} placeholder="20:00" />
+              <View style={[styles.formField, isPhone ? styles.formFieldPhone : null]}>
+                <DateTimeField label="End time" value={endTime} onChangeText={setEndTime} placeholder="20:00" mode="time" />
               </View>
-              <View style={styles.formField}>
+              <View style={[styles.formField, isPhone ? styles.formFieldPhone : null]}>
                 <InputField label="Guests" value={guests} onChangeText={setGuests} keyboardType="numeric" placeholder="4" />
               </View>
             </View>
-            {selectedAmenity ? (
+            {selectedAmenity && !isPhone ? (
               <>
                 <Caption>
                   Approval mode: {selectedAmenity.approvalMode === 'committee' ? 'Chairman review' : 'Auto confirm if the slot is free'}.
+                </Caption>
+                <Caption>
+                  Booking mode: {selectedAmenity.reservationScope === 'fullDay' ? 'Full-day lock once any resident books it' : 'Slot-wise booking based on the configured timings'}.
                 </Caption>
                 {selectedAmenityRules.length > 0 ? (
                   <Caption>
                     Configured slots: {selectedAmenityRules.map((rule) => `${rule.slotLabel} (${rule.startTime}-${rule.endTime})`).join(', ')}
                   </Caption>
                 ) : null}
+                {selectedAmenityVisibleBookings.length > 0 ? (
+                      <View style={[styles.inlineSection, isPhone ? styles.inlineSectionPhone : null]}>
+                    <Text style={styles.compactTitle}>Current bookings for {bookingDate}</Text>
+                    {selectedAmenityVisibleBookings.map(({ booking, unit, user }) => (
+                      <Caption key={booking.id}>
+                        {booking.startTime} - {booking.endTime} · {unit?.code ?? 'Unit'} · {user?.name ?? 'Resident'} · {humanizeBookingStatus(booking.status)}
+                      </Caption>
+                    ))}
+                  </View>
+                ) : (
+                  <Caption>No confirmed or pending bookings are visible yet for this amenity on {bookingDate}.</Caption>
+                )}
               </>
             ) : null}
             <ActionButton
@@ -2465,19 +3115,32 @@ function ResidentBookings({
         title="Amenity discovery"
         description="Amenities can be exclusive slot-based, capacity-based, or simply informational."
       />
-      {amenities.length > 0 ? amenities.map((amenity) => (
-        <SurfaceCard key={amenity.id}>
-          <View style={styles.rowBetween}>
-            <Text style={styles.cardTitle}>{amenity.name}</Text>
+      <SurfaceCard>
+        {amenities.length > 0 ? amenities.map((amenity, index) => (
+          <View
+            key={amenity.id}
+            style={[
+              styles.amenityListRow,
+              index < amenities.length - 1 ? styles.amenityListRowDivider : null,
+            ]}
+          >
+            <View style={styles.amenityListRowLeft}>
+              <View style={styles.amenityDiscoveryRow}>
+                <AmenityThumbnail amenityName={amenity.name} compact />
+                <View style={styles.amenityDiscoveryCopy}>
+                  <Text style={styles.amenityListRowTitle}>{amenity.name}</Text>
+                  <Text style={styles.amenityListRowMeta}>
+                    {amenity.approvalMode}{amenity.capacity ? ` · Cap ${amenity.capacity}` : ''} · {amenity.reservationScope === 'fullDay' ? 'Full-day' : 'Timed slots'}
+                  </Text>
+                </View>
+              </View>
+            </View>
             <Pill label={amenity.bookingType} tone="accent" />
           </View>
-          <Caption>
-            Approval: {amenity.approvalMode} {amenity.capacity ? `· Capacity ${amenity.capacity}` : ''}
-          </Caption>
-        </SurfaceCard>
-      )) : (
-        <SurfaceCard><Caption>No amenities are configured yet.</Caption></SurfaceCard>
-      )}
+        )) : (
+          <Caption>No amenities are configured yet.</Caption>
+        )}
+      </SurfaceCard>
         </>
       ) : null}
 
@@ -2513,6 +3176,309 @@ function ResidentBookings({
   );
 }
 
+function AmenityThumbnail({ amenityName, compact }: { amenityName: string; compact?: boolean }) {
+  const visual = getAmenityVisual(amenityName);
+  const photoSource = getAmenityPhotoUri(amenityName);
+
+  return (
+    <View
+      style={[
+        styles.amenityThumbnail,
+        compact ? styles.amenityThumbnailCompact : null,
+        { backgroundColor: visual.background, borderColor: visual.border },
+      ]}
+    >
+      <Image source={photoSource} style={styles.amenityThumbnailImage} resizeMode="cover" />
+      <View style={styles.amenityThumbnailOverlay} />
+      <View style={[styles.amenityThumbnailAccentLarge, { backgroundColor: visual.accent }]} />
+      <View style={[styles.amenityThumbnailAccentSmall, { backgroundColor: visual.border }]} />
+      <View style={styles.amenityThumbnailGlyphWrap}>
+        <ModuleGlyph module={visual.module} color={visual.color} size={compact ? 'md' : 'lg'} />
+      </View>
+      <Text style={[styles.amenityThumbnailLabel, compact ? styles.amenityThumbnailLabelCompact : null]} numberOfLines={1}>
+        {amenityName}
+      </Text>
+    </View>
+  );
+}
+
+function AmenityBookingCard({
+  amenity,
+  selected,
+  onPress,
+  compact,
+}: {
+  amenity: AmenityRecord;
+  selected: boolean;
+  onPress: () => void;
+  compact?: boolean;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.amenityBookingCard,
+        compact ? styles.amenityBookingCardCompact : null,
+        selected ? styles.amenityBookingCardSelected : null,
+        pressed ? styles.interactiveCardPressed : null,
+      ]}
+    >
+      <AmenityThumbnail amenityName={amenity.name} compact={compact} />
+      <View style={styles.amenityBookingCardCopy}>
+        <Text numberOfLines={compact ? 2 : 1} style={[styles.amenityBookingCardTitle, compact ? styles.amenityBookingCardTitleCompact : null]}>
+          {amenity.name}
+        </Text>
+        <Text numberOfLines={1} style={styles.amenityBookingCardMeta}>
+          {amenity.reservationScope === 'fullDay' ? 'Full-day' : 'Timed slots'}
+        </Text>
+      </View>
+      <Pill label={amenity.approvalMode === 'committee' ? 'Review' : 'Auto'} tone={selected ? 'accent' : 'primary'} />
+    </Pressable>
+  );
+}
+
+function ResidentMeetings({ societyId, userId }: { societyId: string; userId: string }) {
+  const { state, actions } = useApp();
+  const meetings = getMeetingsForSociety(state.data, societyId);
+  const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(null);
+  const [signatureText, setSignatureText] = useState('');
+  const currentUser = state.data.users.find((u) => u.id === userId);
+
+  const selectedMeeting = selectedMeetingId
+    ? meetings.find((m) => m.id === selectedMeetingId) ?? null
+    : null;
+  const agendaItems = selectedMeetingId
+    ? getMeetingAgendaItems(state.data, selectedMeetingId)
+    : [];
+  const signatures = selectedMeetingId
+    ? getMeetingSignatures(state.data, selectedMeetingId)
+    : [];
+  const hasAlreadySigned = selectedMeetingId
+    ? signatures.some((s) => s.userId === userId)
+    : false;
+
+  async function handleVote(agendaItemId: string, meetingId: string, vote: 'yes' | 'no' | 'abstain') {
+    await actions.castMeetingVote(societyId, agendaItemId, meetingId, vote);
+  }
+
+  async function handleSign() {
+    if (!selectedMeetingId || !signatureText.trim()) {
+      return;
+    }
+
+    const saved = await actions.signMeeting(societyId, selectedMeetingId, signatureText);
+
+    if (saved) {
+      setSignatureText('');
+    }
+  }
+
+  if (selectedMeeting) {
+    return (
+      <>
+        <SectionHeader
+          title={selectedMeeting.title}
+          description={`${humanizeMeetingType(selectedMeeting.meetingType)} · ${selectedMeeting.venue}`}
+        />
+        <SurfaceCard>
+          <View style={styles.rowBetween}>
+            <Pill label={humanizeMeetingStatus(selectedMeeting.status)} tone={getMeetingStatusTone(selectedMeeting.status) as 'primary' | 'accent' | 'warning' | 'success'} />
+            <Pill label={humanizeMeetingType(selectedMeeting.meetingType)} tone="primary" />
+          </View>
+          {selectedMeeting.summary ? (
+            <Caption>{selectedMeeting.summary}</Caption>
+          ) : null}
+          <Caption>{formatLongDate(selectedMeeting.scheduledAt)} · {selectedMeeting.venue}</Caption>
+          <ActionButton label="Back to all meetings" onPress={() => setSelectedMeetingId(null)} variant="secondary" />
+        </SurfaceCard>
+
+        {selectedMeeting.minutesDocumentDataUrl ? (
+          <SurfaceCard>
+            <Text style={styles.cardTitle}>Meeting minutes</Text>
+            <Caption>The admin has uploaded the official minutes for this meeting.</Caption>
+            <ActionButton
+              label="Open minutes document"
+              onPress={() => {
+                if (selectedMeeting.minutesDocumentDataUrl) {
+                  openUploadedFileDataUrl(selectedMeeting.minutesDocumentDataUrl);
+                }
+              }}
+              variant="secondary"
+            />
+          </SurfaceCard>
+        ) : null}
+
+        {agendaItems.length > 0 ? (
+          <SurfaceCard>
+            <SectionHeader
+              title="Agenda"
+              description="Review items on the agenda. Cast your vote where voting is open."
+            />
+            {agendaItems.map((item) => {
+              const votes = getMeetingVotesForItem(state.data, item.id);
+              const myVote = votes.find((v) => v.userId === userId);
+              const yesVotes = votes.filter((v) => v.vote === 'yes').length;
+              const noVotes = votes.filter((v) => v.vote === 'no').length;
+              const abstainVotes = votes.filter((v) => v.vote === 'abstain').length;
+              const isOpen = item.votingStatus === 'open';
+
+              return (
+                <View key={item.id} style={styles.meetingAgendaRow}>
+                  <Text style={styles.meetingAgendaTitle}>{item.sortOrder}. {item.title}</Text>
+                  {item.description ? <Caption>{item.description}</Caption> : null}
+
+                  {item.requiresVoting ? (
+                    <>
+                      {item.resolution ? (
+                        <View style={styles.meetingVoteBadgeRow}>
+                          <Pill
+                            label={`Resolution: ${item.resolution.toUpperCase()}`}
+                            tone={item.resolution === 'passed' ? 'success' : item.resolution === 'rejected' ? 'warning' : 'neutral'}
+                          />
+                        </View>
+                      ) : null}
+
+                      {item.votingStatus !== 'notRequired' ? (
+                        <Caption>
+                          Votes: Yes {yesVotes} · No {noVotes} · Abstain {abstainVotes}
+                        </Caption>
+                      ) : null}
+
+                      {isOpen ? (
+                        <View style={styles.meetingVoteButtonRow}>
+                          {myVote ? (
+                            <Caption>Your vote: {myVote.vote.toUpperCase()} (tap to change)</Caption>
+                          ) : null}
+                          <View style={styles.chipRow}>
+                            <ChoiceChip
+                              label="Yes"
+                              selected={myVote?.vote === 'yes'}
+                              onPress={() => handleVote(item.id, item.meetingId, 'yes')}
+                            />
+                            <ChoiceChip
+                              label="No"
+                              selected={myVote?.vote === 'no'}
+                              onPress={() => handleVote(item.id, item.meetingId, 'no')}
+                            />
+                            <ChoiceChip
+                              label="Abstain"
+                              selected={myVote?.vote === 'abstain'}
+                              onPress={() => handleVote(item.id, item.meetingId, 'abstain')}
+                            />
+                          </View>
+                        </View>
+                      ) : null}
+                    </>
+                  ) : null}
+                </View>
+              );
+            })}
+          </SurfaceCard>
+        ) : (
+          <SurfaceCard><Caption>No agenda items added yet for this meeting.</Caption></SurfaceCard>
+        )}
+
+        <SurfaceCard>
+          <SectionHeader
+            title="Digital signature"
+            description="Confirm your attendance and agreement by signing this meeting digitally."
+          />
+          {hasAlreadySigned ? (
+            <Caption>You have already signed this meeting. Your digital signature is recorded.</Caption>
+          ) : (
+            <>
+              <Caption>
+                Type your full name as it appears in your resident profile to apply your digital signature.
+              </Caption>
+              <InputField
+                label="Full name (digital signature)"
+                value={signatureText}
+                onChangeText={setSignatureText}
+                placeholder={currentUser?.name ?? 'Your full name'}
+              />
+              <ActionButton
+                label={state.isSyncing ? 'Signing...' : 'Sign this meeting'}
+                onPress={handleSign}
+                disabled={state.isSyncing || !signatureText.trim()}
+              />
+            </>
+          )}
+          {signatures.length > 0 ? (
+            <View style={styles.inlineSection}>
+              <Caption>{signatures.length} resident(s) have signed:</Caption>
+              {signatures.map((sign) => (
+                <View key={sign.id} style={styles.meetingSignRow}>
+                  <Text style={styles.meetingSignName}>{sign.signatureText}</Text>
+                  <Caption>{formatShortDate(sign.signedAt)}</Caption>
+                </View>
+              ))}
+            </View>
+          ) : null}
+        </SurfaceCard>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <SectionHeader
+        title="Society meetings"
+        description="Review past and upcoming society meetings, vote on agenda items, and sign digitally."
+      />
+      <SurfaceCard>
+        <View style={styles.metricGrid}>
+          <MetricCard label="Total meetings" value={String(meetings.length)} tone="primary" onPress={() => setSelectedMeetingId(meetings[0]?.id ?? null)} />
+          <MetricCard
+            label="Upcoming"
+            value={String(meetings.filter((m) => m.status === 'scheduled').length)}
+            tone="accent"
+            onPress={() => setSelectedMeetingId(meetings.find((m) => m.status === 'scheduled')?.id ?? meetings[0]?.id ?? null)}
+          />
+        </View>
+      </SurfaceCard>
+
+      {meetings.length > 0 ? (
+        <SurfaceCard>
+          {meetings.map((meeting, index) => {
+            const items = getMeetingAgendaItems(state.data, meeting.id);
+            const openVoteItems = items.filter((item) => item.votingStatus === 'open');
+            const mySignature = getMeetingSignatures(state.data, meeting.id).find((s) => s.userId === userId);
+
+            return (
+              <Pressable
+                key={meeting.id}
+                onPress={() => setSelectedMeetingId(meeting.id)}
+                style={[
+                  styles.meetingListRow,
+                  index < meetings.length - 1 ? styles.meetingListRowDivider : null,
+                ]}
+              >
+                <View style={styles.meetingListRowLeft}>
+                  <View style={styles.meetingListTopRow}>
+                    <Pill label={humanizeMeetingType(meeting.meetingType)} tone="primary" />
+                    <Pill label={humanizeMeetingStatus(meeting.status)} tone={getMeetingStatusTone(meeting.status) as 'primary' | 'accent' | 'warning' | 'success'} />
+                    {mySignature ? <Pill label="Signed" tone="success" /> : null}
+                  </View>
+                  <Text style={styles.meetingListTitle}>{meeting.title}</Text>
+                  <Caption>{meeting.venue} · {formatShortDate(meeting.scheduledAt)}</Caption>
+                  {openVoteItems.length > 0 ? (
+                    <Caption>{openVoteItems.length} vote(s) open — tap to cast your vote</Caption>
+                  ) : null}
+                </View>
+                <Text style={styles.meetingListChevron}>›</Text>
+              </Pressable>
+            );
+          })}
+        </SurfaceCard>
+      ) : (
+        <SurfaceCard>
+          <Caption>No society meetings have been scheduled yet.</Caption>
+        </SurfaceCard>
+      )}
+    </>
+  );
+}
+
 function ResidentHelpdesk({ societyId, userId }: { societyId: string; userId: string }) {
   const { state, actions } = useApp();
   const membership = getMembershipForSociety(state.data, userId, societyId);
@@ -2520,6 +3486,7 @@ function ResidentHelpdesk({ societyId, userId }: { societyId: string; userId: st
     membership?.unitIds.includes(unit.id),
   );
   const complaints = getComplaintsForUserSociety(state.data, userId, societyId);
+  const [activeComplaintFilter, setActiveComplaintFilter] = useState<'all' | 'open' | 'resolved' | 'updates'>('all');
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(userUnits[0]?.id ?? null);
   const [category, setCategory] = useState<ComplaintCategory>('general');
   const [title, setTitle] = useState('');
@@ -2537,6 +3504,18 @@ function ResidentHelpdesk({ societyId, userId }: { societyId: string; userId: st
     (total, complaint) => total + getComplaintUpdatesForComplaint(state.data, complaint.id).length,
     0,
   );
+  const visibleComplaints = complaints.filter((complaint) => {
+    switch (activeComplaintFilter) {
+      case 'open':
+        return complaint.status !== 'resolved';
+      case 'resolved':
+        return complaint.status === 'resolved';
+      case 'updates':
+        return getComplaintUpdatesForComplaint(state.data, complaint.id).length > 0;
+      default:
+        return true;
+    }
+  });
 
   async function handleRaiseComplaint() {
     if (!selectedUnitId) {
@@ -2565,12 +3544,18 @@ function ResidentHelpdesk({ societyId, userId }: { societyId: string; userId: st
       />
       <SurfaceCard>
         <View style={styles.metricGrid}>
-          <MetricCard label="Open tickets" value={String(openComplaints.length)} tone="accent" />
-          <MetricCard label="Resolved" value={String(resolvedComplaints.length)} tone="primary" />
-          <MetricCard label="Updates" value={String(complaintUpdateCount)} tone="blue" />
-          <MetricCard label="Linked units" value={String(userUnits.length)} tone="primary" />
+          <MetricCard label="Open tickets" value={String(openComplaints.length)} tone="accent" onPress={() => setActiveComplaintFilter('open')} />
+          <MetricCard label="Resolved" value={String(resolvedComplaints.length)} tone="primary" onPress={() => setActiveComplaintFilter('resolved')} />
+          <MetricCard label="Updates" value={String(complaintUpdateCount)} tone="blue" onPress={() => setActiveComplaintFilter('updates')} />
+          <MetricCard label="Linked units" value={String(userUnits.length)} tone="primary" onPress={() => setActiveComplaintFilter('all')} />
         </View>
         <View style={styles.inlineSection}>
+          <View style={styles.choiceRow}>
+            <ChoiceChip label="All tickets" selected={activeComplaintFilter === 'all'} onPress={() => setActiveComplaintFilter('all')} />
+            <ChoiceChip label="Open" selected={activeComplaintFilter === 'open'} onPress={() => setActiveComplaintFilter('open')} />
+            <ChoiceChip label="Resolved" selected={activeComplaintFilter === 'resolved'} onPress={() => setActiveComplaintFilter('resolved')} />
+            <ChoiceChip label="With updates" selected={activeComplaintFilter === 'updates'} onPress={() => setActiveComplaintFilter('updates')} />
+          </View>
           <Caption>
             Start with a new ticket below, then use the same page to monitor assigned work and the latest society updates.
           </Caption>
@@ -2637,7 +3622,7 @@ function ResidentHelpdesk({ societyId, userId }: { societyId: string; userId: st
           />
         </View>
       </SurfaceCard>
-      {complaints.length > 0 ? complaints.map((complaint) => (
+      {visibleComplaints.length > 0 ? visibleComplaints.map((complaint) => (
         <SurfaceCard key={complaint.id}>
           <View style={styles.rowBetween}>
             <Text style={styles.cardTitle}>{complaint.title}</Text>
@@ -2692,7 +3677,7 @@ function ResidentHelpdesk({ societyId, userId }: { societyId: string; userId: st
           </View>
         </SurfaceCard>
       )) : (
-        <SurfaceCard><Caption>No helpdesk tickets raised yet.</Caption></SurfaceCard>
+        <SurfaceCard><Caption>{complaints.length > 0 ? 'No tickets match the current filter.' : 'No helpdesk tickets raised yet.'}</Caption></SurfaceCard>
       )}
     </>
   );
@@ -2701,12 +3686,15 @@ function ResidentHelpdesk({ societyId, userId }: { societyId: string; userId: st
 function ResidentProfile({
   societyId,
   userId,
+  preferredSection,
 }: {
   societyId: string;
   userId: string;
   preferredSection?: ResidentProfileSection;
 }) {
   const { state, actions } = useApp();
+  const { width } = useWindowDimensions();
+  const isCompact = width < 768;
   const currentUser = getCurrentUser(state.data, userId);
   const membership = getMembershipForSociety(state.data, userId, societyId);
   const residenceProfile = getResidenceProfileForUserSociety(state.data, userId, societyId);
@@ -2718,12 +3706,6 @@ function ResidentProfile({
       ),
     [societyId, state.data.vehicleRegistrations, userId],
   );
-  const allowedUnitIds = new Set(units.map((unit) => unit.id));
-  const staff = getStaffVerificationDirectory(state.data, societyId).filter(
-    ({ staff, employerUnits }) =>
-      staff.requestedByUserId === userId || employerUnits.some((unit) => allowedUnitIds.has(unit.id)),
-  );
-  const canSubmitStaffRequest = membership?.roles.some((role) => role === 'owner' || role === 'tenant') ?? false;
   const residentType =
     residenceProfile?.residentType ??
     (membership?.roles.includes('committee')
@@ -2731,14 +3713,7 @@ function ResidentProfile({
       : membership?.roles.includes('tenant')
         ? 'tenant'
         : 'owner');
-  const [staffName, setStaffName] = useState('');
-  const [staffPhone, setStaffPhone] = useState('');
-  const [staffCategory, setStaffCategory] = useState<'domesticHelp' | 'cook' | 'driver' | 'vendor'>('domesticHelp');
-  const [serviceLabel, setServiceLabel] = useState('');
-  const [visitsPerWeek, setVisitsPerWeek] = useState('6');
-  const [selectedUnitCodes, setSelectedUnitCodes] = useState<string[]>(() =>
-    units.length === 1 ? [units[0].code] : [],
-  );
+  const [activeSection, setActiveSection] = useState<ResidentProfileSection>(preferredSection ?? 'household');
   const [profileFullName, setProfileFullName] = useState(residenceProfile?.fullName ?? currentUser?.name ?? '');
   const [profileEmail, setProfileEmail] = useState(residenceProfile?.email ?? currentUser?.email ?? '');
   const [profileAlternatePhone, setProfileAlternatePhone] = useState(residenceProfile?.alternatePhone ?? '');
@@ -2787,6 +3762,23 @@ function ResidentProfile({
         vehicle.parkingSlot.trim()) &&
       (!vehicle.registrationNumber.trim() || !vehicle.unitId),
   );
+  const unitCodesLabel = units.map((unit) => unit.code).join(', ') || 'Not assigned yet';
+  const residenceStatusLabel =
+    residentType === 'committee'
+      ? 'Committee resident'
+      : residentType === 'tenant'
+        ? 'Tenant resident'
+        : 'Owner resident';
+  const emergencyContactCount = [
+    profileEmergencyContactPhone,
+    profileSecondaryEmergencyContactPhone,
+  ].filter((value) => value.trim()).length;
+  const saveResidenceProfileDisabled =
+    state.isSyncing ||
+    !profileFullName.trim() ||
+    !profileMoveInDate ||
+    hasIncompleteProfileVehicle ||
+    !profileConsent;
 
   useEffect(() => {
     setProfileFullName(residenceProfile?.fullName ?? currentUser?.name ?? '');
@@ -2831,13 +3823,11 @@ function ResidentProfile({
     userVehicles,
   ]);
 
-  function toggleUnitCode(unitCode: string) {
-    setSelectedUnitCodes((currentSelection) =>
-      currentSelection.includes(unitCode)
-        ? currentSelection.filter((code) => code !== unitCode)
-        : [...currentSelection, unitCode],
-    );
-  }
+  useEffect(() => {
+    if (preferredSection) {
+      setActiveSection(preferredSection);
+    }
+  }, [preferredSection]);
 
   function updateProfileVehicle(vehicleId: string, updates: Partial<EditableVehicleDraft>) {
     setProfileVehicles((currentVehicles) =>
@@ -2896,26 +3886,6 @@ function ResidentProfile({
         statusMessage:
           error instanceof Error ? error.message : 'Could not attach the vehicle photo.',
       });
-    }
-  }
-
-  async function handleSubmitStaffRequest() {
-    const saved = await actions.submitResidentStaffVerification(societyId, {
-      name: staffName,
-      phone: staffPhone,
-      category: staffCategory,
-      employerUnitCodes: selectedUnitCodes,
-      serviceLabel,
-      visitsPerWeek,
-    });
-
-    if (saved) {
-      setStaffName('');
-      setStaffPhone('');
-      setStaffCategory('domesticHelp');
-      setServiceLabel('');
-      setVisitsPerWeek('6');
-      setSelectedUnitCodes(units.length === 1 ? [units[0].code] : []);
     }
   }
 
@@ -2981,107 +3951,193 @@ function ResidentProfile({
   return (
     <>
       <SectionHeader
-        title="Resident profile"
-        description="Review household access, residence verification, vehicles, and staff records from one profile hub that matches the newer resident module design."
+        title="Residence profile"
+        description="Housing apps usually keep resident profiles focused on unit mapping, verified contact details, emergency contacts, vehicles, and tenancy proof. This page now follows that simpler residence-first structure."
       />
-      <SurfaceCard>
-        <View style={styles.metricGrid}>
-          <MetricCard label="Linked units" value={String(units.length)} tone="primary" />
-          <MetricCard label="Saved vehicles" value={String(userVehicles.length)} tone="accent" />
-          <MetricCard label="Staff records" value={String(staff.length)} tone="blue" />
-          <MetricCard
-            label="Emergency contacts"
-            value={String(
-              [
-                profileEmergencyContactPhone,
-                profileSecondaryEmergencyContactPhone,
-              ].filter((value) => value.trim()).length,
-            )}
-            tone="primary"
-          />
-        </View>
-        <View style={styles.inlineSection}>
-          <Caption>
-            Keep your household identity, verification details, vehicles, privacy consent, and domestic staff information current in this profile section.
-          </Caption>
-        </View>
-      </SurfaceCard>
-
-      <SurfaceCard>
-        <SectionHeader
-          title="Membership and household"
-          description="Core household identity, role access, and unit mapping stay grouped together before the editable profile details."
-        />
-      </SurfaceCard>
-      <SurfaceCard>
-        <Text style={styles.cardTitle}>Roles in this society</Text>
-        <View style={styles.pillRow}>
-          {membership?.roles.map((role) => <Pill key={role} label={humanizeRole(role)} tone="primary" />)}
-          <Pill
-            label={residentType === 'committee' ? 'Committee profile' : residentType === 'tenant' ? 'Tenant profile' : 'Owner profile'}
-            tone={residentType === 'tenant' ? 'accent' : 'primary'}
-          />
-        </View>
-        <Caption>Unit access: {units.map((unit) => unit.code).join(', ') || 'Not assigned yet'}</Caption>
-      </SurfaceCard>
-
-      <SurfaceCard>
-        <Text style={styles.cardTitle}>Residence profile and verification</Text>
-        <Caption>
-          Keep only the minimum society-verification details here. This section carries your resident flag and tenant document status into the workspace.
-        </Caption>
-        <View style={styles.inlineSection}>
+      <SurfaceCard style={isCompact ? styles.profileOverviewCardCompact : null}>
+        <View style={styles.profileOverviewHeader}>
+          <View style={styles.profileOverviewCopy}>
+            <Text style={styles.cardTitle}>Your home in this society</Text>
+            <Caption>
+              Keep this page limited to the details that prove where you stay, how the society can reach you, and which vehicles belong to your household.
+            </Caption>
+          </View>
           <View style={styles.pillRow}>
+            <Pill label={residenceStatusLabel} tone={residentType === 'tenant' ? 'accent' : 'primary'} />
             <Pill label={`Verified mobile ${currentUser?.phone ?? ''}`.trim()} tone="primary" />
             {residentType === 'tenant' ? (
               <Pill
-                label={rentAgreementFileName ? 'Rent agreement uploaded' : 'Rent agreement pending'}
+                label={rentAgreementFileName ? 'Agreement on file' : 'Agreement pending'}
                 tone={rentAgreementFileName ? 'success' : 'warning'}
               />
             ) : null}
           </View>
-          <View style={styles.formGrid}>
-            <View style={styles.formField}>
-              <InputField
-                label="Resident full name"
-                value={profileFullName}
-                onChangeText={setProfileFullName}
-                placeholder="Enter full name"
-                autoCapitalize="words"
-              />
+        </View>
+        <View style={styles.profileSummaryGrid}>
+          <View style={styles.profileSummaryCard}>
+            <Text style={styles.profileSummaryLabel}>Primary unit</Text>
+            <Text style={styles.profileSummaryValue}>{units[0]?.code ?? 'Awaiting mapping'}</Text>
+            <Caption>{units.length > 1 ? `${units.length} linked units` : 'Single linked unit'}</Caption>
+          </View>
+          <View style={styles.profileSummaryCard}>
+            <Text style={styles.profileSummaryLabel}>Emergency contacts</Text>
+            <Text style={styles.profileSummaryValue}>{String(emergencyContactCount)}</Text>
+            <Caption>Primary and backup household contacts</Caption>
+          </View>
+          <View style={styles.profileSummaryCard}>
+            <Text style={styles.profileSummaryLabel}>Vehicles</Text>
+            <Text style={styles.profileSummaryValue}>{String(userVehicles.length)}</Text>
+            <Caption>Registered for gate visibility</Caption>
+          </View>
+          <View style={styles.profileSummaryCard}>
+            <Text style={styles.profileSummaryLabel}>Move-in date</Text>
+            <Text style={styles.profileSummaryValue}>{profileMoveInDate || 'Pending'}</Text>
+            <Caption>Occupancy start kept for society records</Caption>
+          </View>
+        </View>
+      </SurfaceCard>
+
+      <SurfaceCard>
+        <NavigationStrip items={residentProfileSections} activeKey={activeSection} onChange={(key) => setActiveSection(key as ResidentProfileSection)} />
+      </SurfaceCard>
+
+      {activeSection === 'household' ? (
+        <SurfaceCard>
+          <Text style={styles.cardTitle}>Residence profile and verification</Text>
+          <Caption>
+            This section is limited to identity, unit occupancy, and the minimum residence verification details used by your society.
+          </Caption>
+          <View style={styles.inlineSection}>
+            <View style={styles.profileInfoGrid}>
+              <View style={styles.profileInfoCard}>
+                <Text style={styles.profileInfoLabel}>Linked unit access</Text>
+                <Text style={styles.profileInfoValue}>{unitCodesLabel}</Text>
+                <Caption>{units.length > 1 ? 'All units tied to this membership' : 'Primary residence unit'}</Caption>
+              </View>
+              <View style={styles.profileInfoCard}>
+                <Text style={styles.profileInfoLabel}>Resident status</Text>
+                <Text style={styles.profileInfoValue}>{residenceStatusLabel}</Text>
+                <Caption>
+                  {membership?.roles.map((role) => humanizeRole(role)).join(', ') || 'Resident access pending'}
+                </Caption>
+              </View>
+              <View style={styles.profileInfoCard}>
+                <Text style={styles.profileInfoLabel}>Verified mobile</Text>
+                <Text style={styles.profileInfoValue}>{currentUser?.phone ?? 'Not available'}</Text>
+                <Caption>Primary contact already verified at sign-in</Caption>
+              </View>
+              <View style={styles.profileInfoCard}>
+                <Text style={styles.profileInfoLabel}>Tenant verification</Text>
+                <Text style={styles.profileInfoValue}>
+                  {residentType === 'tenant'
+                    ? rentAgreementFileName
+                      ? 'Agreement saved'
+                      : 'Agreement needed'
+                    : 'Not required'}
+                </Text>
+                <Caption>
+                  {residentType === 'tenant'
+                    ? 'Keep the current rent agreement on file for occupancy proof.'
+                    : 'Only tenant households need a document on this page.'}
+                </Caption>
+              </View>
             </View>
-            <View style={styles.formField}>
-              <InputField
-                label="Move-in date"
-                value={profileMoveInDate}
-                onChangeText={setProfileMoveInDate}
-                placeholder="YYYY-MM-DD"
-                autoCapitalize="none"
-                nativeType="date"
-              />
+            <View style={styles.formGrid}>
+              <View style={styles.formField}>
+                <InputField
+                  label="Resident full name"
+                  value={profileFullName}
+                  onChangeText={setProfileFullName}
+                  placeholder="Enter full name"
+                  autoCapitalize="words"
+                />
+              </View>
+              <View style={styles.formField}>
+                <InputField
+                  label="Move-in date"
+                  value={profileMoveInDate}
+                  onChangeText={setProfileMoveInDate}
+                  placeholder="YYYY-MM-DD"
+                  autoCapitalize="none"
+                  nativeType="date"
+                />
+              </View>
+              <View style={styles.formField}>
+                <InputField
+                  label="Email for notices (optional)"
+                  value={profileEmail}
+                  onChangeText={setProfileEmail}
+                  placeholder="name@example.com"
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  nativeType="email"
+                />
+              </View>
+              <View style={styles.formField}>
+                <InputField
+                  label="Alternate mobile (optional)"
+                  value={profileAlternatePhone}
+                  onChangeText={setProfileAlternatePhone}
+                  placeholder="+91 98765 43210"
+                  keyboardType="phone-pad"
+                />
+              </View>
             </View>
-            <View style={styles.formField}>
-              <InputField
-                label="Email for notices (optional)"
-                value={profileEmail}
-                onChangeText={setProfileEmail}
-                placeholder="name@example.com"
-                keyboardType="email-address"
-                autoCapitalize="none"
-                nativeType="email"
-              />
+            {residentType === 'tenant' ? (
+              <View style={styles.inlineSection}>
+                <Text style={styles.compactTitle}>Tenant rent agreement</Text>
+                <Caption>Keep the latest agreement here so the society can verify current occupancy.</Caption>
+                <View style={styles.heroActions}>
+                  <ActionButton
+                    label={rentAgreementFileName ? 'Replace agreement' : 'Upload agreement'}
+                    onPress={handleUploadRentAgreement}
+                    variant="secondary"
+                  />
+                  {rentAgreementDataUrl ? (
+                    <ActionButton
+                      label="Open uploaded file"
+                      onPress={() => {
+                        try {
+                          openWebDataUrlInNewTab(rentAgreementDataUrl);
+                        } catch (error) {
+                          setProfileActionMessage(
+                            error instanceof Error ? error.message : 'Could not open the uploaded rent agreement.',
+                          );
+                        }
+                      }}
+                      variant="secondary"
+                    />
+                  ) : null}
+                </View>
+                {rentAgreementFileName ? <Caption>Current file: {rentAgreementFileName}</Caption> : null}
+              </View>
+            ) : null}
+          </View>
+        </SurfaceCard>
+      ) : null}
+
+      {activeSection === 'contacts' ? (
+        <SurfaceCard>
+          <Text style={styles.cardTitle}>Emergency contacts</Text>
+          <Caption>
+            Only household emergency contacts and notice reachability stay here so the society can contact the right person when needed.
+          </Caption>
+          <View style={styles.profileInfoGrid}>
+            <View style={styles.profileInfoCard}>
+              <Text style={styles.profileInfoLabel}>Primary contact status</Text>
+              <Text style={styles.profileInfoValue}>
+                {profileEmergencyContactPhone.trim() ? 'Added' : 'Pending'}
+              </Text>
+              <Caption>Best person to reach for your flat in urgent situations</Caption>
             </View>
-            <View style={styles.formField}>
-              <InputField
-                label="Alternate mobile (optional)"
-                value={profileAlternatePhone}
-                onChangeText={setProfileAlternatePhone}
-                placeholder="+91 98765 43210"
-                keyboardType="phone-pad"
-              />
+            <View style={styles.profileInfoCard}>
+              <Text style={styles.profileInfoLabel}>Backup contact status</Text>
+              <Text style={styles.profileInfoValue}>
+                {profileSecondaryEmergencyContactPhone.trim() ? 'Added' : 'Optional'}
+              </Text>
+              <Caption>Useful when the primary family contact is unavailable</Caption>
             </View>
           </View>
-          <Text style={styles.compactTitle}>Emergency contacts</Text>
           <View style={styles.formGrid}>
             <View style={styles.formField}>
               <InputField
@@ -3120,259 +4176,152 @@ function ResidentProfile({
               />
             </View>
           </View>
-          <View style={styles.inlineSection}>
-            <Text style={styles.compactTitle}>Vehicle details</Text>
-            <Caption>
-              Keep your registered vehicles current for society security, gate visibility, and the resident directory.
-            </Caption>
-            <View style={styles.heroActions}>
-              <ActionButton label="Add vehicle" onPress={addProfileVehicle} variant="secondary" />
-            </View>
-            {profileVehicles.length > 0 ? profileVehicles.map((vehicle, index) => (
-              <View key={vehicle.id} style={styles.profileVehicleCard}>
-                <View style={styles.rowBetween}>
-                  <Text style={styles.inlineTitle}>Vehicle {index + 1}</Text>
-                  <ActionButton
-                    label="Remove"
-                    variant="danger"
-                    onPress={() => removeProfileVehicle(vehicle.id)}
-                  />
-                </View>
-                <View style={styles.choiceRow}>
-                  {([
-                    { key: 'car' as const, label: 'Car' },
-                    { key: 'bike' as const, label: 'Bike' },
-                    { key: 'scooter' as const, label: 'Scooter' },
-                  ]).map((option) => (
-                    <ChoiceChip
-                      key={`${vehicle.id}-${option.key}`}
-                      label={option.label}
-                      selected={vehicle.vehicleType === option.key}
-                      onPress={() => updateProfileVehicle(vehicle.id, { vehicleType: option.key })}
-                    />
-                  ))}
-                </View>
-                <View style={styles.choiceRow}>
-                  {units.map((unit) => (
-                    <ChoiceChip
-                      key={`${vehicle.id}-${unit.id}`}
-                      label={unit.code}
-                      selected={vehicle.unitId === unit.id}
-                      onPress={() => updateProfileVehicle(vehicle.id, { unitId: unit.id })}
-                    />
-                  ))}
-                </View>
-                <View style={styles.formGrid}>
-                  <View style={styles.formField}>
-                    <InputField
-                      label="Vehicle number"
-                      value={vehicle.registrationNumber}
-                      onChangeText={(value) =>
-                        updateProfileVehicle(vehicle.id, {
-                          registrationNumber: value.toUpperCase(),
-                          statusMessage: '',
-                        })}
-                      placeholder="GJ01AB1234"
-                      autoCapitalize="characters"
-                    />
-                  </View>
-                  <View style={styles.formField}>
-                    <InputField
-                      label="Color (optional)"
-                      value={vehicle.color}
-                      onChangeText={(value) => updateProfileVehicle(vehicle.id, { color: value })}
-                      placeholder="Pearl white"
-                    />
-                  </View>
-                  <View style={styles.formField}>
-                    <InputField
-                      label="Parking slot (optional)"
-                      value={vehicle.parkingSlot}
-                      onChangeText={(value) => updateProfileVehicle(vehicle.id, { parkingSlot: value })}
-                      placeholder="Basement P1-12"
-                    />
-                  </View>
-                </View>
-                <View style={styles.heroActions}>
-                  <ActionButton
-                    label="Take vehicle photo"
-                    onPress={() => {
-                      void attachProfileVehiclePhoto(vehicle.id, 'environment');
-                    }}
-                    variant="secondary"
-                  />
-                  <ActionButton
-                    label={vehicle.photoDataUrl ? 'Replace photo' : 'Upload photo'}
-                    onPress={() => {
-                      void attachProfileVehiclePhoto(vehicle.id);
-                    }}
-                    variant="secondary"
-                  />
-                </View>
-                {vehicle.statusMessage ? <Caption>{vehicle.statusMessage}</Caption> : null}
-                {vehicle.photoDataUrl ? (
-                  <View style={styles.proofCard}>
-                    <Image source={{ uri: vehicle.photoDataUrl }} style={styles.profileVehicleImage} />
-                  </View>
-                ) : null}
-              </View>
-            )) : (
-              <Caption>No vehicle saved in your profile yet.</Caption>
-            )}
-          </View>
-          <Text style={styles.compactTitle}>Privacy confirmation</Text>
+        </SurfaceCard>
+      ) : null}
+
+      {activeSection === 'vehicles' ? (
+        <SurfaceCard>
+          <Text style={styles.cardTitle}>Vehicle registrations</Text>
           <Caption>
-            These details should only be used for society access, occupancy verification, emergency contact, and tenancy review.
+            Resident apps usually keep vehicle details inside the home profile because they feed gate security, parking visibility, and resident directory lookups.
           </Caption>
-          <View style={styles.choiceRow}>
-            <ChoiceChip
-              label="Privacy notice accepted"
-              selected={profileConsent}
-              onPress={() => setProfileConsent((currentValue) => !currentValue)}
-            />
+          <View style={styles.heroActions}>
+            <ActionButton label="Add vehicle" onPress={addProfileVehicle} variant="secondary" />
           </View>
-          {residentType === 'tenant' ? (
-            <View style={styles.inlineSection}>
-              <Text style={styles.compactTitle}>Tenant rent agreement</Text>
-              <Caption>Upload or replace the current rent agreement from here whenever it changes.</Caption>
+          {profileVehicles.length > 0 ? profileVehicles.map((vehicle, index) => (
+            <View key={vehicle.id} style={styles.profileVehicleCard}>
+              <View style={styles.rowBetween}>
+                <View style={styles.profileVehicleHeaderCopy}>
+                  <Text style={styles.inlineTitle}>Vehicle {index + 1}</Text>
+                  <Caption>
+                    {humanizeVehicleType(vehicle.vehicleType)} for {units.find((unit) => unit.id === vehicle.unitId)?.code ?? 'select a unit'}
+                  </Caption>
+                </View>
+                <ActionButton
+                  label="Remove"
+                  variant="danger"
+                  onPress={() => removeProfileVehicle(vehicle.id)}
+                />
+              </View>
+              <View style={styles.choiceRow}>
+                {([
+                  { key: 'car' as const, label: 'Car' },
+                  { key: 'bike' as const, label: 'Bike' },
+                  { key: 'scooter' as const, label: 'Scooter' },
+                ]).map((option) => (
+                  <ChoiceChip
+                    key={`${vehicle.id}-${option.key}`}
+                    label={option.label}
+                    selected={vehicle.vehicleType === option.key}
+                    onPress={() => updateProfileVehicle(vehicle.id, { vehicleType: option.key })}
+                  />
+                ))}
+              </View>
+              <View style={styles.choiceRow}>
+                {units.map((unit) => (
+                  <ChoiceChip
+                    key={`${vehicle.id}-${unit.id}`}
+                    label={unit.code}
+                    selected={vehicle.unitId === unit.id}
+                    onPress={() => updateProfileVehicle(vehicle.id, { unitId: unit.id })}
+                  />
+                ))}
+              </View>
+              <View style={styles.formGrid}>
+                <View style={styles.formField}>
+                  <InputField
+                    label="Vehicle number"
+                    value={vehicle.registrationNumber}
+                    onChangeText={(value) =>
+                      updateProfileVehicle(vehicle.id, {
+                        registrationNumber: value.toUpperCase(),
+                        statusMessage: '',
+                      })}
+                    placeholder="GJ01AB1234"
+                    autoCapitalize="characters"
+                  />
+                </View>
+                <View style={styles.formField}>
+                  <InputField
+                    label="Color (optional)"
+                    value={vehicle.color}
+                    onChangeText={(value) => updateProfileVehicle(vehicle.id, { color: value })}
+                    placeholder="Pearl white"
+                  />
+                </View>
+                <View style={styles.formField}>
+                  <InputField
+                    label="Parking slot (optional)"
+                    value={vehicle.parkingSlot}
+                    onChangeText={(value) => updateProfileVehicle(vehicle.id, { parkingSlot: value })}
+                    placeholder="Basement P1-12"
+                  />
+                </View>
+              </View>
               <View style={styles.heroActions}>
                 <ActionButton
-                  label={rentAgreementFileName ? 'Replace agreement' : 'Upload agreement'}
-                  onPress={handleUploadRentAgreement}
+                  label="Take vehicle photo"
+                  onPress={() => {
+                    void attachProfileVehiclePhoto(vehicle.id, 'environment');
+                  }}
                   variant="secondary"
                 />
-                {rentAgreementDataUrl ? (
-                  <ActionButton
-                    label="Open uploaded file"
-                    onPress={() => {
-                      try {
-                        openWebDataUrlInNewTab(rentAgreementDataUrl);
-                      } catch (error) {
-                        setProfileActionMessage(
-                          error instanceof Error ? error.message : 'Could not open the uploaded rent agreement.',
-                        );
-                      }
-                    }}
-                    variant="secondary"
-                  />
-                ) : null}
+                <ActionButton
+                  label={vehicle.photoDataUrl ? 'Replace photo' : 'Upload photo'}
+                  onPress={() => {
+                    void attachProfileVehiclePhoto(vehicle.id);
+                  }}
+                  variant="secondary"
+                />
               </View>
-              {rentAgreementFileName ? <Caption>Current file: {rentAgreementFileName}</Caption> : null}
+              {vehicle.statusMessage ? <Caption>{vehicle.statusMessage}</Caption> : null}
+              {vehicle.photoDataUrl ? (
+                <View style={styles.proofCard}>
+                  <Image source={{ uri: vehicle.photoDataUrl }} style={styles.profileVehicleImage} />
+                </View>
+              ) : null}
             </View>
-          ) : null}
-          {profileActionMessage ? <Caption>{profileActionMessage}</Caption> : null}
-          <ActionButton
-            label={state.isSyncing ? 'Saving...' : 'Save residence profile'}
-            onPress={handleSaveResidenceProfile}
-            disabled={
-              state.isSyncing ||
-              !profileFullName.trim() ||
-              !profileMoveInDate ||
-              hasIncompleteProfileVehicle ||
-              !profileConsent
-            }
-          />
-        </View>
-      </SurfaceCard>
+          )) : (
+            <Caption>No vehicle saved in your residence profile yet.</Caption>
+          )}
+        </SurfaceCard>
+      ) : null}
 
       <SurfaceCard>
-        <Text style={styles.cardTitle}>Domestic staff and vendors</Text>
+        <Text style={styles.cardTitle}>Save residence details</Text>
         <Caption>
-          Owners and tenants can register a domestic staff request here. The chairman reviews it before the record becomes verified for society security and occupancy tracking.
+          These details are used only for society access, occupancy verification, resident communication, emergency contact, and vehicle identification.
         </Caption>
-        {canSubmitStaffRequest ? (
-          <View style={styles.inlineSection}>
-            <Text style={styles.compactTitle}>Add domestic staff request</Text>
-            <View style={styles.choiceRow}>
-              {staffCategories.map((option) => (
-                <ChoiceChip
-                  key={option.key}
-                  label={option.label}
-                  selected={staffCategory === option.key}
-                  onPress={() => setStaffCategory(option.key)}
-                />
-              ))}
-            </View>
-            <View style={styles.formGrid}>
-              <View style={styles.formField}>
-                <InputField label="Staff name" value={staffName} onChangeText={setStaffName} placeholder="Sarita Ben" />
-              </View>
-              <View style={styles.formField}>
-                <InputField label="Phone" value={staffPhone} onChangeText={setStaffPhone} keyboardType="phone-pad" placeholder="+91 98980 55555" />
-              </View>
-              <View style={styles.formField}>
-                <InputField label="Service label" value={serviceLabel} onChangeText={setServiceLabel} placeholder="Cleaning and utensils" />
-              </View>
-              <View style={styles.formField}>
-                <InputField label="Visits per week" value={visitsPerWeek} onChangeText={setVisitsPerWeek} keyboardType="numeric" placeholder="6" />
-              </View>
-            </View>
-            <Text style={styles.compactTitle}>Select linked unit numbers</Text>
-            <Caption>Choose one or more units already linked to your membership.</Caption>
-            <View style={styles.choiceRow}>
-              {units.map((unit) => (
-                <ChoiceChip
-                  key={unit.id}
-                  label={unit.code}
-                  selected={selectedUnitCodes.includes(unit.code)}
-                  onPress={() => toggleUnitCode(unit.code)}
-                />
-              ))}
-            </View>
-            <ActionButton
-              label={state.isSyncing ? 'Submitting...' : 'Send for chairman approval'}
-              onPress={handleSubmitStaffRequest}
-              disabled={state.isSyncing || units.length === 0 || selectedUnitCodes.length === 0}
-            />
-          </View>
-        ) : (
-          <View style={styles.inlineSection}>
-            <Caption>
-              Only an owner or tenant can initiate a domestic staff request. Family and occupant profiles can still see the records already linked to their units.
-            </Caption>
-          </View>
-        )}
-        {staff.length > 0 ? (
-          staff.map(({ staff, assignments, employerUnits, reviewedBy }) => (
-            <View key={staff.id} style={styles.inlineSection}>
-              <View style={styles.compactRow}>
-                <View style={styles.compactText}>
-                  <Text style={styles.compactTitle}>{staff.name}</Text>
-                  <Caption>{humanizeStaffCategory(staff.category)} - {staff.phone}</Caption>
-                  <Caption>Works for {employerUnits.map((unit) => unit.code).join(', ') || 'your household'}</Caption>
-                  {getAssignmentSummaries(assignments).map((summary) => (
-                    <Caption key={`${staff.id}-${summary}`}>{summary}</Caption>
-                  ))}
-                  <Caption>
-                    Submitted {staff.requestedAt ? formatLongDate(staff.requestedAt) : 'recently'}
-                  </Caption>
-                  <Caption>
-                    {reviewedBy && staff.reviewedAt
-                      ? `Reviewed by ${reviewedBy.name} on ${formatLongDate(staff.reviewedAt)}`
-                      : 'Awaiting chairman approval'}
-                  </Caption>
-                </View>
-                <Pill
-                  label={humanizeVerificationState(staff.verificationState)}
-                  tone={getVerificationTone(staff.verificationState)}
-                />
-              </View>
-            </View>
-          ))
-        ) : (
-          <View style={styles.inlineSection}>
-            <Caption>No domestic staff or vendor records are linked to your units yet.</Caption>
-          </View>
-        )}
+        <View style={styles.choiceRow}>
+          <ChoiceChip
+            label="Residence data consent accepted"
+            selected={profileConsent}
+            onPress={() => setProfileConsent((currentValue) => !currentValue)}
+          />
+        </View>
+        {profileActionMessage ? <Caption>{profileActionMessage}</Caption> : null}
+        <ActionButton
+          label={state.isSyncing ? 'Saving...' : 'Save residence profile'}
+          onPress={handleSaveResidenceProfile}
+          disabled={saveResidenceProfileDisabled}
+        />
       </SurfaceCard>
     </>
   );
 }
 
 const styles = StyleSheet.create({
+  shellRoot: {
+    flex: 1,
+  },
   compactWorkspaceCard: {
-    gap: spacing.sm,
+    gap: spacing.xs,
     backgroundColor: '#FFF8F0',
+  },
+  compactWorkspaceCardPhone: {
+    gap: 6,
+    paddingTop: spacing.xs,
+    paddingBottom: spacing.xs,
   },
   compactWorkspaceTopRow: {
     flexDirection: 'row',
@@ -3381,19 +4330,26 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     flexWrap: 'wrap',
   },
+  compactWorkspaceTopRowPhone: {
+    gap: 6,
+  },
   compactWorkspaceTitleWrap: {
     flex: 1,
     gap: spacing.xs,
   },
   compactWorkspaceTitle: {
-    fontSize: 22,
-    lineHeight: 26,
+    fontSize: 20,
+    lineHeight: 24,
     fontWeight: '900',
     color: palette.ink,
   },
+  compactWorkspaceTitlePhone: {
+    fontSize: 18,
+    lineHeight: 21,
+  },
   compactWorkspaceStatsRow: {
     flexDirection: 'row',
-    gap: spacing.xs,
+    gap: 4,
     width: '100%',
   },
   compactWorkspaceStat: {
@@ -3408,14 +4364,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 2,
   },
+  compactWorkspaceStatPhone: {
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 6,
+    borderRadius: 14,
+  },
   compactWorkspaceStatValue: {
     fontSize: 16,
     fontWeight: '800',
     color: palette.accent,
   },
+  compactWorkspaceStatValuePhone: {
+    fontSize: 14,
+  },
   compactWorkspaceActionRow: {
-    flexDirection: 'column',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: spacing.xs,
+  },
+  compactWorkspaceActionRowPhone: {
+    gap: 6,
   },
   residentNavigationCard: {
     gap: spacing.md,
@@ -3496,6 +4464,12 @@ const styles = StyleSheet.create({
     borderRadius: 22,
     gap: 4,
   },
+  bottomNavigationCardPhone: {
+    paddingHorizontal: 4,
+    paddingVertical: 4,
+    borderRadius: 18,
+    gap: 2,
+  },
   bottomNavigationItem: {
     flex: 1,
     minHeight: 58,
@@ -3510,6 +4484,12 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     gap: 3,
     paddingHorizontal: 2,
+  },
+  bottomNavigationItemPhone: {
+    minHeight: 42,
+    borderRadius: 12,
+    gap: 2,
+    paddingHorizontal: 1,
   },
   bottomNavigationItemActive: {
     backgroundColor: '#FFF3E8',
@@ -3534,6 +4514,11 @@ const styles = StyleSheet.create({
     height: 24,
     borderRadius: 8,
   },
+  bottomNavigationBadgePhone: {
+    width: 22,
+    height: 22,
+    borderRadius: 7,
+  },
   bottomNavigationBadgeActive: {
     backgroundColor: palette.accent,
   },
@@ -3553,8 +4538,111 @@ const styles = StyleSheet.create({
   bottomNavigationLabelCompact: {
     fontSize: 10,
   },
+  bottomNavigationLabelPhone: {
+    fontSize: 9,
+  },
   bottomNavigationLabelActive: {
     color: palette.accent,
+  },
+  leftDrawerHandle: {
+    position: 'absolute',
+    left: 0,
+    top: 260,
+    paddingHorizontal: 6,
+    paddingVertical: 10,
+    borderTopRightRadius: 12,
+    borderBottomRightRadius: 12,
+    backgroundColor: palette.primary,
+    ...shadow.card,
+  },
+  leftDrawerHandlePressed: {
+    opacity: 0.92,
+  },
+  leftDrawerHandleText: {
+    color: palette.white,
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  drawerBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(8, 17, 28, 0.24)',
+  },
+  sideDrawer: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    left: -260,
+    width: 248,
+    paddingTop: 74,
+    paddingHorizontal: spacing.sm,
+    paddingBottom: spacing.sm,
+    backgroundColor: '#FFF8F0',
+    borderRightWidth: 1,
+    borderRightColor: '#E8DCCB',
+    gap: spacing.md,
+    ...shadow.card,
+  },
+  sideDrawerOpen: {
+    left: 0,
+  },
+  sideDrawerHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+  },
+  sideDrawerTitleWrap: {
+    flex: 1,
+    gap: spacing.xs,
+  },
+  sideDrawerTitle: {
+    color: palette.ink,
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  sideDrawerClose: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: 999,
+    backgroundColor: '#F8F1E7',
+    borderWidth: 1,
+    borderColor: '#E8DAC4',
+  },
+  sideDrawerCloseText: {
+    color: palette.ink,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  sideDrawerCaption: {
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  sideDrawerScroller: {
+    flex: 1,
+  },
+  sideDrawerList: {
+    gap: spacing.xs,
+    paddingBottom: 72,
+  },
+  sideDrawerItem: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E8DDCF',
+    backgroundColor: '#FFFCF8',
+  },
+  sideDrawerItemActive: {
+    backgroundColor: palette.primary,
+    borderColor: palette.primary,
+  },
+  sideDrawerItemText: {
+    color: palette.ink,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  sideDrawerItemTextActive: {
+    color: palette.white,
   },
   heroActions: {
     flexDirection: 'row',
@@ -3564,12 +4652,137 @@ const styles = StyleSheet.create({
   metricGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  metricGridPhone: {
+    justifyContent: 'space-between',
+    gap: 6,
+  },
+  profileOverviewCardCompact: {
     gap: spacing.sm,
+  },
+  profileOverviewHeader: {
+    gap: spacing.sm,
+  },
+  profileOverviewCopy: {
+    gap: spacing.xs,
+  },
+  profileSummaryGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  profileSummaryCard: {
+    flexGrow: 1,
+    flexBasis: 180,
+    minWidth: 0,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#E6D9C9',
+    backgroundColor: '#FFF8F0',
+    gap: 4,
+  },
+  profileSummaryLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    color: palette.mutedInk,
+  },
+  profileSummaryValue: {
+    fontSize: 18,
+    lineHeight: 22,
+    fontWeight: '900',
+    color: palette.ink,
+  },
+  profileInfoGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  profileInfoCard: {
+    flexGrow: 1,
+    flexBasis: 220,
+    minWidth: 0,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#E7D9C8',
+    backgroundColor: '#FFFDF9',
+    gap: 4,
+  },
+  profileInfoLabel: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: palette.mutedInk,
+  },
+  profileInfoValue: {
+    fontSize: 16,
+    lineHeight: 20,
+    fontWeight: '900',
+    color: palette.ink,
+  },
+  directoryGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  directoryCardSlot: {
+    width: '100%',
+  },
+  directoryCardSlotDesktop: {
+    flexBasis: '32%',
+    maxWidth: '32%',
+  },
+  directoryCard: {
+    gap: spacing.xs,
+    minWidth: 0,
+    padding: spacing.sm,
+    borderRadius: 18,
+  },
+  directoryCardInteractive: {
+    backgroundColor: '#FFFCF9',
+  },
+  directoryCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+  },
+  directoryCardIdentity: {
+    flex: 1,
+    gap: 2,
+  },
+  directoryMemberName: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: palette.ink,
+  },
+  directoryActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  memberQuickAction: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#E8DAC4',
+    backgroundColor: '#F8F1E7',
+  },
+  memberQuickActionText: {
+    color: palette.ink,
+    fontSize: 12,
+    fontWeight: '800',
   },
   pillRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: spacing.sm,
+    gap: spacing.xs,
   },
   rowBetween: {
     flexDirection: 'row',
@@ -3582,6 +4795,39 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: palette.ink,
     flex: 1,
+  },
+  amenityListRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: spacing.xs,
+    gap: spacing.sm,
+  },
+  amenityListRowDivider: {
+    borderBottomWidth: 1,
+    borderBottomColor: palette.border,
+  },
+  amenityListRowLeft: {
+    flex: 1,
+    gap: 2,
+  },
+  amenityDiscoveryRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  amenityDiscoveryCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  amenityListRowTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: palette.ink,
+  },
+  amenityListRowMeta: {
+    fontSize: 11,
+    color: palette.mutedInk,
   },
   interactiveCard: {
     backgroundColor: '#FFFBF7',
@@ -3624,6 +4870,14 @@ const styles = StyleSheet.create({
     paddingTop: spacing.md,
     borderTopWidth: 1,
     borderTopColor: '#F0E5D8',
+  },
+  inlineSectionPhone: {
+    paddingTop: spacing.sm,
+    gap: spacing.xs,
+  },
+  communityHintPhone: {
+    fontSize: 12,
+    lineHeight: 18,
   },
   liveApprovalCard: {
     overflow: 'hidden',
@@ -3835,16 +5089,156 @@ const styles = StyleSheet.create({
   choiceRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  amenityCategoryScroller: {
+    gap: spacing.xs,
+    paddingBottom: 2,
+  },
+  amenityCardScroller: {
     gap: spacing.sm,
+    paddingBottom: spacing.xs,
+  },
+  amenityCardGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  amenityBookingCard: {
+    flexBasis: 180,
+    maxWidth: 200,
+    minWidth: 160,
+    gap: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#E9DECF',
+    backgroundColor: '#FFFDFC',
+    ...shadow.card,
+  },
+  amenityBookingCardCompact: {
+    width: 134,
+    minWidth: 134,
+    maxWidth: 134,
+    gap: 6,
+    padding: spacing.xs,
+    borderRadius: 16,
+  },
+  amenityBookingCardSelected: {
+    borderColor: '#C8D9EE',
+    backgroundColor: '#F7FBFF',
+  },
+  amenityBookingCardCopy: {
+    gap: 2,
+  },
+  amenityBookingCardTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: palette.ink,
+  },
+  amenityBookingCardTitleCompact: {
+    fontSize: 13,
+    lineHeight: 17,
+  },
+  amenityBookingCardMeta: {
+    fontSize: 11,
+    color: palette.mutedInk,
+  },
+  amenityThumbnail: {
+    height: 96,
+    borderRadius: 18,
+    borderWidth: 1,
+    overflow: 'hidden',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.md,
+  },
+  amenityThumbnailCompact: {
+    height: 64,
+    borderRadius: 14,
+    paddingHorizontal: spacing.xs,
+    justifyContent: 'space-between',
+    paddingVertical: spacing.xs,
+  },
+  amenityThumbnailImage: {
+    ...StyleSheet.absoluteFillObject,
+    width: '100%',
+    height: '100%',
+  },
+  amenityThumbnailOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(18, 28, 39, 0.24)',
+  },
+  amenityThumbnailAccentLarge: {
+    position: 'absolute',
+    top: -12,
+    right: -12,
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    opacity: 0.8,
+  },
+  amenityThumbnailAccentSmall: {
+    position: 'absolute',
+    bottom: -8,
+    left: -8,
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    opacity: 0.75,
+  },
+  amenityThumbnailGlyphWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: 'rgba(255,255,255,0.72)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  amenityThumbnailLabel: {
+    color: palette.white,
+    fontSize: 13,
+    fontWeight: '800',
+    textShadowColor: 'rgba(0, 0, 0, 0.35)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  amenityThumbnailLabelCompact: {
+    fontSize: 11,
+  },
+  amenitySelectionSummary: {
+    gap: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#E6D9C9',
+    backgroundColor: '#FFF9F1',
+  },
+  amenitySelectionSummaryPhone: {
+    gap: spacing.xs,
+  },
+  amenitySelectionSummaryHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  amenitySelectionSummaryCopy: {
+    flex: 1,
+    gap: 2,
   },
   formGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.md,
   },
+  formGridPhone: {
+    gap: spacing.xs,
+  },
   formField: {
     flexGrow: 1,
     flexBasis: 220,
+  },
+  formFieldPhone: {
+    flexBasis: '48%',
   },
   qrSection: {
     gap: spacing.sm,
@@ -3930,6 +5324,10 @@ const styles = StyleSheet.create({
     borderColor: '#E8D9C9',
     backgroundColor: '#FFF7EE',
   },
+  profileVehicleHeaderCopy: {
+    flex: 1,
+    gap: 2,
+  },
   profileVehicleImage: {
     width: 200,
     height: 150,
@@ -3952,7 +5350,156 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     backgroundColor: '#F4F1EB',
   },
+  leadershipDeskCard: {
+    gap: spacing.md,
+  },
+  leadershipOverviewRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  leadershipOverviewCard: {
+    width: '100%',
+    gap: 4,
+    padding: spacing.xs,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#E7D0B5',
+    backgroundColor: '#FFF4E6',
+  },
+  leadershipOverviewCardDesktop: {
+    flexBasis: '31.5%',
+    maxWidth: '31.5%',
+  },
+  leadershipOverviewValue: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: palette.ink,
+  },
+  leadershipFeatureGrid: {
+    gap: spacing.sm,
+  },
+  leadershipFeatureCard: {
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#E6D6C3',
+    backgroundColor: '#FFF9F2',
+  },
+  leadershipFeatureHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  leadershipFeatureAvatar: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#24364A',
+  },
+  leadershipFeatureAvatarText: {
+    color: palette.white,
+    fontSize: 22,
+    fontWeight: '800',
+  },
+  leadershipFeatureImage: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#F4F1EB',
+  },
+  leadershipDetailGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  leadershipDetailCard: {
+    flexGrow: 1,
+    minWidth: 120,
+    gap: 2,
+    padding: spacing.sm,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#EEDCC8',
+    backgroundColor: palette.white,
+  },
+  leadershipDetailValue: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: palette.ink,
+  },
+  meetingListRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing.sm,
+    gap: spacing.sm,
+  },
+  meetingListRowDivider: {
+    borderBottomWidth: 1,
+    borderBottomColor: palette.border,
+  },
+  meetingListRowLeft: { flex: 1, gap: spacing.xs },
+  meetingListTopRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
+  meetingListTitle: { fontSize: 15, fontWeight: '700', color: palette.ink },
+  meetingListChevron: { fontSize: 20, color: palette.mutedInk },
+  meetingAgendaRow: {
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0E8DF',
+    gap: spacing.xs,
+  },
+  meetingAgendaTitle: { fontSize: 14, fontWeight: '700', color: palette.ink },
+  meetingVoteBadgeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginTop: 2 },
+  meetingVoteButtonRow: { gap: spacing.xs, marginTop: spacing.xs },
+  meetingSignRow: {
+    paddingVertical: spacing.xs,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0E8DF',
+    gap: 2,
+  },
+  meetingSignName: { fontSize: 14, fontWeight: '700', color: palette.ink, fontStyle: 'italic' },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
 });
+
+async function openEmailComposer(email: string, subject?: string) {
+  const normalized = String(email ?? '').trim();
+
+  if (!normalized) {
+    return false;
+  }
+
+  const url = `mailto:${encodeURIComponent(normalized)}${subject ? `?subject=${encodeURIComponent(subject)}` : ''}`;
+
+  try {
+    await Linking.openURL(url);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function humanizeSocietyDocumentCategory(category: string) {
+  switch (category) {
+    case 'liftLicense':
+      return 'Lift license';
+    case 'commonLightBill':
+      return 'Common light bill';
+    case 'waterBill':
+      return 'Water bill';
+    case 'fireSafety':
+      return 'Fire safety';
+    case 'insurance':
+      return 'Insurance';
+    case 'auditReport':
+      return 'Audit report';
+    default:
+      return 'Other document';
+  }
+}
 
 function humanizeStaffCategory(category: 'domesticHelp' | 'cook' | 'driver' | 'vendor') {
   switch (category) {

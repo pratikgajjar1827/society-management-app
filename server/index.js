@@ -7,7 +7,14 @@ const {
   initializeDatabase,
   resetDatabase,
 } = require('./db/database');
-const { countOfficeUnits, findDuplicateOfficeCodes, normalizeOfficeFloorPlan } = require('./seed/factories');
+const {
+  countApartmentUnits,
+  countOfficeUnits,
+  findDuplicateOfficeCodes,
+  normalizeApartmentBlockPlan,
+  normalizeApartmentStartingFloorNumber,
+  normalizeOfficeFloorPlan,
+} = require('./seed/factories');
 const {
   assignChairmanResidence,
   buildAuthPayload,
@@ -15,6 +22,7 @@ const {
   createAnnouncement,
   createAmenityBooking,
   createComplaintTicket,
+  createSocietyDocument,
   createEntryLogRecord,
   createExpenseRecord,
   createSecurityGuard,
@@ -46,6 +54,8 @@ const {
   selectSocietyForResident,
   setPreferredRole,
   submitResidentPayment,
+  updateLeadershipRole,
+  updateLeadershipProfile,
   updateMaintenancePlanSettings,
   updateMaintenanceBillingConfig,
   updateResidenceProfile,
@@ -182,8 +192,17 @@ function validateSocietyDraft(draft) {
   }
 
   const enabledCommercialSpaceTypes = getEnabledCommercialSpaceTypes(draft, enabledStructures);
+  const apartmentBlockPlan = enabledStructures.includes('apartment')
+    ? normalizeApartmentBlockPlan(Array.isArray(draft.apartmentBlockPlan) ? draft.apartmentBlockPlan : [])
+    : [];
+  const rawApartmentStartingFloorNumber = parseWholeNumber(draft.apartmentStartingFloorNumber);
+  const apartmentStartingFloorNumber = enabledStructures.includes('apartment')
+    ? normalizeApartmentStartingFloorNumber(draft.apartmentStartingFloorNumber)
+    : null;
   const apartmentUnitCount = enabledStructures.includes('apartment')
-    ? getDraftUnitCount(draft.apartmentUnitCount, enabledStructures.length === 1 ? draft.totalUnits : null)
+    ? (apartmentBlockPlan.length > 0
+      ? countApartmentUnits(apartmentBlockPlan)
+      : getDraftUnitCount(draft.apartmentUnitCount, enabledStructures.length === 1 ? draft.totalUnits : null))
     : 0;
   const bungalowUnitCount = enabledStructures.includes('bungalow')
     ? getDraftUnitCount(draft.bungalowUnitCount, enabledStructures.length === 1 ? draft.totalUnits : null)
@@ -198,6 +217,27 @@ function validateSocietyDraft(draft) {
 
   if (enabledStructures.includes('apartment') && apartmentUnitCount < 1) {
     throw new HttpError(400, 'Add at least one apartment or tower home before creating the society.');
+  }
+
+  if (enabledStructures.includes('apartment')) {
+    if (apartmentBlockPlan.length === 0) {
+      throw new HttpError(400, 'Add at least one apartment block before creating the society.');
+    }
+
+    const invalidApartmentBlocks = apartmentBlockPlan
+      .filter((block) => block.towerCount < 1 || block.floorsPerTower < 1 || block.homesPerFloor < 1)
+      .map((block) => block.blockName);
+
+    if (invalidApartmentBlocks.length > 0) {
+      throw new HttpError(
+        400,
+        `Enter valid tower count, floors per tower, and homes per floor for: ${invalidApartmentBlocks.join(', ')}.`,
+      );
+    }
+
+    if (!Number.isFinite(rawApartmentStartingFloorNumber) || rawApartmentStartingFloorNumber < 1) {
+      throw new HttpError(400, 'Enter a valid first apartment floor number greater than 0.');
+    }
   }
 
   if (enabledStructures.includes('bungalow') && bungalowUnitCount < 1) {
@@ -391,6 +431,28 @@ async function requestHandler(request, response) {
       return;
     }
 
+    const leadershipRoleRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/societies\/([^/]+)\/leadership-role$/)
+      : null;
+
+    if (leadershipRoleRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = updateLeadershipRole(
+        userId,
+        decodeURIComponent(leadershipRoleRouteMatch[1]),
+        body.targetUserId,
+        body.role,
+        body.enabled,
+      );
+      sendJson(response, 200, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
     const joinRequestDecisionMatch = request.method === 'POST'
       ? url.pathname.match(/^\/api\/join-requests\/([^/]+)\/decision$/)
       : null;
@@ -424,6 +486,10 @@ async function requestHandler(request, response) {
       ? url.pathname.match(/^\/api\/societies\/([^/]+)\/residence-profile$/)
       : null;
 
+    const leadershipProfileRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/societies\/([^/]+)\/leadership-profile$/)
+      : null;
+
     if (societyProfileRouteMatch) {
       const userId = requireSession(getBearerToken(request));
       const body = await parseBody(request);
@@ -442,6 +508,22 @@ async function requestHandler(request, response) {
       const result = updateResidenceProfile(
         userId,
         decodeURIComponent(residenceProfileRouteMatch[1]),
+        body,
+      );
+      sendJson(response, 200, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    if (leadershipProfileRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = updateLeadershipProfile(
+        userId,
+        decodeURIComponent(leadershipProfileRouteMatch[1]),
         body,
       );
       sendJson(response, 200, {
@@ -600,6 +682,10 @@ async function requestHandler(request, response) {
       ? url.pathname.match(/^\/api\/societies\/([^/]+)\/announcements$/)
       : null;
 
+    const societyDocumentCreateRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/societies\/([^/]+)\/documents$/)
+      : null;
+
     if (billingReminderRouteMatch) {
       const userId = requireSession(getBearerToken(request));
       const body = await parseBody(request);
@@ -618,6 +704,22 @@ async function requestHandler(request, response) {
       const result = createAnnouncement(
         userId,
         decodeURIComponent(announcementCreateRouteMatch[1]),
+        body,
+      );
+      sendJson(response, 201, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    if (societyDocumentCreateRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = createSocietyDocument(
+        userId,
+        decodeURIComponent(societyDocumentCreateRouteMatch[1]),
         body,
       );
       sendJson(response, 201, {

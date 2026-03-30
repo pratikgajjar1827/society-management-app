@@ -1,4 +1,4 @@
-import { Platform } from 'react-native';
+import { Linking, Platform } from 'react-native';
 
 export interface PickedWebFile {
   dataUrl: string;
@@ -72,6 +72,26 @@ export function openWebDataUrlInNewTab(dataUrl: string) {
   }
 
   window.open(dataUrl, '_blank', 'noopener,noreferrer');
+}
+
+export async function openUploadedFileDataUrl(dataUrl: string) {
+  const normalized = String(dataUrl ?? '').trim();
+
+  if (!normalized) {
+    return false;
+  }
+
+  try {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      window.open(normalized, '_blank', 'noopener,noreferrer');
+      return true;
+    }
+
+    await Linking.openURL(normalized);
+    return true;
+  } catch (error) {
+    return false;
+  }
 }
 
 function extractVehicleRegistrationCandidate(text: string) {

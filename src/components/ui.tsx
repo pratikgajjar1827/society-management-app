@@ -1,4 +1,5 @@
-import type { CSSProperties, ReactNode } from 'react';
+import { useState, type CSSProperties, type ReactNode } from 'react';
+import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import {
   Platform,
   Pressable,
@@ -17,6 +18,62 @@ import {
 import { palette, radius, shadow, spacing, typeScale } from '../theme/tokens';
 
 type Tone = 'primary' | 'accent' | 'muted';
+type DateTimeFieldMode = 'date' | 'time' | 'datetime';
+
+function padDateTimeSegment(value: number) {
+  return String(value).padStart(2, '0');
+}
+
+function formatDateTimeFieldValue(value: Date, mode: DateTimeFieldMode) {
+  const year = value.getFullYear();
+  const month = padDateTimeSegment(value.getMonth() + 1);
+  const day = padDateTimeSegment(value.getDate());
+  const hours = padDateTimeSegment(value.getHours());
+  const minutes = padDateTimeSegment(value.getMinutes());
+
+  if (mode === 'date') {
+    return `${year}-${month}-${day}`;
+  }
+
+  if (mode === 'time') {
+    return `${hours}:${minutes}`;
+  }
+
+  return `${year}-${month}-${day}T${hours}:${minutes}`;
+}
+
+function parseDateTimeFieldValue(value: string, mode: DateTimeFieldMode) {
+  const fallback = new Date();
+
+  if (!value) {
+    return fallback;
+  }
+
+  if (mode === 'date') {
+    const match = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+
+    if (!match) {
+      return fallback;
+    }
+
+    return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]), 12, 0, 0, 0);
+  }
+
+  if (mode === 'time') {
+    const match = value.match(/^(\d{2}):(\d{2})$/);
+
+    if (!match) {
+      return fallback;
+    }
+
+    const next = new Date(fallback);
+    next.setHours(Number(match[1]), Number(match[2]), 0, 0);
+    return next;
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? fallback : parsed;
+}
 
 function getToneStyle(tone: Tone) {
   switch (tone) {
@@ -47,11 +104,13 @@ function getToneStyle(tone: Tone) {
 function useResponsiveMetrics() {
   const { width } = useWindowDimensions();
   const isCompact = width < 768;
+  const isPhone = width < 420;
   const isAndroidCompact = Platform.OS === 'android' && isCompact;
 
   return {
     width,
     isCompact,
+    isPhone,
     isAndroidCompact,
   };
 }
@@ -80,6 +139,7 @@ export function PageFrame({
       </View>
       <View style={styles.pageFrame}>
         <ScrollView
+          keyboardShouldPersistTaps="handled"
           contentContainerStyle={[
             styles.pageContent,
             isCompact ? styles.pageContentCompact : null,
@@ -131,6 +191,7 @@ export function HeroCard({
         style={[
           styles.heroTitle,
           isCompact ? styles.heroTitleCompact : null,
+          isAndroidCompact ? styles.heroTitleAndroidCompact : null,
           { color: toneStyle.textColor },
         ]}
       >
@@ -140,6 +201,7 @@ export function HeroCard({
         style={[
           styles.heroSubtitle,
           isCompact ? styles.heroSubtitleCompact : null,
+          isAndroidCompact ? styles.heroSubtitleAndroidCompact : null,
           { color: toneStyle.subtitleColor },
         ]}
       >
@@ -181,12 +243,12 @@ export function SectionHeader({
   title: string;
   description?: string;
 }) {
-  const { isCompact } = useResponsiveMetrics();
+  const { isCompact, isPhone } = useResponsiveMetrics();
 
   return (
     <View style={styles.sectionHeader}>
       <Text style={[styles.sectionTitle, isCompact ? styles.sectionTitleCompact : null]}>{title}</Text>
-      {description ? (
+      {description && !isPhone ? (
         <Text style={[styles.sectionDescription, isCompact ? styles.sectionDescriptionCompact : null]}>
           {description}
         </Text>
@@ -206,7 +268,7 @@ export function MetricCard({
   tone?: 'primary' | 'accent' | 'blue';
   onPress?: () => void;
 }) {
-  const { isCompact } = useResponsiveMetrics();
+  const { isCompact, isAndroidCompact, isPhone } = useResponsiveMetrics();
   const toneMap = {
     primary: { backgroundColor: palette.primarySoft, color: palette.primary, borderColor: '#C8D9EE' },
     accent: { backgroundColor: palette.accentSoft, color: palette.accent, borderColor: '#F0D0C6' },
@@ -218,14 +280,25 @@ export function MetricCard({
       style={[
         styles.metricCard,
         isCompact ? styles.metricCardCompact : null,
+        isPhone ? styles.metricCardPhone : null,
         {
           backgroundColor: toneMap[tone].backgroundColor,
           borderColor: toneMap[tone].borderColor,
         },
       ]}
-    >
-      <Text style={styles.metricLabel}>{label}</Text>
-      <Text style={[styles.metricValue, { color: toneMap[tone].color }]}>{value}</Text>
+      >
+      <Text style={[styles.metricLabel, isCompact ? styles.metricLabelCompact : null, isPhone ? styles.metricLabelPhone : null]} numberOfLines={2}>
+        {label}
+      </Text>
+      <Text style={[
+        styles.metricValue,
+        isCompact ? styles.metricValueCompact : null,
+        isPhone ? styles.metricValuePhone : null,
+        isAndroidCompact ? styles.metricValueAndroidCompact : null,
+        { color: toneMap[tone].color },
+      ]}>
+        {value}
+      </Text>
     </View>
   );
 
@@ -237,7 +310,7 @@ export function MetricCard({
     <Pressable
       accessibilityRole="button"
       onPress={onPress}
-      style={({ pressed }) => [styles.metricPressable, pressed ? styles.metricPressed : null]}
+      style={({ pressed }) => [styles.metricPressable, isPhone ? styles.metricPressablePhone : null, pressed ? styles.metricPressed : null]}
     >
       {content}
     </Pressable>
@@ -408,6 +481,124 @@ export function InputField({
   );
 }
 
+export function DateTimeField({
+  label,
+  value,
+  onChangeText,
+  placeholder,
+  mode,
+}: {
+  label: string;
+  value: string;
+  onChangeText: (value: string) => void;
+  placeholder?: string;
+  mode: DateTimeFieldMode;
+}) {
+  const { isCompact } = useResponsiveMetrics();
+  const [showPicker, setShowPicker] = useState(false);
+  const [androidPickerMode, setAndroidPickerMode] = useState<'date' | 'time'>(mode === 'time' ? 'time' : 'date');
+  const [draftDateValue, setDraftDateValue] = useState<Date | null>(null);
+  const resolvedValue = parseDateTimeFieldValue(value, mode);
+
+  function resetPickerState() {
+    setShowPicker(false);
+    setDraftDateValue(null);
+    setAndroidPickerMode(mode === 'time' ? 'time' : 'date');
+  }
+
+  function openPicker() {
+    if (Platform.OS !== 'android') {
+      return;
+    }
+
+    setDraftDateValue(resolvedValue);
+    setAndroidPickerMode(mode === 'time' ? 'time' : 'date');
+    setShowPicker(true);
+  }
+
+  function handlePickerChange(event: DateTimePickerEvent, selectedValue?: Date) {
+    if (event.type === 'dismissed' || !selectedValue) {
+      resetPickerState();
+      return;
+    }
+
+    if (mode === 'datetime' && androidPickerMode === 'date') {
+      const nextDraft = new Date(selectedValue);
+      const baseTime = draftDateValue ?? resolvedValue;
+      nextDraft.setHours(baseTime.getHours(), baseTime.getMinutes(), 0, 0);
+      setDraftDateValue(nextDraft);
+      setAndroidPickerMode('time');
+      return;
+    }
+
+    if (mode === 'datetime') {
+      const nextValue = new Date(draftDateValue ?? resolvedValue);
+      nextValue.setHours(selectedValue.getHours(), selectedValue.getMinutes(), 0, 0);
+      onChangeText(formatDateTimeFieldValue(nextValue, mode));
+      resetPickerState();
+      return;
+    }
+
+    onChangeText(formatDateTimeFieldValue(selectedValue, mode));
+    resetPickerState();
+  }
+
+  if (typeof document !== 'undefined') {
+    const webInputType = mode === 'date' ? 'date' : mode === 'time' ? 'time' : 'datetime-local';
+
+    return (
+      <View style={styles.fieldGroup}>
+        <Text style={styles.fieldLabel}>{label}</Text>
+        <input
+          aria-label={label}
+          onChange={(event) => onChangeText(event.currentTarget.value)}
+          onClick={(event) => {
+            event.currentTarget.showPicker?.();
+          }}
+          onFocus={(event) => {
+            event.currentTarget.showPicker?.();
+          }}
+          placeholder={placeholder}
+          style={webNativeInputStyle}
+          type={webInputType}
+          value={value}
+        />
+      </View>
+    );
+  }
+
+  if (Platform.OS !== 'android') {
+    return (
+      <InputField
+        label={label}
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+      />
+    );
+  }
+
+  return (
+    <View style={styles.fieldGroup}>
+      <Text style={styles.fieldLabel}>{label}</Text>
+      <Pressable onPress={openPicker} style={({ pressed }) => [styles.pickerInput, isCompact ? styles.pickerInputCompact : null, pressed ? styles.metricPressed : null]}>
+        <Text style={[styles.pickerInputText, !value ? styles.pickerInputPlaceholder : null]}>
+          {value || placeholder || (mode === 'date' ? 'Select date' : mode === 'time' ? 'Select time' : 'Select date and time')}
+        </Text>
+      </Pressable>
+      {showPicker ? (
+        <DateTimePicker
+          display="default"
+          is24Hour
+          mode={mode === 'datetime' ? androidPickerMode : mode}
+          onChange={handlePickerChange}
+          value={draftDateValue ?? resolvedValue}
+        />
+      ) : null}
+    </View>
+  );
+}
+
 export function ChoiceChip({
   label,
   selected,
@@ -451,11 +642,12 @@ export function NavigationStrip<T extends string>({
   activeKey: T;
   onChange: (value: T) => void;
 }) {
-  const { isCompact } = useResponsiveMetrics();
+  const { isCompact, isAndroidCompact } = useResponsiveMetrics();
 
   return (
     <ScrollView
       horizontal
+      keyboardShouldPersistTaps="handled"
       contentContainerStyle={[styles.navigationStrip, isCompact ? styles.navigationStripCompact : null]}
       showsHorizontalScrollIndicator={false}
     >
@@ -466,6 +658,7 @@ export function NavigationStrip<T extends string>({
           style={({ pressed }) => [
             styles.navigationItem,
             isCompact ? styles.navigationItemCompact : null,
+            isAndroidCompact ? styles.navigationItemAndroidCompact : null,
             item.key === activeKey ? styles.navigationItemActive : null,
             pressed ? styles.navigationItemPressed : null,
           ]}
@@ -474,6 +667,7 @@ export function NavigationStrip<T extends string>({
             style={[
               styles.navigationLabel,
               isCompact ? styles.navigationLabelCompact : null,
+              isAndroidCompact ? styles.navigationLabelAndroidCompact : null,
               item.key === activeKey ? styles.navigationLabelActive : null,
             ]}
           >
@@ -567,23 +761,23 @@ const styles = StyleSheet.create({
   },
   pageContentCompact: {
     maxWidth: '100%',
-    paddingHorizontal: spacing.md,
-    paddingTop: spacing.lg,
-    paddingBottom: 116,
-    gap: spacing.md,
+    paddingHorizontal: spacing.sm,
+    paddingTop: spacing.md,
+    paddingBottom: 104,
+    gap: spacing.sm,
   },
   pageContentAndroidCompact: {
-    paddingTop: spacing.md,
-    paddingHorizontal: 14,
+    paddingTop: spacing.xs,
+    paddingHorizontal: spacing.sm,
   },
   pageContentWithFooter: {
-    paddingBottom: 136,
+    paddingBottom: Platform.OS === 'android' ? 180 : 136,
   },
   pageFooter: {
     position: 'absolute',
     left: spacing.lg,
     right: spacing.lg,
-    bottom: spacing.lg,
+    bottom: Platform.OS === 'android' ? spacing.xl : spacing.lg,
   },
   heroCard: {
     borderRadius: radius.xl,
@@ -596,9 +790,9 @@ const styles = StyleSheet.create({
     ...shadow.card,
   },
   heroCardCompact: {
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.xl,
-    borderRadius: radius.lg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.lg,
+    borderRadius: radius.md,
     gap: spacing.sm,
   },
   heroCardAndroidCompact: {
@@ -656,6 +850,15 @@ const styles = StyleSheet.create({
     lineHeight: 21,
     maxWidth: '100%',
   },
+  heroTitleAndroidCompact: {
+    fontSize: 26,
+    lineHeight: 32,
+  },
+  heroSubtitleAndroidCompact: {
+    fontSize: 13,
+    lineHeight: 19,
+    maxWidth: '100%',
+  },
   surfaceCard: {
     backgroundColor: palette.surface,
     borderRadius: radius.lg,
@@ -667,12 +870,12 @@ const styles = StyleSheet.create({
     ...shadow.card,
   },
   surfaceCardCompact: {
-    padding: spacing.md,
-    borderRadius: radius.md,
-    gap: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: 18,
+    gap: spacing.xs,
   },
   surfaceCardAndroidCompact: {
-    borderRadius: 24,
+    borderRadius: 20,
     backgroundColor: 'rgba(255, 253, 252, 0.98)',
   },
   surfaceAccent: {
@@ -712,13 +915,31 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   metricCardCompact: {
-    minWidth: 92,
-    borderRadius: 18,
-    padding: spacing.sm,
+    minWidth: 84,
+    borderRadius: 16,
+    padding: spacing.xs,
+  },
+  metricCardPhone: {
+    flex: 0,
+    flexBasis: '48%',
+    flexGrow: 0,
+    flexShrink: 0,
+    maxWidth: '48%',
+    minWidth: 0,
+    padding: 8,
+    borderRadius: 14,
   },
   metricPressable: {
     flex: 1,
     minWidth: 100,
+  },
+  metricPressablePhone: {
+    flex: 0,
+    flexBasis: '48%',
+    flexGrow: 0,
+    flexShrink: 0,
+    maxWidth: '48%',
+    minWidth: 0,
   },
   metricPressed: {
     opacity: 0.92,
@@ -732,6 +953,23 @@ const styles = StyleSheet.create({
     fontSize: typeScale.metric,
     fontWeight: '800',
   },
+  metricLabelCompact: {
+    fontSize: 12,
+  },
+  metricLabelPhone: {
+    fontSize: 11,
+    lineHeight: 14,
+  },
+  metricValueCompact: {
+    fontSize: 24,
+  },
+  metricValuePhone: {
+    fontSize: 18,
+    lineHeight: 22,
+  },
+  metricValueAndroidCompact: {
+    fontSize: 20,
+  },
   pill: {
     alignSelf: 'flex-start',
     borderRadius: radius.pill,
@@ -739,8 +977,8 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
   },
   pillCompact: {
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
   },
   pillLabel: {
     fontSize: 12,
@@ -759,9 +997,9 @@ const styles = StyleSheet.create({
     ...shadow.card,
   },
   buttonCompact: {
-    minHeight: 54,
-    paddingHorizontal: spacing.md,
-    borderRadius: 20,
+    minHeight: 46,
+    paddingHorizontal: spacing.sm,
+    borderRadius: 16,
   },
   buttonAndroidCompact: {
     elevation: 3,
@@ -771,7 +1009,7 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   buttonLabelCompact: {
-    fontSize: 14,
+    fontSize: 13,
   },
   detailRow: {
     gap: spacing.xs,
@@ -809,9 +1047,30 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   inputCompact: {
-    minHeight: 54,
-    borderRadius: 18,
-    fontSize: 16,
+    minHeight: 48,
+    borderRadius: 16,
+    fontSize: 15,
+  },
+  pickerInput: {
+    minHeight: 52,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: palette.border,
+    backgroundColor: '#FFFEFD',
+    paddingHorizontal: spacing.md,
+    justifyContent: 'center',
+    ...shadow.card,
+  },
+  pickerInputCompact: {
+    minHeight: 48,
+    borderRadius: 16,
+  },
+  pickerInputText: {
+    color: palette.ink,
+    fontSize: 15,
+  },
+  pickerInputPlaceholder: {
+    color: palette.mutedInk,
   },
   multilineInput: {
     minHeight: 110,
@@ -826,8 +1085,8 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFCF8',
   },
   choiceChipCompact: {
-    paddingHorizontal: 12,
-    paddingVertical: 9,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
   },
   choiceChipSelected: {
     backgroundColor: palette.primary,
@@ -851,7 +1110,7 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   navigationStripCompact: {
-    gap: spacing.xs,
+    gap: 4,
   },
   navigationItem: {
     borderRadius: radius.pill,
@@ -862,8 +1121,12 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFCF8',
   },
   navigationItemCompact: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  navigationItemAndroidCompact: {
+    paddingHorizontal: 8,
+    paddingVertical: 6,
   },
   navigationItemActive: {
     backgroundColor: palette.primary,
@@ -878,7 +1141,10 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   navigationLabelCompact: {
-    fontSize: 12,
+    fontSize: 11,
+  },
+  navigationLabelAndroidCompact: {
+    fontSize: 10,
   },
   navigationLabelActive: {
     color: palette.white,

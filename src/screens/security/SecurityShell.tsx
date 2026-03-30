@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Image, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Image, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import {
   ActionButton,
@@ -115,6 +115,7 @@ function getGateRequestBlockingReason({
 export function SecurityShell() {
   const { state, actions } = useApp();
   const [activeTab, setActiveTab] = useState<SecurityTab>('desk');
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [queueFilter, setQueueFilter] = useState<QueueFilter>('all');
   const [selectedUnitId, setSelectedUnitId] = useState('');
   const [selectedResidentUserId, setSelectedResidentUserId] = useState('');
@@ -134,6 +135,7 @@ export function SecurityShell() {
   const [threadDrafts, setThreadDrafts] = useState<Record<string, string>>({});
   const { width } = useWindowDimensions();
   const isCompact = width < 768;
+  const isPhone = width < 420;
 
   const userId = state.session.userId;
   const societyId = state.session.selectedSocietyId;
@@ -357,6 +359,7 @@ export function SecurityShell() {
   }
 
   return (
+    <>
     <PageFrame>
       {isCompact ? (
         <SurfaceCard style={styles.compactWorkspaceCard}>
@@ -378,11 +381,14 @@ export function SecurityShell() {
             </View>
           </View>
           <View style={styles.compactWorkspaceActionRow}>
+            {activeTab !== 'desk' ? (
+              <ActionButton label="← Back" onPress={() => setActiveTab('desk')} variant="secondary" />
+            ) : null}
             <ActionButton label="Roles" onPress={actions.goToRoleSelection} variant="secondary" />
             <ActionButton label="Societies" onPress={actions.goToWorkspaces} variant="secondary" />
             {canUseAdmin ? <ActionButton label="Admin" onPress={() => actions.selectProfile('admin')} variant="secondary" /> : null}
           </View>
-          <NavigationStrip items={securityTabs} activeKey={activeTab} onChange={setActiveTab} />
+          {!isPhone ? <NavigationStrip items={securityTabs} activeKey={activeTab} onChange={setActiveTab} /> : null}
         </SurfaceCard>
       ) : null}
 
@@ -398,6 +404,7 @@ export function SecurityShell() {
           </View>
         </Pressable>
         <View style={styles.utilityActions}>
+          {activeTab !== 'desk' ? <ActionButton label="← Back" onPress={() => setActiveTab('desk')} variant="secondary" /> : null}
           <ActionButton label="Roles" onPress={actions.goToRoleSelection} variant="secondary" />
           <ActionButton label="Societies" onPress={actions.goToWorkspaces} variant="secondary" />
           {canUseAdmin ? <ActionButton label="Admin" onPress={() => actions.selectProfile('admin')} /> : null}
@@ -421,10 +428,10 @@ export function SecurityShell() {
           </View>
         </View>
         <View style={styles.metricGrid}>
-          <MetricCard label="Waiting approval" value={String(pendingCount)} tone="accent" />
-          <MetricCard label="Approved to enter" value={String(approvedCount)} tone="blue" />
-          <MetricCard label="Guests inside" value={String(checkedInCount)} />
-          <MetricCard label="Log events today" value={String(todayLogCount)} tone="blue" />
+          <MetricCard label="Waiting approval" value={String(pendingCount)} tone="accent" onPress={() => { setActiveTab('queue'); setQueueFilter('pendingApproval'); }} />
+          <MetricCard label="Approved to enter" value={String(approvedCount)} tone="blue" onPress={() => { setActiveTab('queue'); setQueueFilter('approved'); }} />
+          <MetricCard label="Guests inside" value={String(checkedInCount)} onPress={() => { setActiveTab('queue'); setQueueFilter('checkedIn'); }} />
+          <MetricCard label="Log events today" value={String(todayLogCount)} tone="blue" onPress={() => setActiveTab('logs')} />
         </View>
       </SurfaceCard>
       ) : null}
@@ -855,12 +862,66 @@ export function SecurityShell() {
         </>
       ) : null}
     </PageFrame>
+
+    {isPhone ? (
+      <>
+        {!isDrawerOpen ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => setIsDrawerOpen(true)}
+            style={({ pressed }) => [styles.leftDrawerHandle, pressed ? styles.leftDrawerHandlePressed : null]}
+          >
+            <Text style={styles.leftDrawerHandleText}>Menu</Text>
+          </Pressable>
+        ) : null}
+
+        {isDrawerOpen ? (
+          <Pressable style={styles.drawerBackdrop} onPress={() => setIsDrawerOpen(false)} />
+        ) : null}
+
+        <View style={[styles.sideDrawer, isDrawerOpen ? styles.sideDrawerOpen : null]}>
+          <View style={styles.sideDrawerHeader}>
+            <View style={styles.sideDrawerTitleWrap}>
+              <Pill label="Security" tone="warning" />
+              <Text style={styles.sideDrawerTitle}>Security Menu</Text>
+            </View>
+            <Pressable onPress={() => setIsDrawerOpen(false)} style={({ pressed }) => [styles.sideDrawerClose, pressed ? styles.pressed : null]}>
+              <Text style={styles.sideDrawerCloseText}>Close</Text>
+            </Pressable>
+          </View>
+          <Caption style={styles.sideDrawerCaption}>Jump between desk, queue, and logs without keeping the tab strip on screen.</Caption>
+          <ScrollView style={styles.sideDrawerScroller} contentContainerStyle={styles.sideDrawerList} showsVerticalScrollIndicator={false}>
+            {securityTabs.map((item) => {
+              const isActive = activeTab === item.key;
+
+              return (
+                <Pressable
+                  key={item.key}
+                  onPress={() => {
+                    setActiveTab(item.key);
+                    setIsDrawerOpen(false);
+                  }}
+                  style={({ pressed }) => [
+                    styles.sideDrawerItem,
+                    isActive ? styles.sideDrawerItemActive : null,
+                    pressed ? styles.pressed : null,
+                  ]}
+                >
+                  <Text style={[styles.sideDrawerItemText, isActive ? styles.sideDrawerItemTextActive : null]}>{item.label}</Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+      </>
+    ) : null}
+    </>
   );
 }
 
 const styles = StyleSheet.create({
   compactWorkspaceCard: {
-    gap: spacing.sm,
+    gap: spacing.xs,
     backgroundColor: '#FFF8F0',
   },
   compactWorkspaceTopRow: {
@@ -875,14 +936,14 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   compactWorkspaceTitle: {
-    fontSize: 22,
-    lineHeight: 26,
+    fontSize: 20,
+    lineHeight: 24,
     fontWeight: '900',
     color: palette.ink,
   },
   compactWorkspaceStatsRow: {
     flexDirection: 'row',
-    gap: spacing.xs,
+    gap: 4,
     width: '100%',
   },
   compactWorkspaceStat: {
@@ -903,8 +964,117 @@ const styles = StyleSheet.create({
     color: palette.warning,
   },
   compactWorkspaceActionRow: {
-    flexDirection: 'column',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: spacing.xs,
+  },
+  leftDrawerHandle: {
+    position: 'absolute',
+    left: 0,
+    top: 88,
+    paddingVertical: spacing.sm,
+    paddingLeft: 8,
+    paddingRight: spacing.xs,
+    borderTopRightRadius: radius.md,
+    borderBottomRightRadius: radius.md,
+    backgroundColor: '#F4E5C9',
+    borderWidth: 1,
+    borderLeftWidth: 0,
+    borderColor: '#DEC49A',
+    zIndex: 40,
+    ...shadow.card,
+  },
+  leftDrawerHandlePressed: {
+    opacity: 0.88,
+  },
+  leftDrawerHandleText: {
+    color: palette.ink,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+  },
+  drawerBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(28, 24, 18, 0.24)',
+    zIndex: 35,
+  },
+  sideDrawer: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: 246,
+    paddingTop: 56,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.lg,
+    backgroundColor: '#FFF7EA',
+    borderRightWidth: 1,
+    borderRightColor: '#E3CFAC',
+    transform: [{ translateX: -270 }],
+    zIndex: 50,
+    gap: spacing.md,
+    ...shadow.card,
+  },
+  sideDrawerOpen: {
+    transform: [{ translateX: 0 }],
+  },
+  sideDrawerHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+  },
+  sideDrawerTitleWrap: {
+    flex: 1,
+    gap: spacing.xs,
+  },
+  sideDrawerTitle: {
+    fontSize: 20,
+    lineHeight: 24,
+    fontWeight: '900',
+    color: palette.ink,
+  },
+  sideDrawerClose: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    borderRadius: radius.pill,
+    backgroundColor: '#F4E5C9',
+  },
+  sideDrawerCloseText: {
+    color: palette.ink,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  sideDrawerCaption: {
+    color: '#6F5B3E',
+  },
+  sideDrawerScroller: {
+    flex: 1,
+  },
+  sideDrawerList: {
+    gap: spacing.xs,
+    paddingBottom: spacing.xl,
+  },
+  sideDrawerItem: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    backgroundColor: '#FFFDF9',
+    borderWidth: 1,
+    borderColor: '#E9D9BF',
+  },
+  sideDrawerItemActive: {
+    backgroundColor: '#1F2E43',
+    borderColor: '#1F2E43',
+  },
+  sideDrawerItemText: {
+    color: palette.ink,
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  sideDrawerItemTextActive: {
+    color: palette.white,
   },
   utilityBar: {
     gap: spacing.md,
@@ -990,7 +1160,7 @@ const styles = StyleSheet.create({
   metricGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: spacing.md,
+    gap: spacing.xs,
   },
   fieldTitle: {
     fontSize: 14,
@@ -1000,7 +1170,7 @@ const styles = StyleSheet.create({
   choiceRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: spacing.sm,
+    gap: spacing.xs,
   },
   formGrid: {
     flexDirection: 'row',

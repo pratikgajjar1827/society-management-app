@@ -6,6 +6,7 @@ import { Caption, Pill, SurfaceCard } from '../../components/ui';
 import { useApp } from '../../state/AppContext';
 import { palette, radius, shadow, spacing } from '../../theme/tokens';
 import {
+  getMeetingsForSociety,
   formatCurrency,
   formatLongDate,
   formatShortDate,
@@ -34,11 +35,11 @@ import {
   humanizeSecurityGuestRequestStatus,
 } from '../../utils/selectors';
 
-type ResidentTab = 'home' | 'visitors' | 'community' | 'billing' | 'notices' | 'bookings' | 'helpdesk' | 'profile';
+type ResidentTab = 'home' | 'visitors' | 'community' | 'billing' | 'notices' | 'bookings' | 'meetings' | 'helpdesk' | 'profile';
 type ResidentVisitorsSection = 'create' | 'approvals' | 'history' | 'desk';
 type ResidentBillingSection = 'pay' | 'reminders' | 'outstanding' | 'history';
 type ResidentBookingsSection = 'booking' | 'amenities' | 'history';
-type ResidentProfileSection = 'household' | 'vehicles' | 'staff';
+type ResidentProfileSection = 'household' | 'contacts' | 'vehicles';
 type AccentTone = 'accent' | 'blue' | 'gold' | 'primary';
 type HomeHubSectionKey = 'visitors' | 'billing' | 'community' | 'services';
 type HubTile = {
@@ -58,6 +59,13 @@ type HubShortcut = {
 type HubFact = {
   label: string;
   value: string;
+};
+type QuickAction = {
+  title: string;
+  detail: string;
+  module: string;
+  tone: AccentTone;
+  onPress: () => void;
 };
 type HomeConversationPreview = {
   key: string;
@@ -123,6 +131,7 @@ export function ResidentHomeExperience({
   const [activeHub, setActiveHub] = useState<HomeHubSectionKey>('community');
   const { width } = useWindowDimensions();
   const isCompact = width < 768;
+  const isPhone = width < 420;
   const user = getCurrentUser(state.data, userId);
   const society = getSelectedSociety(state.data, societyId);
   const membership = getMembershipForSociety(state.data, userId, societyId);
@@ -167,6 +176,8 @@ export function ResidentHomeExperience({
     .slice(0, 3);
 
   const openTicketCount = overview.myComplaints.filter((item) => item.status !== 'resolved').length;
+  const meetings = getMeetingsForSociety(state.data, societyId);
+  const scheduledMeetings = meetings.filter((m) => m.status === 'scheduled');
   const outstandingAmountLabel = overview.totalDue > 0 ? formatCurrency(overview.totalDue) : 'All clear';
   const latestNotice = announcements[0];
   const latestRule = rules[0];
@@ -274,9 +285,10 @@ export function ResidentHomeExperience({
       tab: 'community' as const,
       tone: 'gold' as const,
       onPress: () => onOpenCommunitySection('members'),
+      statusLabel: String(communityMembers.length),
     },
     {
-      label: 'Chats',
+      label: 'Chat',
       subtitle:
         totalIncomingChatCount > 0
           ? `${totalIncomingChatCount} new message(s)`
@@ -287,7 +299,7 @@ export function ResidentHomeExperience({
       tab: 'community' as const,
       tone: 'blue' as const,
       onPress: () => onOpenCommunitySection('chat'),
-      statusLabel: totalIncomingChatCount > 0 ? `${totalIncomingChatCount} new` : undefined,
+      statusLabel: String(totalIncomingChatCount > 0 ? totalIncomingChatCount : chatRoomCount),
     },
     {
       label: 'Vehicles',
@@ -296,22 +308,25 @@ export function ResidentHomeExperience({
       tab: 'community' as const,
       tone: 'primary' as const,
       onPress: () => onOpenCommunitySection('vehicles'),
+      statusLabel: String(vehicles.length),
     },
     {
-      label: 'Important Contacts',
+      label: 'Contacts',
       subtitle: importantContacts.length > 0 ? `${importantContacts.length} saved` : 'Keep key numbers handy',
       badge: 'CT',
       tab: 'community' as const,
       tone: 'primary' as const,
       onPress: () => onOpenCommunitySection('contacts'),
+      statusLabel: String(importantContacts.length),
     },
     {
-      label: 'Staff & Guards',
+      label: 'Staff',
       subtitle: communityStaffCount > 0 ? `${communityStaffCount} on record` : 'Staff directory',
       badge: 'ST',
       tab: 'community' as const,
       tone: 'accent' as const,
       onPress: () => onOpenCommunitySection('staff'),
+      statusLabel: String(communityStaffCount),
     },
     {
       label: 'Notices',
@@ -319,25 +334,28 @@ export function ResidentHomeExperience({
       badge: 'NT',
       tab: 'notices' as const,
       tone: 'gold' as const,
+      statusLabel: String(unreadNoticeCount),
     },
     {
-      label: 'Gate Access',
+      label: 'Gate',
       subtitle: visitorPasses.length > 0 ? `${visitorPasses.length} visitor pass(es)` : 'Security desk',
       badge: 'AC',
       tab: 'visitors' as const,
       tone: 'blue' as const,
       onPress: () => onOpenVisitorsSection('desk'),
+      statusLabel: String(visitorPasses.length),
     },
   ];
 
   const visitorsTiles: HubTile[] = [
     {
-      label: 'Create Pass',
+      label: 'Create',
       subtitle: scheduledVisitorCount > 0 ? `${scheduledVisitorCount} scheduled` : 'Create now',
       badge: 'VP',
       tab: 'visitors',
       tone: 'gold',
       onPress: () => onOpenVisitorsSection('create'),
+      statusLabel: String(scheduledVisitorCount),
     },
     {
       label: 'Approvals',
@@ -349,48 +367,54 @@ export function ResidentHomeExperience({
       tab: 'visitors',
       tone: 'accent',
       onPress: () => onOpenVisitorsSection('approvals'),
+      statusLabel: String(pendingSecurityGuestRequests.length),
     },
     {
-      label: 'Visit History',
+      label: 'History',
       subtitle: checkedInVisitorCount > 0 ? `${checkedInVisitorCount} active` : `${visitorPasses.length} tracked`,
       badge: 'IN',
       tab: 'visitors',
       tone: 'primary',
       onPress: () => onOpenVisitorsSection('history'),
+      statusLabel: String(visitorPasses.length),
     },
     {
-      label: 'Security Desk',
+      label: 'Desk',
       subtitle: guards.length > 0 ? `${guards.length} guards` : 'Support desk',
       badge: 'SD',
       tab: 'visitors',
       tone: 'primary',
       onPress: () => onOpenVisitorsSection('desk'),
+      statusLabel: String(guards.length),
     },
     {
-      label: 'Gate Notes',
+      label: 'Notes',
       subtitle: latestNotice ? formatShortDate(latestNotice.createdAt) : 'Resident updates',
       badge: 'NT',
       tab: 'notices',
       tone: 'accent',
+      statusLabel: String(unreadNoticeCount),
     },
     {
-      label: 'Security Contacts',
+      label: 'Contacts',
       subtitle: securityContacts.length > 0 ? `${securityContacts.length} contact(s)` : 'Important contact',
       badge: 'CT',
       tab: 'community',
       tone: 'blue',
       onPress: () => onOpenCommunitySection('contacts'),
+      statusLabel: String(securityContacts.length),
     },
   ];
 
   const billingTiles: HubTile[] = [
     {
-      label: 'Pay Now',
+      label: 'Pay',
       subtitle: overview.outstandingInvoices.length > 0 ? outstandingAmountLabel : 'Payment setup',
       badge: 'PY',
       tab: 'billing',
       tone: 'accent',
       onPress: () => onOpenBillingSection('pay'),
+      statusLabel: String(overview.myPendingPayments.length),
     },
     {
       label: 'Reminders',
@@ -399,33 +423,45 @@ export function ResidentHomeExperience({
       tab: 'billing',
       tone: 'blue',
       onPress: () => onOpenBillingSection('reminders'),
+      statusLabel: String(reminderCount),
     },
     {
-      label: 'Outstanding Dues',
+      label: 'Due',
       subtitle: overview.outstandingInvoices.length > 0 ? `${overview.outstandingInvoices.length} unpaid` : 'All clear',
       badge: 'DU',
       tab: 'billing',
       tone: 'gold',
       onPress: () => onOpenBillingSection('outstanding'),
+      statusLabel: String(overview.outstandingInvoices.length),
     },
     {
-      label: 'Payment History',
+      label: 'History',
       subtitle: latestPayment ? formatShortDate(latestPayment.payment.paidAt) : 'No payment yet',
       badge: 'RC',
       tab: 'billing',
       tone: 'primary',
       onPress: () => onOpenBillingSection('history'),
+      statusLabel: String(payments.length),
     },
     {
-      label: 'Billing Notices',
+      label: 'Notices',
       subtitle: latestRule ? formatShortDate(latestRule.publishedAt) : 'Policy updates',
       badge: 'NT',
       tab: 'notices',
       tone: 'gold',
+      statusLabel: String(unreadNoticeCount),
     },
   ];
 
   const serviceTiles: HubTile[] = [
+    {
+      label: 'Meetings',
+      subtitle: scheduledMeetings.length > 0 ? `${scheduledMeetings.length} upcoming` : `${meetings.length} total`,
+      badge: 'MT',
+      tab: 'meetings',
+      tone: 'primary',
+      statusLabel: String(meetings.length),
+    },
     {
       label: 'Amenities',
       subtitle: amenities.length > 0 ? `${amenities.length} spaces` : 'Book now',
@@ -433,6 +469,7 @@ export function ResidentHomeExperience({
       tab: 'bookings',
       tone: 'gold',
       onPress: () => onOpenBookingsSection('amenities'),
+      statusLabel: String(amenities.length),
     },
     {
       label: 'Helpdesk',
@@ -440,38 +477,43 @@ export function ResidentHomeExperience({
       badge: 'HD',
       tab: 'helpdesk',
       tone: 'accent',
+      statusLabel: String(openTicketCount),
     },
     {
-      label: 'Daily Helps',
+      label: 'Staff',
       subtitle: staffRecords.length > 0 ? `${staffRecords.length} records` : 'Register staff',
       badge: 'DH',
-      tab: 'profile',
+      tab: 'community',
       tone: 'primary',
-      onPress: () => onOpenProfileSection('staff'),
+      onPress: () => onOpenCommunitySection('staff'),
+      statusLabel: String(staffRecords.length),
     },
     {
-      label: 'Book Amenity',
+      label: 'Booking',
       subtitle: overview.myBookings.length > 0 ? `${overview.myBookings.length} active` : 'Plan a booking',
       badge: 'BK',
       tab: 'bookings',
       tone: 'blue',
       onPress: () => onOpenBookingsSection('booking'),
+      statusLabel: String(overview.myBookings.length),
     },
     {
-      label: 'Move Support',
+      label: 'Vehicles',
       subtitle: vehicles.length > 0 ? `${vehicles.length} vehicle(s)` : 'Household prep',
       badge: 'MV',
       tab: 'community',
       tone: 'accent',
       onPress: () => onOpenCommunitySection('vehicles'),
+      statusLabel: String(vehicles.length),
     },
     {
-      label: 'Access Desk',
+      label: 'Access',
       subtitle: visitorPasses.length > 0 ? `${visitorPasses.length} visit(s)` : 'Gate support',
       badge: 'AC',
       tab: 'visitors',
       tone: 'blue',
       onPress: () => onOpenVisitorsSection('desk'),
+      statusLabel: String(visitorPasses.length),
     },
   ];
 
@@ -553,7 +595,7 @@ export function ResidentHomeExperience({
     {
       label: 'Staff',
       value: `${staffRecords.length} records`,
-      onPress: () => onOpenProfileSection('staff'),
+      onPress: () => onOpenCommunitySection('staff'),
     },
   ];
 
@@ -647,44 +689,200 @@ export function ResidentHomeExperience({
   };
 
   const activeHubConfig = hubConfigs[activeHub];
+  const useDensePhoneTiles = isPhone && activeHubConfig.tiles.length >= 6;
 
-  const actionCards = [
-    {
-      title: 'Society chat',
-      body: chatRoomCount > 0 ? `${chatRoomCount} chat room(s) active.` : 'Start a society group or direct conversation.',
-      module: 'CP',
-      tone: 'blue' as const,
-      onPress: () => onOpenCommunitySection('chat'),
+  const quickActionSets: Record<HomeHubSectionKey, { pending: QuickAction[]; fallback: QuickAction[] }> = {
+    community: {
+      pending: [
+        ...(totalIncomingChatCount > 0
+          ? [{
+              title: 'Open chats',
+              detail: `${totalIncomingChatCount} new`,
+              module: 'CP',
+              tone: 'blue' as const,
+              onPress: () => onOpenCommunitySection('chat'),
+            }]
+          : []),
+        ...(unreadNoticeCount > 0
+          ? [{
+              title: 'Read notices',
+              detail: `${unreadNoticeCount} unread`,
+              module: 'NT',
+              tone: 'gold' as const,
+              onPress: () => onOpenTab('notices'),
+            }]
+          : []),
+      ],
+      fallback: [
+        {
+          title: 'Open directory',
+          detail: `${communityMembers.length} members`,
+          module: 'DR',
+          tone: 'primary',
+          onPress: () => onOpenCommunitySection('members'),
+        },
+        {
+          title: vehicles.length === 0 ? 'Add vehicle' : 'Vehicles',
+          detail: vehicles.length === 0 ? 'Household access' : `${vehicles.length} saved`,
+          module: 'MV',
+          tone: 'primary',
+          onPress: () => onOpenCommunitySection('vehicles'),
+        },
+        {
+          title: staffRecords.length === 0 ? 'Add staff' : 'Staff desk',
+          detail: staffRecords.length === 0 ? 'Register help' : `${staffRecords.length} record(s)`,
+          module: 'DH',
+          tone: 'accent',
+          onPress: () => onOpenCommunitySection('staff'),
+        },
+      ],
     },
-    {
-      title: 'Helpdesk',
-      body: openTicketCount > 0 ? `${openTicketCount} ticket(s) already active.` : 'Raise issues fast and track progress.',
-      module: 'HD',
-      tone: 'accent' as const,
-      onPress: () => onOpenTab('helpdesk'),
+    visitors: {
+      pending: [
+        ...(pendingSecurityGuestRequests.length > 0
+          ? [{
+              title: 'Approvals',
+              detail: `${pendingSecurityGuestRequests.length} live`,
+              module: 'AC',
+              tone: 'accent' as const,
+              onPress: () => onOpenVisitorsSection('approvals'),
+            }]
+          : []),
+        ...(checkedInVisitorCount > 0
+          ? [{
+              title: 'Track visits',
+              detail: `${checkedInVisitorCount} active`,
+              module: 'IN',
+              tone: 'primary' as const,
+              onPress: () => onOpenVisitorsSection('history'),
+            }]
+          : []),
+        ...(scheduledVisitorCount > 0
+          ? [{
+              title: 'Scheduled',
+              detail: `${scheduledVisitorCount} pass(es)`,
+              module: 'VP',
+              tone: 'gold' as const,
+              onPress: () => onOpenVisitorsSection('create'),
+            }]
+          : []),
+      ],
+      fallback: [
+        {
+          title: 'Create pass',
+          detail: 'Gate ready',
+          module: 'VP',
+          tone: 'gold',
+          onPress: () => onOpenVisitorsSection('create'),
+        },
+        {
+          title: 'Security desk',
+          detail: guards.length > 0 ? `${guards.length} guard(s)` : 'Support desk',
+          module: 'SD',
+          tone: 'blue',
+          onPress: () => onOpenVisitorsSection('desk'),
+        },
+      ],
     },
-    {
-      title: 'Services',
-      body: amenities[0]?.name ? `Book ${amenities[0].name} or another common space.` : 'Open amenity bookings and service actions.',
-      module: 'BK',
-      tone: 'gold' as const,
-      onPress: () => onOpenBookingsSection('booking'),
+    billing: {
+      pending: [
+        ...(overview.totalDue > 0
+          ? [{
+              title: 'Pay dues',
+              detail: outstandingAmountLabel,
+              module: 'PY',
+              tone: 'accent' as const,
+              onPress: () => onOpenBillingSection('pay'),
+            }]
+          : []),
+        ...(reminderCount > 0
+          ? [{
+              title: 'Reminders',
+              detail: `${reminderCount} alert(s)`,
+              module: 'RM',
+              tone: 'blue' as const,
+              onPress: () => onOpenBillingSection('reminders'),
+            }]
+          : []),
+        ...(overview.outstandingInvoices.length > 0
+          ? [{
+              title: 'Outstanding',
+              detail: `${overview.outstandingInvoices.length} unpaid`,
+              module: 'DU',
+              tone: 'gold' as const,
+              onPress: () => onOpenBillingSection('outstanding'),
+            }]
+          : []),
+      ],
+      fallback: [
+        {
+          title: 'History',
+          detail: `${payments.length} payment(s)`,
+          module: 'RC',
+          tone: 'primary',
+          onPress: () => onOpenBillingSection('history'),
+        },
+        {
+          title: 'Pay now',
+          detail: `${overview.myPendingPayments.length} pending`,
+          module: 'PY',
+          tone: 'gold',
+          onPress: () => onOpenBillingSection('pay'),
+        },
+      ],
     },
-    {
-      title: 'Visit desk',
-      body: visitorPasses.length > 0 ? `${visitorPasses.length} visitor pass(es) tracked.` : 'Create passes and track visitor movement.',
-      module: 'VP',
-      tone: 'primary' as const,
-      onPress: () => onOpenVisitorsSection('create'),
+    services: {
+      pending: [
+        ...(openTicketCount > 0
+          ? [{
+              title: 'Track issues',
+              detail: `${openTicketCount} open`,
+              module: 'HD',
+              tone: 'accent' as const,
+              onPress: () => onOpenTab('helpdesk'),
+            }]
+          : []),
+        ...(overview.myBookings.length > 0
+          ? [{
+              title: 'Bookings',
+              detail: `${overview.myBookings.length} active`,
+              module: 'BK',
+              tone: 'gold' as const,
+              onPress: () => onOpenBookingsSection('history'),
+            }]
+          : []),
+        ...(scheduledMeetings.length > 0
+          ? [{
+              title: 'Meetings',
+              detail: `${scheduledMeetings.length} upcoming`,
+              module: 'MT',
+              tone: 'primary' as const,
+              onPress: () => onOpenTab('meetings'),
+            }]
+          : []),
+      ],
+      fallback: [
+        {
+          title: 'Book amenity',
+          detail: amenities[0]?.name ?? 'Open amenities',
+          module: 'BK',
+          tone: 'gold',
+          onPress: () => onOpenBookingsSection('booking'),
+        },
+        {
+          title: staffRecords.length > 0 ? 'Staff desk' : 'Add staff',
+          detail: staffRecords.length > 0 ? `${staffRecords.length} record(s)` : 'Daily help',
+          module: 'DH',
+          tone: 'primary',
+          onPress: () => onOpenCommunitySection('staff'),
+        },
+      ],
     },
-    {
-      title: 'Resident directory',
-      body: `${communityMembers.length} members, contacts, and staff profiles in one place.`,
-      module: 'DR',
-      tone: 'blue' as const,
-      onPress: () => onOpenCommunitySection('members'),
-    },
-  ];
+  };
+  const activeQuickActionSet = quickActionSets[activeHub];
+  const quickActions = (
+    activeQuickActionSet.pending.length > 0 ? activeQuickActionSet.pending : activeQuickActionSet.fallback
+  ).slice(0, 2);
 
   const promoCards = [
     {
@@ -713,7 +911,7 @@ export function ResidentHomeExperience({
 
   return (
     <>
-      <AnnouncementTicker announcements={announcements} isCompact={isCompact} />
+      <AnnouncementTicker announcements={announcements} isCompact={isCompact} isPhone={isPhone} />
 
       {!isCompact ? (
       <View style={styles.utilityBar}>
@@ -747,7 +945,7 @@ export function ResidentHomeExperience({
       </View>
       ) : null}
 
-      <View style={[styles.categoryStrip, isCompact ? styles.categoryStripCompact : null]}>
+      <View style={[styles.categoryStrip, isCompact ? styles.categoryStripCompact : null, isPhone ? styles.categoryStripPhone : null]}>
         {topCategories.map((category) => (
           <TopCategoryCard
             key={category.label}
@@ -758,6 +956,7 @@ export function ResidentHomeExperience({
             active={category.active}
             onPress={category.onPress}
             compact={isCompact}
+            phone={isPhone}
           />
         ))}
       </View>
@@ -799,15 +998,15 @@ export function ResidentHomeExperience({
       ) : null}
 
       {isCompact ? (
-        <SurfaceCard style={styles.compactHubCard}>
-          <View style={styles.compactHubHeader}>
+        <SurfaceCard style={[styles.compactHubCard, isPhone ? styles.compactHubCardPhone : null]}>
+          <View style={[styles.compactHubHeader, isPhone ? styles.compactHubHeaderPhone : null]}>
             <View style={styles.compactHubHeaderCopy}>
-              <Text style={styles.compactHubTitle}>{activeHubConfig.pillLabel}</Text>
+              <Text style={[styles.compactHubTitle, isPhone ? styles.compactHubTitlePhone : null]}>{activeHubConfig.pillLabel}</Text>
               <Caption>{activeHubConfig.metaValue} {activeHubConfig.metaLabel}</Caption>
             </View>
             <Pill label={activeHubConfig.metaValue} tone={activeHubConfig.pillTone} />
           </View>
-          <View style={styles.compactHubGrid}>
+          <View style={[styles.compactHubGrid, isPhone ? styles.compactHubGridPhone : null, useDensePhoneTiles ? styles.compactHubGridDensePhone : null]}>
             {activeHubConfig.tiles.map((tile) => (
               <CompactHubTile
                 key={tile.label}
@@ -816,6 +1015,9 @@ export function ResidentHomeExperience({
                 badge={tile.badge}
                 tone={tile.tone}
                 statusLabel={tile.statusLabel}
+                phone={isPhone}
+                dense={useDensePhoneTiles}
+                minimal={isPhone}
                 onPress={tile.onPress ?? (() => onOpenTab(tile.tab))}
               />
             ))}
@@ -950,48 +1152,83 @@ export function ResidentHomeExperience({
         </SurfaceCard>
       ) : null}
 
-      <SurfaceCard style={styles.actionsPanel}>
-        <View style={[styles.panelHeader, isCompact ? styles.panelHeaderCompact : null]}>
+      <SurfaceCard style={[styles.actionsPanel, isPhone ? styles.actionsPanelPhone : null]}>
+        <View style={[styles.panelHeader, isCompact ? styles.panelHeaderCompact : null, isPhone ? styles.panelHeaderPhone : null]}>
           <View style={styles.panelHeaderLeft}>
-            <Text style={styles.panelTitle}>Your actions</Text>
-            <Pill label="New" tone="accent" />
+            <Text style={[styles.panelTitle, isPhone ? styles.panelTitlePhone : null]}>Quick actions</Text>
+            <Pill label={activeHubConfig.pillLabel} tone={activeHubConfig.pillTone} />
           </View>
-          <Pressable onPress={() => onOpenTab('bookings')} style={({ pressed }) => [styles.seeAllLink, pressed ? styles.pressed : null]}>
-            <Text style={styles.seeAllText}>See all</Text>
+          <Pressable onPress={activeHubConfig.ctaAction} style={({ pressed }) => [styles.seeAllLink, pressed ? styles.pressed : null]}>
+            <Text style={[styles.seeAllText, isPhone ? styles.seeAllTextPhone : null]}>See all</Text>
           </Pressable>
         </View>
 
-        <ScrollView horizontal contentContainerStyle={styles.actionScroller} showsHorizontalScrollIndicator={false}>
-          {actionCards.map((card) => (
-            <ActionCard
+        {isPhone ? (
+          <View style={styles.actionGridPhone}>
+            {quickActions.map((action) => (
+              <QuickActionCard
+                key={`${activeHub}-${action.title}`}
+                title={action.title}
+                detail={action.detail}
+                module={action.module}
+                tone={action.tone}
+                onPress={action.onPress}
+                phone={isPhone}
+              />
+            ))}
+          </View>
+        ) : (
+          <ScrollView horizontal contentContainerStyle={styles.actionScroller} showsHorizontalScrollIndicator={false}>
+            {quickActions.map((action) => (
+              <QuickActionCard
+                key={`${activeHub}-${action.title}`}
+                title={action.title}
+                detail={action.detail}
+                module={action.module}
+                tone={action.tone}
+                onPress={action.onPress}
+                phone={isPhone}
+              />
+            ))}
+          </ScrollView>
+        )}
+      </SurfaceCard>
+
+      {isPhone ? (
+        <View style={styles.promoStackPhone}>
+          {promoCards.map((card) => (
+            <PromoCard
               key={card.title}
               title={card.title}
+              highlight={card.highlight}
               body={card.body}
-              module={card.module}
+              action={card.action}
               tone={card.tone}
               onPress={card.onPress}
               compact={isCompact}
+              phone={isPhone}
+            />
+          ))}
+        </View>
+      ) : (
+        <ScrollView horizontal contentContainerStyle={styles.promoScroller} showsHorizontalScrollIndicator={false}>
+          {promoCards.map((card) => (
+            <PromoCard
+              key={card.title}
+              title={card.title}
+              highlight={card.highlight}
+              body={card.body}
+              action={card.action}
+              tone={card.tone}
+              onPress={card.onPress}
+              compact={isCompact}
+              phone={isPhone}
             />
           ))}
         </ScrollView>
-      </SurfaceCard>
+      )}
 
-      <ScrollView horizontal contentContainerStyle={styles.promoScroller} showsHorizontalScrollIndicator={false}>
-        {promoCards.map((card) => (
-          <PromoCard
-            key={card.title}
-            title={card.title}
-            highlight={card.highlight}
-            body={card.body}
-            action={card.action}
-            tone={card.tone}
-            onPress={card.onPress}
-            compact={isCompact}
-          />
-        ))}
-      </ScrollView>
-
-      <SurfaceCard style={styles.noticePanel}>
+      <SurfaceCard style={[styles.noticePanel, isPhone ? styles.noticePanelPhone : null]}>
         <View style={[styles.panelHeader, isCompact ? styles.panelHeaderCompact : null]}>
           <Text style={styles.panelTitle}>Society Notices</Text>
           <Pressable onPress={() => onOpenTab('notices')} style={({ pressed }) => [styles.seeAllLink, pressed ? styles.pressed : null]}>
@@ -999,7 +1236,7 @@ export function ResidentHomeExperience({
           </Pressable>
         </View>
 
-        <ScrollView horizontal contentContainerStyle={styles.noticeScroller} showsHorizontalScrollIndicator={false}>
+        <ScrollView horizontal contentContainerStyle={[styles.noticeScroller, isPhone ? styles.noticeScrollerPhone : null]} showsHorizontalScrollIndicator={false}>
           {latestNotice ? announcements.slice(0, 3).map((announcement) => (
             <NoticeCard
               key={announcement.id}
@@ -1009,6 +1246,7 @@ export function ResidentHomeExperience({
               tone={announcement.priority === 'critical' ? 'accent' : announcement.priority === 'high' ? 'gold' : 'primary'}
               onPress={() => onOpenTab('notices')}
               compact={isCompact}
+              phone={isPhone}
             />
           )) : latestRule ? (
             <NoticeCard
@@ -1018,6 +1256,7 @@ export function ResidentHomeExperience({
               tone="gold"
               onPress={() => onOpenTab('notices')}
               compact={isCompact}
+              phone={isPhone}
             />
           ) : (
             <NoticeCard
@@ -1027,24 +1266,26 @@ export function ResidentHomeExperience({
               tone="primary"
               onPress={() => onOpenTab('notices')}
               compact={isCompact}
+              phone={isPhone}
             />
           )}
         </ScrollView>
       </SurfaceCard>
 
-      <View style={[styles.summaryRow, isCompact ? styles.summaryRowCompact : null]}>
-        <SurfaceCard style={[styles.summaryCard, isCompact ? styles.summaryCardCompact : null]}>
-          <Text style={styles.summaryTitle}>Security desk</Text>
+      <View style={[styles.summaryRow, isCompact ? styles.summaryRowCompact : null, isPhone ? styles.summaryRowPhone : null]}>
+        <Pressable onPress={() => onOpenVisitorsSection('desk')} style={({ pressed }) => [styles.summaryPressable, pressed ? styles.pressed : null]}>
+        <SurfaceCard style={[styles.summaryCard, isCompact ? styles.summaryCardCompact : null, isPhone ? styles.summaryCardPhone : null]}>
+          <Text style={[styles.summaryTitle, isPhone ? styles.summaryTitlePhone : null]}>Security desk</Text>
           {entryLogs.length > 0 ? (
             <View style={styles.summaryStack}>
-              {entryLogs.map(({ entry, unit }) => (
+              {entryLogs.slice(0, isPhone ? 2 : entryLogs.length).map(({ entry, unit }) => (
                 <View key={entry.id} style={styles.summaryLine}>
                   <View style={styles.summaryDot} />
                   <View style={styles.summaryLineCopy}>
-                    <Text style={styles.summaryLineTitle}>{entry.subjectName}</Text>
-                    <Caption>
+                    <Text numberOfLines={1} style={[styles.summaryLineTitle, isPhone ? styles.summaryLineTitlePhone : null]}>{entry.subjectName}</Text>
+                    <Text numberOfLines={isPhone ? 1 : 2} style={[styles.summaryCaption, isPhone ? styles.summaryCaptionPhone : null]}>
                       {entry.subjectType} {unit ? `for ${unit.code}` : ''} on {formatLongDate(entry.enteredAt)}
-                    </Caption>
+                    </Text>
                   </View>
                 </View>
               ))}
@@ -1052,25 +1293,27 @@ export function ResidentHomeExperience({
           ) : (
             <Caption>No recent entry record linked to your unit.</Caption>
           )}
-          <Caption>
+          <Text numberOfLines={isPhone ? 1 : 2} style={[styles.summaryCaption, isPhone ? styles.summaryCaptionPhone : null]}>
             Guards: {guards.map(({ guard }) => guard.name).join(', ') || 'No guard configured yet'}
-          </Caption>
+          </Text>
         </SurfaceCard>
+        </Pressable>
 
-        <SurfaceCard style={[styles.summaryCard, isCompact ? styles.summaryCardCompact : null]}>
-          <Text style={styles.summaryTitle}>Daily help and household</Text>
+        <Pressable onPress={() => onOpenProfileSection('contacts')} style={({ pressed }) => [styles.summaryPressable, pressed ? styles.pressed : null]}>
+        <SurfaceCard style={[styles.summaryCard, isCompact ? styles.summaryCardCompact : null, isPhone ? styles.summaryCardPhone : null]}>
+          <Text style={[styles.summaryTitle, isPhone ? styles.summaryTitlePhone : null]}>Daily help and household</Text>
           {staffRecords.length > 0 ? (
             <View style={styles.summaryStack}>
-              {staffRecords.slice(0, 2).map(({ staff, employerUnits }) => (
+              {staffRecords.slice(0, isPhone ? 1 : 2).map(({ staff, employerUnits }) => (
                 <View key={staff.id} style={styles.summaryLine}>
                   <View style={styles.helperBadge}>
                     <Text style={styles.helperBadgeText}>{staff.name.slice(0, 2).toUpperCase()}</Text>
                   </View>
                   <View style={styles.summaryLineCopy}>
-                    <Text style={styles.summaryLineTitle}>{staff.name}</Text>
-                    <Caption>
+                    <Text numberOfLines={1} style={[styles.summaryLineTitle, isPhone ? styles.summaryLineTitlePhone : null]}>{staff.name}</Text>
+                    <Text numberOfLines={isPhone ? 1 : 2} style={[styles.summaryCaption, isPhone ? styles.summaryCaptionPhone : null]}>
                       {staff.category} for {employerUnits.map((unit) => unit.code).join(', ') || primaryUnitLabel}
-                    </Caption>
+                    </Text>
                   </View>
                 </View>
               ))}
@@ -1078,22 +1321,23 @@ export function ResidentHomeExperience({
           ) : (
             <Caption>No staff record linked yet. Add daily help from your resident profile.</Caption>
           )}
-          {contacts.map((contact) => (
-            <View key={contact.id} style={styles.contactRow}>
+          {contacts.slice(0, isPhone ? 1 : contacts.length).map((contact) => (
+            <View key={contact.id} style={[styles.contactRow, isPhone ? styles.contactRowPhone : null]}>
               <Text style={styles.contactName}>{contact.name}</Text>
-              <Caption>{contact.roleLabel} - {contact.phone}</Caption>
+              <Text numberOfLines={1} style={[styles.summaryCaption, isPhone ? styles.summaryCaptionPhone : null]}>{contact.roleLabel} - {contact.phone}</Text>
             </View>
           ))}
-          <Caption>
+          <Text numberOfLines={isPhone ? 1 : 2} style={[styles.summaryCaption, isPhone ? styles.summaryCaptionPhone : null]}>
             Vehicles saved: {vehicles.length}. Latest payment: {payments[0] ? formatShortDate(payments[0].payment.paidAt) : 'No record yet'}
-          </Caption>
+          </Text>
         </SurfaceCard>
+        </Pressable>
       </View>
     </>
   );
 }
 
-function AnnouncementTicker({ announcements, isCompact }: { announcements: any[]; isCompact: boolean }) {
+function AnnouncementTicker({ announcements, isCompact, isPhone }: { announcements: any[]; isCompact: boolean; isPhone?: boolean }) {
   const scrollX = useRef(new Animated.Value(0)).current;
   const latestAnnouncement = announcements[0];
 
@@ -1132,9 +1376,9 @@ function AnnouncementTicker({ announcements, isCompact }: { announcements: any[]
   const priorityBg = latestAnnouncement.priority === 'critical' ? '#FEE2E2' : latestAnnouncement.priority === 'high' ? '#FEF3C7' : '#DBEAFE';
 
   return (
-    <View style={[styles.announcementBanner, isCompact ? styles.announcementBannerCompact : null, { borderLeftColor: priorityTone, backgroundColor: priorityBg }]}>
-      <View style={styles.announcementTickerHeader}>
-        <View style={styles.announcementTickerLabelWrap}>
+    <View style={[styles.announcementBanner, isCompact ? styles.announcementBannerCompact : null, isPhone ? styles.announcementBannerPhone : null, { borderLeftColor: priorityTone, backgroundColor: priorityBg }]}>
+      <View style={[styles.announcementTickerHeader, isPhone ? styles.announcementTickerHeaderPhone : null]}>
+        <View style={[styles.announcementTickerLabelWrap, isPhone ? styles.announcementTickerLabelWrapPhone : null]}>
           <Text style={styles.announcementTickerLabel}>📢 Latest Announcement</Text>
           <View style={[styles.announcementPriorityBadge, { backgroundColor: priorityTone }]}>
             <Text style={styles.announcementPriorityText}>{latestAnnouncement.priority.toUpperCase()}</Text>
@@ -1142,14 +1386,25 @@ function AnnouncementTicker({ announcements, isCompact }: { announcements: any[]
         </View>
         <Text style={styles.announcementTickerMeta}>{formatShortDate(latestAnnouncement.createdAt)}</Text>
       </View>
-      <View style={styles.announcementTickerContent}>
-        <View style={styles.announcementTickerScrollMask}>
-          <Animated.View style={[styles.announcementTickerScrollContent, { transform: [{ translateX: scrollX }] }]}>
-            <Text style={styles.announcementTickerTitle} numberOfLines={1}>{latestAnnouncement.title}</Text>
-            <Text style={styles.announcementTickerBody} numberOfLines={2}>{latestAnnouncement.body}</Text>
-          </Animated.View>
+      {isPhone ? (
+        <View style={styles.announcementTickerContent}>
+          <Text style={[styles.announcementTickerTitle, styles.announcementTickerTitlePhone]} numberOfLines={2}>
+            {latestAnnouncement.title}
+          </Text>
+          <Text style={[styles.announcementTickerBody, styles.announcementTickerBodyPhone]} numberOfLines={3}>
+            {latestAnnouncement.body}
+          </Text>
         </View>
-      </View>
+      ) : (
+        <View style={styles.announcementTickerContent}>
+          <View style={styles.announcementTickerScrollMask}>
+            <Animated.View style={[styles.announcementTickerScrollContent, { transform: [{ translateX: scrollX }] }]}> 
+              <Text style={styles.announcementTickerTitle} numberOfLines={1}>{latestAnnouncement.title}</Text>
+              <Text style={styles.announcementTickerBody} numberOfLines={2}>{latestAnnouncement.body}</Text>
+            </Animated.View>
+          </View>
+        </View>
+      )}
     </View>
   );
 }
@@ -1170,6 +1425,7 @@ function TopCategoryCard({
   active,
   onPress,
   compact,
+  phone,
 }: {
   label: string;
   subtitle: string;
@@ -1178,6 +1434,7 @@ function TopCategoryCard({
   active: boolean;
   onPress: () => void;
   compact?: boolean;
+  phone?: boolean;
 }) {
   const toneStyle = accentStyles[tone];
 
@@ -1187,15 +1444,27 @@ function TopCategoryCard({
       style={(state) => [
         styles.topCategoryCard,
         compact ? styles.topCategoryCardCompact : null,
+        phone ? styles.topCategoryCardPhone : null,
         active ? styles.topCategoryCardActive : null,
         (state as { hovered?: boolean }).hovered ? styles.hoverLift : null,
         state.pressed ? styles.pressDip : null,
       ]}
     >
-      <View style={[styles.topCategoryBadge, { backgroundColor: toneStyle.badgeBackground }]}>
+      <View style={[styles.topCategoryBadge, phone ? styles.topCategoryBadgePhone : null, { backgroundColor: toneStyle.badgeBackground }]}> 
         <ModuleGlyph module={badge} color={toneStyle.badgeText} size="md" />
       </View>
-      <Text style={[styles.topCategoryTitle, active ? styles.topCategoryTitleActive : null]}>{label}</Text>
+      <Text
+        style={[
+          styles.topCategoryTitle,
+          phone ? styles.topCategoryTitlePhone : null,
+          active ? styles.topCategoryTitleActive : null,
+        ]}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.85}
+      >
+        {label}
+      </Text>
       {!compact ? <Caption style={styles.topCategorySubtitle}>{subtitle}</Caption> : null}
     </Pressable>
   );
@@ -1208,6 +1477,9 @@ function CompactHubTile({
   tone,
   statusLabel,
   onPress,
+  phone,
+  dense,
+  minimal,
 }: {
   label: string;
   subtitle: string;
@@ -1215,16 +1487,34 @@ function CompactHubTile({
   tone: AccentTone;
   statusLabel?: string;
   onPress: () => void;
+  phone?: boolean;
+  dense?: boolean;
+  minimal?: boolean;
 }) {
   const toneStyle = accentStyles[tone];
+  const metricValue = statusLabel || subtitle;
 
   return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.compactHubTile, pressed ? styles.pressed : null]}>
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.compactHubTile,
+        phone ? styles.compactHubTilePhone : null,
+        dense ? styles.compactHubTileDensePhone : null,
+        minimal ? styles.compactHubTileMinimalPhone : null,
+        pressed ? styles.pressed : null,
+      ]}
+    >
       <View style={styles.compactHubTileTopRow}>
-        <View style={[styles.compactHubTileBadge, { backgroundColor: toneStyle.badgeBackground }]}>
+        <View style={[
+          styles.compactHubTileBadge,
+          phone ? styles.compactHubTileBadgePhone : null,
+          dense ? styles.compactHubTileBadgeDensePhone : null,
+          { backgroundColor: toneStyle.badgeBackground },
+        ]}> 
           <ModuleGlyph module={badge} color={toneStyle.badgeText} size="md" />
         </View>
-        {statusLabel ? (
+        {statusLabel && !minimal ? (
           <View style={[styles.compactHubTileStatus, { backgroundColor: toneStyle.badgeBackground }]}>
             <Text style={[styles.compactHubTileStatusText, { color: toneStyle.badgeText }]} numberOfLines={1}>
               {statusLabel}
@@ -1232,8 +1522,31 @@ function CompactHubTile({
           </View>
         ) : null}
       </View>
-      <Text style={styles.compactHubTileTitle} numberOfLines={2}>{label}</Text>
-      <Text style={styles.compactHubTileSubtitle} numberOfLines={2}>{subtitle}</Text>
+      <Text style={[
+        styles.compactHubTileTitle,
+        phone ? styles.compactHubTileTitlePhone : null,
+        dense ? styles.compactHubTileTitleDensePhone : null,
+      ]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
+        {label}
+      </Text>
+      {minimal ? (
+        <Text style={[
+          styles.compactHubTileMetric,
+          phone ? styles.compactHubTileMetricPhone : null,
+          dense ? styles.compactHubTileMetricDensePhone : null,
+          { color: toneStyle.badgeText },
+        ]} numberOfLines={1}>
+          {metricValue}
+        </Text>
+      ) : (
+        <Text style={[
+          styles.compactHubTileSubtitle,
+          phone ? styles.compactHubTileSubtitlePhone : null,
+          dense ? styles.compactHubTileSubtitleDensePhone : null,
+        ]} numberOfLines={phone ? 1 : dense ? 1 : 2} adjustsFontSizeToFit minimumFontScale={0.8}>
+          {subtitle}
+        </Text>
+      )}
     </Pressable>
   );
 }
@@ -1327,20 +1640,20 @@ function ConversationPreviewCard({
   );
 }
 
-function ActionCard({
+function QuickActionCard({
   title,
-  body,
+  detail,
   module,
   tone,
   onPress,
-  compact,
+  phone,
 }: {
   title: string;
-  body: string;
+  detail: string;
   module: string;
   tone: AccentTone;
   onPress: () => void;
-  compact?: boolean;
+  phone?: boolean;
 }) {
   const toneStyle = accentStyles[tone];
 
@@ -1349,16 +1662,18 @@ function ActionCard({
       onPress={onPress}
       style={(state) => [
         styles.actionCard,
-        compact ? styles.actionCardCompact : null,
+        phone ? styles.actionCardPhone : null,
         (state as { hovered?: boolean }).hovered ? styles.hoverLift : null,
         state.pressed ? styles.pressDip : null,
       ]}
     >
-      <View style={[styles.actionCardArt, { backgroundColor: toneStyle.badgeBackground }]}>
+      <View style={[styles.actionCardArt, phone ? styles.actionCardArtPhone : null, { backgroundColor: toneStyle.badgeBackground }]}> 
         <ModuleGlyph module={module} color={toneStyle.badgeText} size="lg" />
       </View>
-      <Text style={styles.actionCardTitle}>{title}</Text>
-      <Caption>{body}</Caption>
+      <Text style={[styles.actionCardTitle, phone ? styles.actionCardTitlePhone : null]}>{title}</Text>
+      <Text style={[styles.actionCardDetail, phone ? styles.actionCardDetailPhone : null, { color: toneStyle.badgeText }]} numberOfLines={1}>
+        {detail}
+      </Text>
     </Pressable>
   );
 }
@@ -1371,6 +1686,7 @@ function PromoCard({
   tone,
   onPress,
   compact,
+  phone,
 }: {
   title: string;
   highlight: string;
@@ -1379,6 +1695,7 @@ function PromoCard({
   tone: AccentTone;
   onPress: () => void;
   compact?: boolean;
+  phone?: boolean;
 }) {
   const toneStyle = accentStyles[tone];
 
@@ -1388,6 +1705,7 @@ function PromoCard({
       style={({ pressed }) => [
         styles.promoCard,
         compact ? styles.promoCardCompact : null,
+        phone ? styles.promoCardPhone : null,
         {
           backgroundColor: tone === 'accent' ? '#19324A' : '#F7FAFF',
           borderColor: tone === 'accent' ? '#274767' : toneStyle.borderColor,
@@ -1412,6 +1730,7 @@ function NoticeCard({
   tone,
   onPress,
   compact,
+  phone,
 }: {
   title: string;
   subtitle: string;
@@ -1419,6 +1738,7 @@ function NoticeCard({
   tone: AccentTone;
   onPress: () => void;
   compact?: boolean;
+  phone?: boolean;
 }) {
   const toneStyle = accentStyles[tone];
 
@@ -1428,16 +1748,17 @@ function NoticeCard({
       style={({ pressed }) => [
         styles.noticeCard,
         compact ? styles.noticeCardCompact : null,
+        phone ? styles.noticeCardPhone : null,
         { borderColor: toneStyle.borderColor },
         pressed ? styles.pressed : null,
       ]}
     >
       <View style={styles.noticeCardHeader}>
         <Text style={styles.noticeCardEyebrow}>NOTICE</Text>
-        <Text style={styles.noticeCardMeta}>{meta}</Text>
+        <Text numberOfLines={1} style={styles.noticeCardMeta}>{meta}</Text>
       </View>
-      <Text style={styles.noticeCardTitle}>{title}</Text>
-      <Caption>{subtitle}</Caption>
+      <Text numberOfLines={phone ? 2 : 3} style={[styles.noticeCardTitle, phone ? styles.noticeCardTitlePhone : null]}>{title}</Text>
+      <Text numberOfLines={phone ? 2 : 3} style={styles.noticeCardCaption}>{subtitle}</Text>
     </Pressable>
   );
 }
@@ -1573,6 +1894,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.sm,
   },
+  categoryStripPhone: {
+    gap: 6,
+    borderRadius: 22,
+    paddingHorizontal: 6,
+    paddingVertical: 6,
+  },
   topCategoryCard: {
     flex: 1,
     minWidth: 120,
@@ -1590,9 +1917,17 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
     borderRadius: 22,
   },
+  topCategoryCardPhone: {
+    flex: 0,
+    flexBasis: '23.5%',
+    maxWidth: '23.5%',
+    paddingHorizontal: 3,
+    paddingVertical: 4,
+    borderRadius: 14,
+  },
   topCategoryCardActive: {
-    backgroundColor: palette.surface,
     ...shadow.card,
+    backgroundColor: '#FFFCF8',
   },
   topCategoryBadge: {
     width: 48,
@@ -1601,14 +1936,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  topCategoryBadgeText: {
-    fontSize: 13,
-    fontWeight: '800',
+  topCategoryBadgePhone: {
+    width: 38,
+    height: 38,
+    borderRadius: 14,
   },
   topCategoryTitle: {
     color: '#3E4755',
     fontSize: 17,
     fontWeight: '700',
+  },
+  topCategoryTitlePhone: {
+    fontSize: 11,
   },
   topCategoryTitleActive: {
     color: palette.ink,
@@ -1619,14 +1958,20 @@ const styles = StyleSheet.create({
   compactHubCard: {
     gap: spacing.md,
     padding: spacing.md,
-    borderRadius: 24,
     backgroundColor: '#FFFCF8',
+  },
+  compactHubCardPhone: {
+    borderRadius: 20,
   },
   compactHubHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     gap: spacing.sm,
+  },
+  compactHubHeaderPhone: {
+    alignItems: 'flex-start',
+    gap: 6,
   },
   compactHubHeaderCopy: {
     flex: 1,
@@ -1637,22 +1982,47 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '800',
   },
+  compactHubTitlePhone: {
+    fontSize: 16,
+  },
   compactHubGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.sm,
+    justifyContent: 'space-between',
+  },
+  compactHubGridPhone: {
+    gap: 6,
+  },
+  compactHubGridDensePhone: {
+    gap: 4,
   },
   compactHubTile: {
     flexBasis: '31%',
-    flexGrow: 1,
-    minWidth: 0,
     gap: spacing.xs,
-    padding: spacing.sm,
     borderRadius: 20,
     borderWidth: 1,
     borderColor: '#E9DECF',
     backgroundColor: '#FFFFFF',
-    minHeight: 132,
+    padding: spacing.sm,
+  },
+  compactHubTilePhone: {
+    flexBasis: '48%',
+    padding: 8,
+    borderRadius: 16,
+    minHeight: 94,
+  },
+  compactHubTileDensePhone: {
+    flexBasis: '31.5%',
+    flexGrow: 0,
+    maxWidth: '31.5%',
+    minHeight: 76,
+    gap: 3,
+    padding: 6,
+    borderRadius: 12,
+  },
+  compactHubTileMinimalPhone: {
+    justifyContent: 'space-between',
   },
   compactHubTileTopRow: {
     flexDirection: 'row',
@@ -1667,14 +2037,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  compactHubTileBadgePhone: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+  },
+  compactHubTileBadgeDensePhone: {
+    width: 28,
+    height: 28,
+    borderRadius: 10,
+  },
   compactHubTileStatus: {
-    maxWidth: '58%',
+    maxWidth: '44%',
     borderRadius: radius.pill,
-    paddingHorizontal: 8,
-    paddingVertical: 5,
+    paddingHorizontal: 6,
+    paddingVertical: 3,
   },
   compactHubTileStatusText: {
-    fontSize: 10,
+    fontSize: 9,
     fontWeight: '800',
   },
   compactHubTileTitle: {
@@ -1683,10 +2063,39 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     fontWeight: '800',
   },
+  compactHubTileTitlePhone: {
+    fontSize: 12,
+    lineHeight: 14,
+  },
+  compactHubTileTitleDensePhone: {
+    fontSize: 10,
+    lineHeight: 12,
+  },
   compactHubTileSubtitle: {
     color: palette.mutedInk,
     fontSize: 11,
     lineHeight: 15,
+  },
+  compactHubTileSubtitlePhone: {
+    fontSize: 9,
+    lineHeight: 11,
+  },
+  compactHubTileSubtitleDensePhone: {
+    fontSize: 8,
+    lineHeight: 10,
+  },
+  compactHubTileMetric: {
+    fontSize: 18,
+    lineHeight: 20,
+    fontWeight: '900',
+  },
+  compactHubTileMetricPhone: {
+    fontSize: 16,
+    lineHeight: 18,
+  },
+  compactHubTileMetricDensePhone: {
+    fontSize: 15,
+    lineHeight: 16,
   },
   superBoard: {
     gap: spacing.lg,
@@ -1990,7 +2399,10 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   actionsPanel: {
-    gap: spacing.md,
+    gap: spacing.sm,
+  },
+  actionsPanelPhone: {
+    gap: spacing.xs,
   },
   chatActivityPanel: {
     gap: spacing.md,
@@ -2068,6 +2480,10 @@ const styles = StyleSheet.create({
   panelHeaderCompact: {
     alignItems: 'flex-start',
   },
+  panelHeaderPhone: {
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
   rowBetween: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -2085,6 +2501,9 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '800',
   },
+  panelTitlePhone: {
+    fontSize: 17,
+  },
   seeAllLink: {
     paddingVertical: spacing.xs,
   },
@@ -2092,6 +2511,9 @@ const styles = StyleSheet.create({
     color: palette.mutedInk,
     fontSize: 14,
     fontWeight: '700',
+  },
+  seeAllTextPhone: {
+    fontSize: 12,
   },
   actionScroller: {
     gap: spacing.sm,
@@ -2123,25 +2545,41 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     flex: 1,
   },
+  actionGridPhone: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
   actionCard: {
-    width: 210,
-    borderRadius: 24,
+    width: 168,
+    minHeight: 118,
+    borderRadius: 20,
     borderWidth: 1,
     borderColor: '#E9DECF',
     backgroundColor: '#FFFDFC',
-    padding: spacing.md,
-    gap: spacing.sm,
+    padding: spacing.sm,
+    gap: spacing.xs,
     ...shadow.card,
   },
-  actionCardCompact: {
-    width: 198,
+  actionCardPhone: {
+    width: '48.5%',
+    maxWidth: '48.5%',
+    minWidth: 0,
+    padding: spacing.xs,
+    borderRadius: 16,
+    gap: spacing.xs,
   },
   actionCardArt: {
-    height: 82,
-    borderRadius: 18,
+    height: 54,
+    borderRadius: 16,
     alignItems: 'flex-start',
-    justifyContent: 'flex-end',
-    padding: spacing.md,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.sm,
+  },
+  actionCardArtPhone: {
+    height: 42,
+    borderRadius: 14,
+    padding: spacing.xs,
   },
   actionCardArtText: {
     fontSize: 12,
@@ -2151,8 +2589,19 @@ const styles = StyleSheet.create({
   },
   actionCardTitle: {
     color: palette.ink,
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '800',
+  },
+  actionCardTitlePhone: {
+    fontSize: 11,
+    lineHeight: 14,
+  },
+  actionCardDetail: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  actionCardDetailPhone: {
+    fontSize: 10,
   },
   hoverLift: {
     transform: [{ translateY: -4 }, { scale: 1.01 }],
@@ -2163,6 +2612,9 @@ const styles = StyleSheet.create({
     opacity: 0.96,
   },
   promoScroller: {
+    gap: spacing.sm,
+  },
+  promoStackPhone: {
     gap: spacing.sm,
   },
   promoCard: {
@@ -2176,6 +2628,11 @@ const styles = StyleSheet.create({
   promoCardCompact: {
     width: 240,
     padding: spacing.lg,
+  },
+  promoCardPhone: {
+    width: '100%',
+    padding: spacing.md,
+    borderRadius: 22,
   },
   promoTitle: {
     color: palette.ink,
@@ -2220,8 +2677,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFF9DE',
     borderColor: '#F2E6B9',
   },
+  noticePanelPhone: {
+    gap: spacing.sm,
+  },
   noticeScroller: {
     gap: spacing.sm,
+  },
+  noticeScrollerPhone: {
+    gap: spacing.xs,
   },
   noticeCard: {
     width: 240,
@@ -2233,6 +2696,12 @@ const styles = StyleSheet.create({
   },
   noticeCardCompact: {
     width: 216,
+  },
+  noticeCardPhone: {
+    width: 186,
+    borderRadius: 18,
+    padding: spacing.sm,
+    gap: spacing.xs,
   },
   noticeCardHeader: {
     flexDirection: 'row',
@@ -2255,6 +2724,14 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: '800',
   },
+  noticeCardTitlePhone: {
+    fontSize: 15,
+  },
+  noticeCardCaption: {
+    color: palette.mutedInk,
+    fontSize: 13,
+    lineHeight: 18,
+  },
   summaryRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -2264,17 +2741,30 @@ const styles = StyleSheet.create({
     flexDirection: 'column',
     gap: spacing.md,
   },
+  summaryRowPhone: {
+    gap: spacing.sm,
+  },
   summaryCard: {
+    flex: 1,
+    minWidth: 280,
+  },
+  summaryPressable: {
     flex: 1,
     minWidth: 280,
   },
   summaryCardCompact: {
     minWidth: 0,
   },
+  summaryCardPhone: {
+    padding: spacing.sm,
+  },
   summaryTitle: {
     color: palette.ink,
     fontSize: 18,
     fontWeight: '800',
+  },
+  summaryTitlePhone: {
+    fontSize: 16,
   },
   summaryStack: {
     gap: spacing.sm,
@@ -2300,6 +2790,18 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
   },
+  summaryLineTitlePhone: {
+    fontSize: 14,
+  },
+  summaryCaption: {
+    color: palette.mutedInk,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  summaryCaptionPhone: {
+    fontSize: 12,
+    lineHeight: 16,
+  },
   helperBadge: {
     width: 42,
     height: 42,
@@ -2318,6 +2820,9 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#EEE4D8',
     gap: 2,
+  },
+  contactRowPhone: {
+    paddingTop: spacing.xs,
   },
   contactName: {
     color: palette.ink,
@@ -2338,6 +2843,10 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: spacing.sm,
   },
+  announcementBannerPhone: {
+    borderRadius: 18,
+    padding: spacing.sm,
+  },
   announcementBannerEmpty: {
     backgroundColor: '#F3F4F6',
     borderLeftColor: '#9CA3AF',
@@ -2348,10 +2857,19 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: spacing.xs,
   },
+  announcementTickerHeaderPhone: {
+    alignItems: 'flex-start',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
   announcementTickerLabelWrap: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
+  },
+  announcementTickerLabelWrapPhone: {
+    flexWrap: 'wrap',
+    gap: spacing.xs,
   },
   announcementTickerLabel: {
     color: palette.ink,
@@ -2388,9 +2906,19 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     marginRight: spacing.md,
   },
+  announcementTickerTitlePhone: {
+    marginRight: 0,
+    marginBottom: 4,
+    fontSize: 15,
+    lineHeight: 20,
+  },
   announcementTickerBody: {
     color: palette.mutedInk,
     fontSize: 14,
     fontWeight: '400',
+  },
+  announcementTickerBodyPhone: {
+    fontSize: 13,
+    lineHeight: 18,
   },
 });

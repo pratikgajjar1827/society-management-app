@@ -20,6 +20,7 @@ import {
   getGuardRosterForSociety,
   getInvoiceCollectionDirectory,
   getJoinRequestsForSociety,
+  getMeetingsForSociety,
   getPaymentsForSociety,
   getResidentsDirectory,
   getSelectedSociety,
@@ -38,6 +39,7 @@ type AdminTab =
   | 'helpdesk'
   | 'security'
   | 'announcements'
+  | 'meetings'
   | 'audit';
 type AccentTone = 'accent' | 'blue' | 'gold' | 'primary';
 type HomeHubSectionKey = 'residents' | 'billing' | 'security' | 'operations';
@@ -47,6 +49,7 @@ type HubTile = {
   badge: string;
   tab: AdminTab;
   tone: AccentTone;
+  statusLabel?: string;
 };
 type HubShortcut = {
   label: string;
@@ -123,6 +126,7 @@ export function AdminHomeExperience({
   const [activeHub, setActiveHub] = useState<HomeHubSectionKey>('operations');
   const { width } = useWindowDimensions();
   const isCompact = width < 768;
+  const isPhone = width < 420;
   const user = getCurrentUser(state.data, userId);
   const society = getSelectedSociety(state.data, societyId);
 
@@ -141,6 +145,8 @@ export function AdminHomeExperience({
   const amenities = getAmenitiesForSociety(state.data, societyId);
   const bookings = getBookingsForSociety(state.data, societyId);
   const pendingBookings = bookings.filter(({ booking }) => booking.status === 'pending').length;
+  const meetings = getMeetingsForSociety(state.data, societyId);
+  const scheduledMeetings = meetings.filter((m) => m.status === 'scheduled').length;
   const payments = getPaymentsForSociety(state.data, societyId);
   const pendingPayments = payments.filter((payment) => payment.status === 'pending').length;
   const invoiceDirectory = getInvoiceCollectionDirectory(state.data, societyId);
@@ -209,39 +215,40 @@ export function AdminHomeExperience({
   ];
 
   const residentsTiles: HubTile[] = [
-    { label: 'Access claims', subtitle: pendingJoinRequests.length > 0 ? `${pendingJoinRequests.length} pending` : 'No pending claim', badge: 'AC', tab: 'residents', tone: 'accent' },
-    { label: 'Residents', subtitle: `${residentsCount} linked members`, badge: 'RD', tab: 'residents', tone: 'blue' },
-    { label: 'Unit directory', subtitle: `${residentsDirectory.length} ${unitLabel}`, badge: 'UT', tab: 'residents', tone: 'primary' },
-    { label: 'Staff links', subtitle: `${staffDirectory.length} records`, badge: 'ST', tab: 'security', tone: 'gold' },
-    { label: 'Complaints', subtitle: `${complaints.length} total tickets`, badge: 'CP', tab: 'helpdesk', tone: 'accent' },
-    { label: 'Announcements', subtitle: latestAnnouncement ? formatShortDate(latestAnnouncement.createdAt) : 'No update yet', badge: 'NT', tab: 'announcements', tone: 'blue' },
+    { label: 'Claims', subtitle: pendingJoinRequests.length > 0 ? `${pendingJoinRequests.length} pending` : 'No pending claim', badge: 'AC', tab: 'residents', tone: 'accent', statusLabel: String(pendingJoinRequests.length) },
+    { label: 'Residents', subtitle: `${residentsCount} linked members`, badge: 'RD', tab: 'residents', tone: 'blue', statusLabel: String(residentsCount) },
+    { label: 'Directory', subtitle: `${residentsDirectory.length} ${unitLabel}`, badge: 'UT', tab: 'residents', tone: 'primary', statusLabel: String(residentsDirectory.length) },
+    { label: 'Staff', subtitle: `${staffDirectory.length} records`, badge: 'ST', tab: 'security', tone: 'gold', statusLabel: String(staffDirectory.length) },
+    { label: 'Helpdesk', subtitle: `${complaints.length} total tickets`, badge: 'CP', tab: 'helpdesk', tone: 'accent', statusLabel: String(complaints.length) },
+    { label: 'Notices', subtitle: latestAnnouncement ? formatShortDate(latestAnnouncement.createdAt) : 'No update yet', badge: 'NT', tab: 'announcements', tone: 'blue', statusLabel: String(announcements.length) },
   ];
 
   const billingTiles: HubTile[] = [
-    { label: 'Collections', subtitle: `${overview.collectionRate}% rate`, badge: 'CL', tab: 'collections', tone: 'accent' },
-    { label: 'Overdue', subtitle: overdueCollectionCount > 0 ? `${overdueCollectionCount} invoices` : 'All clear', badge: 'DU', tab: 'collections', tone: 'gold' },
-    { label: 'Payment flags', subtitle: pendingPayments > 0 ? `${pendingPayments} pending` : 'No review queue', badge: 'PF', tab: 'collections', tone: 'blue' },
-    { label: 'Ledger', subtitle: `${payments.length} payment(s)`, badge: 'LG', tab: 'ledger', tone: 'primary' },
-    { label: 'Reminders', subtitle: remindersCount > 0 ? `${remindersCount} sent` : 'No reminder', badge: 'RM', tab: 'billing', tone: 'accent' },
-    { label: 'Billing setup', subtitle: 'Cycles and receiver details', badge: 'UP', tab: 'billing', tone: 'gold' },
+    { label: 'Collect', subtitle: `${overview.collectionRate}% rate`, badge: 'CL', tab: 'collections', tone: 'accent', statusLabel: `${overview.collectionRate}%` },
+    { label: 'Overdue', subtitle: overdueCollectionCount > 0 ? `${overdueCollectionCount} invoices` : 'All clear', badge: 'DU', tab: 'collections', tone: 'gold', statusLabel: String(overdueCollectionCount) },
+    { label: 'Flags', subtitle: pendingPayments > 0 ? `${pendingPayments} pending` : 'No review queue', badge: 'PF', tab: 'collections', tone: 'blue', statusLabel: String(pendingPayments) },
+    { label: 'Ledger', subtitle: `${payments.length} payment(s)`, badge: 'LG', tab: 'ledger', tone: 'primary', statusLabel: String(payments.length) },
+    { label: 'Reminders', subtitle: remindersCount > 0 ? `${remindersCount} sent` : 'No reminder', badge: 'RM', tab: 'billing', tone: 'accent', statusLabel: String(remindersCount) },
+    { label: 'Setup', subtitle: 'Cycles and receiver details', badge: 'UP', tab: 'billing', tone: 'gold', statusLabel: 'Live' },
   ];
 
   const securityTiles: HubTile[] = [
-    { label: 'Visitor passes', subtitle: scheduledVisitors > 0 ? `${scheduledVisitors} scheduled` : 'No active pass', badge: 'VP', tab: 'security', tone: 'gold' },
-    { label: 'Checked in', subtitle: checkedInVisitors > 0 ? `${checkedInVisitors} inside` : 'Gate is clear', badge: 'IN', tab: 'security', tone: 'blue' },
-    { label: 'Entry logs', subtitle: `${entryLogs.length} records`, badge: 'LG', tab: 'security', tone: 'primary' },
-    { label: 'Guard roster', subtitle: `${guards.length} guard(s)`, badge: 'GD', tab: 'security', tone: 'primary' },
-    { label: 'Staff KYC', subtitle: pendingStaffCount > 0 ? `${pendingStaffCount} pending` : 'All verified', badge: 'KY', tab: 'security', tone: 'accent' },
-    { label: 'Incidents', subtitle: securityComplaints.length > 0 ? `${securityComplaints.length} issues` : 'No security issue', badge: 'IS', tab: 'helpdesk', tone: 'blue' },
+    { label: 'Visitors', subtitle: scheduledVisitors > 0 ? `${scheduledVisitors} scheduled` : 'No active pass', badge: 'VP', tab: 'security', tone: 'gold', statusLabel: String(scheduledVisitors) },
+    { label: 'Inside', subtitle: checkedInVisitors > 0 ? `${checkedInVisitors} inside` : 'Gate is clear', badge: 'IN', tab: 'security', tone: 'blue', statusLabel: String(checkedInVisitors) },
+    { label: 'Logs', subtitle: `${entryLogs.length} records`, badge: 'LG', tab: 'security', tone: 'primary', statusLabel: String(entryLogs.length) },
+    { label: 'Guards', subtitle: `${guards.length} guard(s)`, badge: 'GD', tab: 'security', tone: 'primary', statusLabel: String(guards.length) },
+    { label: 'Staff KYC', subtitle: pendingStaffCount > 0 ? `${pendingStaffCount} pending` : 'All verified', badge: 'KY', tab: 'security', tone: 'accent', statusLabel: String(pendingStaffCount) },
+    { label: 'Issues', subtitle: securityComplaints.length > 0 ? `${securityComplaints.length} issues` : 'No security issue', badge: 'IS', tab: 'helpdesk', tone: 'blue', statusLabel: String(securityComplaints.length) },
   ];
 
   const operationsTiles: HubTile[] = [
-    { label: 'Helpdesk', subtitle: `${overview.openComplaints} open`, badge: 'HD', tab: 'helpdesk', tone: 'accent' },
-    { label: 'Amenities', subtitle: `${amenities.length} live`, badge: 'AM', tab: 'amenities', tone: 'gold' },
-    { label: 'Bookings', subtitle: pendingBookings > 0 ? `${pendingBookings} pending` : `${bookings.length} total`, badge: 'BK', tab: 'amenities', tone: 'blue' },
-    { label: 'Announcements', subtitle: `${announcements.length} published`, badge: 'AN', tab: 'announcements', tone: 'accent' },
-    { label: 'Audit trail', subtitle: `${auditEvents.length} events`, badge: 'AU', tab: 'audit', tone: 'primary' },
-    { label: 'Collections', subtitle: `${overview.collectionRate}% healthy`, badge: 'CL', tab: 'collections', tone: 'gold' },
+    { label: 'Helpdesk', subtitle: `${overview.openComplaints} open`, badge: 'HD', tab: 'helpdesk', tone: 'accent', statusLabel: String(overview.openComplaints) },
+    { label: 'Amenities', subtitle: `${amenities.length} live`, badge: 'AM', tab: 'amenities', tone: 'gold', statusLabel: String(amenities.length) },
+    { label: 'Bookings', subtitle: pendingBookings > 0 ? `${pendingBookings} pending` : `${bookings.length} total`, badge: 'BK', tab: 'amenities', tone: 'blue', statusLabel: String(bookings.length) },
+    { label: 'Meetings', subtitle: scheduledMeetings.length > 0 ? `${scheduledMeetings.length} scheduled` : `${meetings.length} total`, badge: 'MT', tab: 'meetings', tone: 'primary', statusLabel: String(meetings.length) },
+    { label: 'Notices', subtitle: `${announcements.length} published`, badge: 'AN', tab: 'announcements', tone: 'accent', statusLabel: String(announcements.length) },
+    { label: 'Audit', subtitle: `${auditEvents.length} events`, badge: 'AU', tab: 'audit', tone: 'primary', statusLabel: String(auditEvents.length) },
+    { label: 'Collect', subtitle: `${overview.collectionRate}% healthy`, badge: 'CL', tab: 'collections', tone: 'gold', statusLabel: `${overview.collectionRate}%` },
   ];
 
   const hubConfigs: Record<HomeHubSectionKey, HubConfig> = {
@@ -348,6 +355,7 @@ export function AdminHomeExperience({
   };
 
   const activeHubConfig = hubConfigs[activeHub];
+  const useDensePhoneTiles = isPhone && activeHubConfig.tiles.length >= 6;
 
   return (
     <>
@@ -383,7 +391,7 @@ export function AdminHomeExperience({
       </View>
       ) : null}
 
-      <View style={[styles.categoryStrip, isCompact ? styles.categoryStripCompact : null]}>
+      <View style={[styles.categoryStrip, isCompact ? styles.categoryStripCompact : null, isPhone ? styles.categoryStripPhone : null]}>
         {topCategories.map((category) => (
           <TopCategoryCard
             key={category.label}
@@ -394,10 +402,39 @@ export function AdminHomeExperience({
             active={category.active}
             onPress={category.onPress}
             compact={isCompact}
+            phone={isPhone}
           />
         ))}
       </View>
 
+      {isCompact ? (
+        <SurfaceCard style={[styles.compactHubCard, isPhone ? styles.compactHubCardPhone : null]}>
+          <View style={[styles.compactHubHeader, isPhone ? styles.compactHubHeaderPhone : null]}>
+            <View style={styles.compactHubHeaderCopy}>
+              <Text style={[styles.compactHubTitle, isPhone ? styles.compactHubTitlePhone : null]}>{activeHubConfig.pillLabel}</Text>
+              <Caption>{activeHubConfig.metaValue} {activeHubConfig.metaLabel}</Caption>
+            </View>
+            <Pill label={activeHubConfig.metaValue} tone={activeHubConfig.pillTone} />
+          </View>
+          <View style={[styles.compactHubGrid, isPhone ? styles.compactHubGridPhone : null, useDensePhoneTiles ? styles.compactHubGridDensePhone : null]}>
+            {activeHubConfig.tiles.map((tile) => (
+              <BoardTile
+                key={tile.label}
+                label={tile.label}
+                subtitle={tile.subtitle}
+                badge={tile.badge}
+                tone={tile.tone}
+                statusLabel={tile.statusLabel}
+                onPress={() => onOpenTab(tile.tab)}
+                compact={isCompact}
+                phone={isPhone}
+                dense={useDensePhoneTiles}
+                minimal={isPhone}
+              />
+            ))}
+          </View>
+        </SurfaceCard>
+      ) : (
       <SurfaceCard style={[styles.superBoard, isCompact ? styles.superBoardCompact : null]}>
         <View style={[styles.superBoardHeader, isCompact ? styles.superBoardHeaderCompact : null]}>
           <View style={[styles.superBoardHeaderCopy, isCompact ? styles.superBoardHeaderCopyCompact : null]}>
@@ -426,6 +463,7 @@ export function AdminHomeExperience({
                 subtitle={tile.subtitle}
                 badge={tile.badge}
                 tone={tile.tone}
+                statusLabel={tile.statusLabel}
                 onPress={() => onOpenTab(tile.tab)}
                 compact={isCompact}
               />
@@ -490,72 +528,92 @@ export function AdminHomeExperience({
           </View>
         </View>
       </SurfaceCard>
+      )}
 
-      <SurfaceCard style={styles.actionsPanel}>
-        <View style={[styles.panelHeader, isCompact ? styles.panelHeaderCompact : null]}>
+      <SurfaceCard style={[styles.actionsPanel, isPhone ? styles.actionsPanelPhone : null]}>
+        <View style={[styles.panelHeader, isCompact ? styles.panelHeaderCompact : null, isPhone ? styles.panelHeaderPhone : null]}>
           <View style={styles.panelHeaderLeft}>
-            <Text style={styles.panelTitle}>Admin actions</Text>
+            <Text style={[styles.panelTitle, isPhone ? styles.panelTitlePhone : null]}>Admin actions</Text>
             <Pill label="Live" tone="accent" />
           </View>
           <Pressable onPress={() => onOpenTab('audit')} style={({ pressed }) => [styles.seeAllLink, pressed ? styles.pressed : null]}>
-            <Text style={styles.seeAllText}>See all</Text>
+            <Text style={[styles.seeAllText, isPhone ? styles.seeAllTextPhone : null]}>See all</Text>
           </Pressable>
         </View>
 
-        <ScrollView horizontal contentContainerStyle={styles.actionScroller} showsHorizontalScrollIndicator={false}>
-          {actionCards.map((card) => (
-            <ActionCard
-              key={card.title}
-              title={card.title}
-              body={card.body}
-              metric={card.metric}
-              module={card.module}
-              tone={card.tone}
-              onPress={card.onPress}
-              compact={isCompact}
-            />
-          ))}
-        </ScrollView>
+        {isPhone ? (
+          <View style={styles.actionGridPhone}>
+            {actionCards.map((card) => (
+              <ActionCard
+                key={card.title}
+                title={card.title}
+                body={card.body}
+                metric={card.metric}
+                module={card.module}
+                tone={card.tone}
+                onPress={card.onPress}
+                compact={isCompact}
+                phone={isPhone}
+              />
+            ))}
+          </View>
+        ) : (
+          <ScrollView horizontal contentContainerStyle={styles.actionScroller} showsHorizontalScrollIndicator={false}>
+            {actionCards.map((card) => (
+              <ActionCard
+                key={card.title}
+                title={card.title}
+                body={card.body}
+                metric={card.metric}
+                module={card.module}
+                tone={card.tone}
+                onPress={card.onPress}
+                compact={isCompact}
+                phone={isPhone}
+              />
+            ))}
+          </ScrollView>
+        )}
       </SurfaceCard>
 
-      <View style={[styles.summaryRow, isCompact ? styles.summaryRowCompact : null]}>
-        <SurfaceCard style={[styles.summaryCard, isCompact ? styles.summaryCardCompact : null]}>
-          <Text style={styles.summaryTitle}>Live admin attention</Text>
+      <View style={[styles.summaryRow, isCompact ? styles.summaryRowCompact : null, isPhone ? styles.summaryRowPhone : null]}>
+        <SurfaceCard style={[styles.summaryCard, isCompact ? styles.summaryCardCompact : null, isPhone ? styles.summaryCardPhone : null]}>
+          <Text style={[styles.summaryTitle, isPhone ? styles.summaryTitlePhone : null]}>Live admin attention</Text>
           <View style={styles.summaryStack}>
             <View style={styles.summaryLine}>
               <View style={styles.summaryDot} />
               <View style={styles.summaryLineCopy}>
-                <Text style={styles.summaryLineTitle}>Pending approvals</Text>
-                <Caption>{overview.pendingApprovals} queue item(s) need action right now.</Caption>
+                <Text numberOfLines={1} style={[styles.summaryLineTitle, isPhone ? styles.summaryLineTitlePhone : null]}>Pending approvals</Text>
+                <Text numberOfLines={isPhone ? 1 : 2} style={[styles.summaryCaption, isPhone ? styles.summaryCaptionPhone : null]}>{overview.pendingApprovals} queue item(s) need action right now.</Text>
               </View>
             </View>
             <View style={styles.summaryLine}>
               <View style={styles.summaryDot} />
               <View style={styles.summaryLineCopy}>
-                <Text style={styles.summaryLineTitle}>Collection health</Text>
-                <Caption>{overview.collectionRate}% collected with {overdueCollectionCount} overdue invoice(s).</Caption>
+                <Text numberOfLines={1} style={[styles.summaryLineTitle, isPhone ? styles.summaryLineTitlePhone : null]}>Collection health</Text>
+                <Text numberOfLines={isPhone ? 1 : 2} style={[styles.summaryCaption, isPhone ? styles.summaryCaptionPhone : null]}>{overview.collectionRate}% collected with {overdueCollectionCount} overdue invoice(s).</Text>
               </View>
             </View>
             <View style={styles.summaryLine}>
               <View style={styles.summaryDot} />
               <View style={styles.summaryLineCopy}>
-                <Text style={styles.summaryLineTitle}>Security readiness</Text>
-                <Caption>{guards.length} guards, {scheduledVisitors} scheduled visitor pass(es), {pendingStaffCount} staff KYC pending.</Caption>
+                <Text numberOfLines={1} style={[styles.summaryLineTitle, isPhone ? styles.summaryLineTitlePhone : null]}>Security readiness</Text>
+                <Text numberOfLines={isPhone ? 1 : 2} style={[styles.summaryCaption, isPhone ? styles.summaryCaptionPhone : null]}>{guards.length} guards, {scheduledVisitors} scheduled visitor pass(es), {pendingStaffCount} staff KYC pending.</Text>
               </View>
             </View>
           </View>
         </SurfaceCard>
 
-        <SurfaceCard style={[styles.summaryCard, isCompact ? styles.summaryCardCompact : null]}>
-          <Text style={styles.summaryTitle}>Communication and audit pulse</Text>
+        <SurfaceCard style={[styles.summaryCard, isCompact ? styles.summaryCardCompact : null, isPhone ? styles.summaryCardPhone : null]}>
+          <Text style={[styles.summaryTitle, isPhone ? styles.summaryTitlePhone : null]}>Communication and audit pulse</Text>
           {latestAnnouncement ? (
             <View style={styles.summaryLine}>
               <View style={styles.helperBadge}>
                 <Text style={styles.helperBadgeText}>AN</Text>
               </View>
               <View style={styles.summaryLineCopy}>
-                <Text style={styles.summaryLineTitle}>{latestAnnouncement.title}</Text>
-                <Caption>Latest notice on {formatShortDate(latestAnnouncement.createdAt)}</Caption>
+                <Text numberOfLines={1} style={[styles.summaryLineTitle, isPhone ? styles.summaryLineTitlePhone : null]}>{latestAnnouncement.title}</Text>
+                <Text numberOfLines={1} style={[styles.summaryCaption, isPhone ? styles.summaryCaptionPhone : null]}>Latest notice on {formatShortDate(latestAnnouncement.createdAt)}</Text>
               </View>
             </View>
           ) : (
@@ -567,14 +625,14 @@ export function AdminHomeExperience({
                 <Text style={styles.helperBadgeText}>AU</Text>
               </View>
               <View style={styles.summaryLineCopy}>
-                <Text style={styles.summaryLineTitle}>{latestAuditEvent.title}</Text>
-                <Caption>{formatShortDate(latestAuditEvent.createdAt)}</Caption>
+                <Text numberOfLines={1} style={[styles.summaryLineTitle, isPhone ? styles.summaryLineTitlePhone : null]}>{latestAuditEvent.title}</Text>
+                <Text numberOfLines={1} style={[styles.summaryCaption, isPhone ? styles.summaryCaptionPhone : null]}>{formatShortDate(latestAuditEvent.createdAt)}</Text>
               </View>
             </View>
           ) : null}
-          <Caption>
+          <Text numberOfLines={isPhone ? 1 : 2} style={[styles.summaryCaption, isPhone ? styles.summaryCaptionPhone : null]}>
             Open complaints: {overview.openComplaints}. Pending bookings: {pendingBookings}. Published notices: {announcements.length}.
-          </Caption>
+          </Text>
         </SurfaceCard>
       </View>
     </>
@@ -597,6 +655,7 @@ function TopCategoryCard({
   active,
   onPress,
   compact,
+  phone,
 }: {
   label: string;
   subtitle: string;
@@ -605,6 +664,7 @@ function TopCategoryCard({
   active: boolean;
   onPress: () => void;
   compact?: boolean;
+  phone?: boolean;
 }) {
   const toneStyle = accentStyles[tone];
 
@@ -614,16 +674,17 @@ function TopCategoryCard({
       style={(state) => [
         styles.topCategoryCard,
         compact ? styles.topCategoryCardCompact : null,
+        phone ? styles.topCategoryCardPhone : null,
         active ? styles.topCategoryCardActive : null,
         (state as { hovered?: boolean }).hovered ? styles.hoverLift : null,
         state.pressed ? styles.pressDip : null,
       ]}
     >
-      <View style={[styles.topCategoryBadge, { backgroundColor: toneStyle.badgeBackground }]}>
+      <View style={[styles.topCategoryBadge, phone ? styles.topCategoryBadgePhone : null, { backgroundColor: toneStyle.badgeBackground }]}> 
         <ModuleGlyph module={badge} color={toneStyle.badgeText} size="md" />
       </View>
-      <Text style={[styles.topCategoryTitle, active ? styles.topCategoryTitleActive : null]}>{label}</Text>
-      <Caption style={styles.topCategorySubtitle}>{subtitle}</Caption>
+      <Text style={[styles.topCategoryTitle, phone ? styles.topCategoryTitlePhone : null, active ? styles.topCategoryTitleActive : null]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>{label}</Text>
+      {!compact ? <Caption style={styles.topCategorySubtitle}>{subtitle}</Caption> : null}
     </Pressable>
   );
 }
@@ -633,17 +694,26 @@ function BoardTile({
   subtitle,
   badge,
   tone,
+  statusLabel,
   onPress,
   compact,
+  phone,
+  dense,
+  minimal,
 }: {
   label: string;
   subtitle: string;
   badge: string;
   tone: AccentTone;
+  statusLabel?: string;
   onPress: () => void;
   compact?: boolean;
+  phone?: boolean;
+  dense?: boolean;
+  minimal?: boolean;
 }) {
   const toneStyle = accentStyles[tone];
+  const metricValue = statusLabel || subtitle;
 
   return (
     <Pressable
@@ -651,20 +721,27 @@ function BoardTile({
       style={(state) => [
         styles.boardTile,
         compact ? styles.boardTileCompact : null,
+        phone ? styles.boardTilePhone : null,
+        dense ? styles.boardTileDensePhone : null,
+        minimal ? styles.boardTileMinimalPhone : null,
         (state as { hovered?: boolean }).hovered ? styles.hoverLift : null,
         state.pressed ? styles.pressDip : null,
       ]}
     >
-      <View style={[styles.boardTileBadge, { backgroundColor: toneStyle.badgeBackground }]}>
+      <View style={[styles.boardTileBadge, phone ? styles.boardTileBadgePhone : null, dense ? styles.boardTileBadgeDensePhone : null, { backgroundColor: toneStyle.badgeBackground }]}> 
         <ModuleGlyph module={badge} color={toneStyle.badgeText} size="lg" />
       </View>
       <View style={styles.boardTileCopy}>
-        <Text style={styles.boardTileTitle}>{label}</Text>
-        <Caption>{subtitle}</Caption>
+        <Text style={[styles.boardTileTitle, phone ? styles.boardTileTitlePhone : null, dense ? styles.boardTileTitleDensePhone : null]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>{label}</Text>
+        {minimal ? (
+          <Text style={[styles.boardTileMetric, phone ? styles.boardTileMetricPhone : null, dense ? styles.boardTileMetricDensePhone : null, { color: toneStyle.badgeText }]} numberOfLines={1}>{metricValue}</Text>
+        ) : (
+          <Text style={[styles.boardTileSubtitle, phone ? styles.boardTileSubtitlePhone : null, dense ? styles.boardTileSubtitleDensePhone : null]} numberOfLines={phone ? 1 : dense ? 1 : 2} adjustsFontSizeToFit minimumFontScale={0.8}>{subtitle}</Text>
+        )}
       </View>
-      <View style={styles.boardTileFooter}>
+      {!minimal ? <View style={styles.boardTileFooter}>
         <Text style={[styles.boardTileLink, { color: toneStyle.badgeText }]}>Open</Text>
-      </View>
+      </View> : null}
     </Pressable>
   );
 }
@@ -677,6 +754,7 @@ function ActionCard({
   tone,
   onPress,
   compact,
+  phone,
 }: {
   title: string;
   body: string;
@@ -685,6 +763,7 @@ function ActionCard({
   tone: AccentTone;
   onPress: () => void;
   compact?: boolean;
+  phone?: boolean;
 }) {
   const toneStyle = accentStyles[tone];
 
@@ -694,16 +773,17 @@ function ActionCard({
       style={(state) => [
         styles.actionCard,
         compact ? styles.actionCardCompact : null,
+        phone ? styles.actionCardPhone : null,
         (state as { hovered?: boolean }).hovered ? styles.hoverLift : null,
         state.pressed ? styles.pressDip : null,
       ]}
     >
-      <View style={[styles.actionCardArt, { backgroundColor: toneStyle.badgeBackground }]}>
+      <View style={[styles.actionCardArt, phone ? styles.actionCardArtPhone : null, { backgroundColor: toneStyle.badgeBackground }]}> 
         <ModuleGlyph module={module} color={toneStyle.badgeText} size="lg" />
       </View>
-      <Text style={styles.actionCardTitle}>{title}</Text>
-      <Text style={[styles.actionCardMetric, { color: toneStyle.badgeText }]}>{metric}</Text>
-      <Caption>{body}</Caption>
+      <Text style={[styles.actionCardTitle, phone ? styles.actionCardTitlePhone : null]} numberOfLines={1}>{title}</Text>
+      <Text style={[styles.actionCardMetric, phone ? styles.actionCardMetricPhone : null, { color: toneStyle.badgeText }]} numberOfLines={1}>{metric}</Text>
+      {!phone ? <Caption>{body}</Caption> : null}
     </Pressable>
   );
 }
@@ -798,6 +878,12 @@ const styles = StyleSheet.create({
     padding: spacing.sm,
     borderRadius: 28,
   },
+  categoryStripPhone: {
+    gap: 6,
+    borderRadius: 22,
+    paddingHorizontal: 6,
+    paddingVertical: 6,
+  },
   topCategoryCard: {
     flex: 1,
     minWidth: 140,
@@ -812,12 +898,63 @@ const styles = StyleSheet.create({
     flexBasis: '48%',
     minWidth: 0,
   },
+  topCategoryCardPhone: {
+    flex: 0,
+    flexBasis: '23.5%',
+    maxWidth: '23.5%',
+    paddingHorizontal: 3,
+    paddingVertical: 4,
+    borderRadius: 14,
+  },
   topCategoryCardActive: { backgroundColor: palette.surface, ...shadow.card },
   topCategoryBadge: { width: 48, height: 48, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-  topCategoryBadgeText: { fontSize: 13, fontWeight: '800' },
+  topCategoryBadgePhone: { width: 38, height: 38, borderRadius: 14 },
   topCategoryTitle: { color: '#3E4755', fontSize: 17, fontWeight: '700' },
+  topCategoryTitlePhone: { fontSize: 11 },
   topCategoryTitleActive: { color: palette.ink },
   topCategorySubtitle: { textAlign: 'center' },
+  compactHubCard: {
+    gap: spacing.md,
+    padding: spacing.md,
+    backgroundColor: '#FFFCF8',
+  },
+  compactHubCardPhone: {
+    borderRadius: 20,
+  },
+  compactHubHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  compactHubHeaderPhone: {
+    alignItems: 'flex-start',
+    gap: 6,
+  },
+  compactHubHeaderCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  compactHubTitle: {
+    color: palette.ink,
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  compactHubTitlePhone: {
+    fontSize: 16,
+  },
+  compactHubGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    justifyContent: 'space-between',
+  },
+  compactHubGridPhone: {
+    gap: 6,
+  },
+  compactHubGridDensePhone: {
+    gap: 4,
+  },
   superBoard: {
     gap: spacing.lg,
     borderRadius: 34,
@@ -899,10 +1036,37 @@ const styles = StyleSheet.create({
     minWidth: 0,
     borderRadius: 22,
   },
+  boardTilePhone: {
+    flexBasis: '48%',
+    padding: 8,
+    borderRadius: 16,
+    minHeight: 94,
+  },
+  boardTileDensePhone: {
+    flexBasis: '31.5%',
+    flexGrow: 0,
+    maxWidth: '31.5%',
+    minHeight: 76,
+    gap: 3,
+    padding: 6,
+    borderRadius: 12,
+  },
+  boardTileMinimalPhone: {
+    justifyContent: 'space-between',
+  },
   boardTileBadge: { width: 58, height: 58, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-  boardTileBadgeText: { fontSize: 13, fontWeight: '800' },
+  boardTileBadgePhone: { width: 34, height: 34, borderRadius: 12 },
+  boardTileBadgeDensePhone: { width: 28, height: 28, borderRadius: 10 },
   boardTileCopy: { gap: 4, flex: 1 },
   boardTileTitle: { color: palette.ink, fontSize: 16, fontWeight: '700' },
+  boardTileTitlePhone: { fontSize: 12, lineHeight: 14 },
+  boardTileTitleDensePhone: { fontSize: 10, lineHeight: 12 },
+  boardTileSubtitle: { color: palette.mutedInk, fontSize: 11, lineHeight: 15 },
+  boardTileSubtitlePhone: { fontSize: 9, lineHeight: 11 },
+  boardTileSubtitleDensePhone: { fontSize: 8, lineHeight: 10 },
+  boardTileMetric: { fontSize: 18, lineHeight: 20, fontWeight: '900' },
+  boardTileMetricPhone: { fontSize: 16, lineHeight: 18 },
+  boardTileMetricDensePhone: { fontSize: 15, lineHeight: 16 },
   boardTileFooter: { paddingTop: spacing.xs },
   boardTileLink: { fontSize: 13, fontWeight: '800' },
   mySocietyBanner: {
@@ -995,6 +1159,7 @@ const styles = StyleSheet.create({
   },
   mySocietyButtonText: { color: palette.white, fontSize: 18, fontWeight: '800' },
   actionsPanel: { gap: spacing.md },
+  actionsPanelPhone: { gap: spacing.xs },
   panelHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1004,11 +1169,22 @@ const styles = StyleSheet.create({
   panelHeaderCompact: {
     alignItems: 'flex-start',
   },
+  panelHeaderPhone: {
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
   panelHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' },
   panelTitle: { color: palette.ink, fontSize: 20, fontWeight: '800' },
+  panelTitlePhone: { fontSize: 17 },
   seeAllLink: { paddingVertical: spacing.xs },
   seeAllText: { color: palette.mutedInk, fontSize: 14, fontWeight: '700' },
+  seeAllTextPhone: { fontSize: 12 },
   actionScroller: { gap: spacing.sm },
+  actionGridPhone: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
   actionCard: {
     width: 260,
     borderRadius: 24,
@@ -1022,11 +1198,24 @@ const styles = StyleSheet.create({
   actionCardCompact: {
     width: 224,
   },
+  actionCardPhone: {
+    width: '48%',
+    maxWidth: '48%',
+    minWidth: 0,
+    padding: spacing.xs,
+    borderRadius: 16,
+    gap: spacing.xs,
+  },
   actionCardArt: {
     height: 70,
     borderRadius: 18,
     justifyContent: 'center',
     paddingHorizontal: spacing.md,
+  },
+  actionCardArtPhone: {
+    height: 48,
+    borderRadius: 14,
+    paddingHorizontal: spacing.xs,
   },
   actionCardArtText: {
     fontSize: 12,
@@ -1035,7 +1224,9 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
   },
   actionCardTitle: { color: palette.ink, fontSize: 16, fontWeight: '800' },
+  actionCardTitlePhone: { fontSize: 12, lineHeight: 14 },
   actionCardMetric: { fontSize: 13, fontWeight: '800' },
+  actionCardMetricPhone: { fontSize: 15, lineHeight: 18 },
   hoverLift: {
     transform: [{ translateY: -4 }, { scale: 1.01 }],
     shadowOpacity: 0.18,
@@ -1046,9 +1237,12 @@ const styles = StyleSheet.create({
   },
   summaryRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.lg },
   summaryRowCompact: { flexDirection: 'column', gap: spacing.md },
+  summaryRowPhone: { gap: spacing.sm },
   summaryCard: { flex: 1, minWidth: 280, gap: spacing.md },
   summaryCardCompact: { minWidth: 0 },
+  summaryCardPhone: { padding: spacing.sm },
   summaryTitle: { color: palette.ink, fontSize: 18, fontWeight: '800' },
+  summaryTitlePhone: { fontSize: 16 },
   summaryStack: { gap: spacing.sm },
   summaryLine: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm },
   summaryDot: {
@@ -1060,6 +1254,9 @@ const styles = StyleSheet.create({
   },
   summaryLineCopy: { flex: 1, gap: 2 },
   summaryLineTitle: { color: palette.ink, fontSize: 15, fontWeight: '800' },
+  summaryLineTitlePhone: { fontSize: 14 },
+  summaryCaption: { color: palette.mutedInk, fontSize: 13, lineHeight: 18 },
+  summaryCaptionPhone: { fontSize: 12, lineHeight: 16 },
   helperBadge: {
     width: 36,
     height: 36,

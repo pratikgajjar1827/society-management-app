@@ -5,6 +5,7 @@ import {
   ActionButton,
   Caption,
   ChoiceChip,
+  DateTimeField,
   DetailRow,
   InputField,
   MetricCard,
@@ -18,7 +19,7 @@ import { MaintenanceReceiptCard } from '../../components/MaintenanceReceiptCard'
 import { AdminHomeExperience } from './AdminHomeExperience';
 import { useApp } from '../../state/AppContext';
 import { palette, shadow, spacing } from '../../theme/tokens';
-import { pickWebFileAsDataUrl } from '../../utils/fileUploads';
+import { openUploadedFileDataUrl, pickWebFileAsDataUrl } from '../../utils/fileUploads';
 import {
   buildMaintenanceReceiptDetails,
   buildMaintenanceReceiptWhatsappMessage,
@@ -39,6 +40,7 @@ import {
   getBookingsForSociety,
   getComplaintUpdatesForComplaint,
   getComplaintsForSociety,
+  getCommunityMembersForSociety,
   getCurrentUser,
   getEntryLogsForSociety,
   getExpenseRecordsForSociety,
@@ -46,6 +48,11 @@ import {
   getInvoiceCollectionDirectory,
   getInvoicesForSociety,
   getJoinRequestsForSociety,
+  getLeadershipProfilesForSociety,
+  getMeetingAgendaItems,
+  getMeetingSignatures,
+  getMeetingsForSociety,
+  getMeetingVotesForItem,
   getMembershipForSociety,
   getPaymentRemindersForSociety,
   getPaymentsForSociety,
@@ -55,14 +62,19 @@ import {
   getSocietyUnitCollectionLabel,
   getRulesForSociety,
   getSelectedSociety,
+  getSocietyDocuments,
   getStaffVerificationDirectory,
   getVisitorPassesForSociety,
+  humanizeMeetingStatus,
+  humanizeMeetingType,
+  getMeetingStatusTone,
   societySupportsOfficeSpaces,
+  humanizeJoinRequestRole,
   humanizeRole,
 } from '../../utils/selectors';
-import { AnnouncementAudience, AnnouncementPriority, PaymentMethod } from '../../types/domain';
+import { AnnouncementAudience, AnnouncementPriority, PaymentMethod, SocietyDocumentCategory } from '../../types/domain';
 
-type AdminTab = 'home' | AdminRecommendationTab | 'ledger';
+type AdminTab = 'home' | AdminRecommendationTab | 'ledger' | 'meetings';
 type OfficeMaintenanceState = 'paid' | 'pending' | 'overdue' | 'unbilled';
 
 const adminTabs: Array<{ key: AdminTab; label: string }> = [
@@ -75,6 +87,7 @@ const adminTabs: Array<{ key: AdminTab; label: string }> = [
   { key: 'helpdesk', label: 'Helpdesk' },
   { key: 'security', label: 'Security' },
   { key: 'announcements', label: 'Announcements' },
+  { key: 'meetings', label: 'Meetings' },
   { key: 'audit', label: 'Audit' },
 ];
 
@@ -98,6 +111,8 @@ function getAdminTabDescription(activeTab: AdminTab) {
       return 'Coordinate guards, staff verification, visitor access, and entry records from one security workspace.';
     case 'announcements':
       return 'Publish notices, resident communication, and policy updates in the new premium admin flow.';
+    case 'meetings':
+      return 'Create society meetings, manage agenda items, enable resident voting, and collect digital signatures.';
     case 'audit':
       return 'Review durable logs for money movement, complaints, announcements, and security actions.';
     default:
@@ -152,6 +167,16 @@ const announcementPriorityOptions = [
   { key: 'normal' as const, label: 'Normal' },
   { key: 'high' as const, label: 'High' },
   { key: 'critical' as const, label: 'Critical' },
+];
+
+const societyDocumentCategoryOptions: Array<{ key: SocietyDocumentCategory; label: string }> = [
+  { key: 'liftLicense', label: 'Lift license' },
+  { key: 'commonLightBill', label: 'Common light bill' },
+  { key: 'waterBill', label: 'Water bill' },
+  { key: 'fireSafety', label: 'Fire safety' },
+  { key: 'insurance', label: 'Insurance' },
+  { key: 'auditReport', label: 'Audit report' },
+  { key: 'other', label: 'Other document' },
 ];
 
 const announcementTemplates = [
@@ -308,6 +333,9 @@ export function AdminShell() {
             </View>
           </View>
           <View style={styles.compactWorkspaceActionRow}>
+            {activeTab !== 'home' ? (
+              <ActionButton label="← Back" onPress={() => setActiveTab('home')} variant="secondary" />
+            ) : null}
             {canReturnToResident ? (
               <ActionButton label="Resident" onPress={actions.goToRoleSelection} variant="secondary" />
             ) : null}
@@ -353,8 +381,8 @@ export function AdminShell() {
               </View>
             </View>
             <View style={styles.metricGrid}>
-              <MetricCard label="Collection rate" value={`${overview.collectionRate}%`} />
-              <MetricCard label="Pending approvals" value={String(overview.pendingApprovals)} tone="accent" />
+              <MetricCard label="Collection rate" value={`${overview.collectionRate}%`} onPress={() => setActiveTab('collections')} />
+              <MetricCard label="Pending approvals" value={String(overview.pendingApprovals)} tone="accent" onPress={() => setActiveTab('residents')} />
               <MetricCard
                 label="Open complaints"
                 value={String(overview.openComplaints)}
@@ -363,6 +391,7 @@ export function AdminShell() {
               />
             </View>
             <View style={styles.heroActions}>
+              <ActionButton label="← Back" onPress={() => setActiveTab('home')} variant="secondary" />
               {canReturnToResident ? (
                 <ActionButton label="Resident view" onPress={actions.goToRoleSelection} variant="secondary" />
               ) : null}
@@ -388,8 +417,140 @@ export function AdminShell() {
       {activeTab === 'helpdesk' ? <AdminHelpdesk societyId={society.id} /> : null}
       {activeTab === 'security' ? <AdminSecurity societyId={society.id} /> : null}
       {activeTab === 'announcements' ? <AdminAnnouncements societyId={society.id} /> : null}
+      {activeTab === 'meetings' ? <AdminMeetings societyId={society.id} userId={user.id} /> : null}
       {activeTab === 'audit' ? <AdminAudit societyId={society.id} /> : null}
     </PageFrame>
+  );
+}
+
+function PendingAccessApprovalsPanel({ societyId }: { societyId: string }) {
+  const { state, actions } = useApp();
+  const pendingJoinRequests = getJoinRequestsForSociety(state.data, societyId, 'pending');
+  const isSuperUser = state.session.accountRole === 'superUser';
+  const currentMembership = state.session.userId
+    ? getMembershipForSociety(state.data, state.session.userId, societyId)
+    : undefined;
+  const canReviewResidentClaims = Boolean(currentMembership?.roles.includes('chairman'));
+  const hasChairman = state.data.memberships.some(
+    (membership) => membership.societyId === societyId && membership.roles.includes('chairman'),
+  );
+  const pendingChairmanClaims = pendingJoinRequests.filter(
+    (request) => request.joinRequest.residentType === 'chairman',
+  ).length;
+
+  if (!pendingJoinRequests.length && !(isSuperUser && !hasChairman)) {
+    return null;
+  }
+
+  return (
+    <>
+      {isSuperUser && !hasChairman ? (
+        <SurfaceCard style={styles.adminFocusPanel}>
+          <SectionHeader
+            title="Chairman setup pending"
+            description="This society has been created by the platform, but no local chairman has been approved yet."
+          />
+          <Caption>
+            Next step: ask the intended chairman to use Join Society and submit a first-chairman claim for the correct unit or space.
+          </Caption>
+          <View style={styles.pillRow}>
+            <Pill label="Super user workflow" tone="accent" />
+            <Pill label={pendingChairmanClaims > 0 ? `${pendingChairmanClaims} claim pending` : 'No claim yet'} tone="warning" />
+            <Pill label="Resident approvals wait for chairman setup" tone="primary" />
+          </View>
+        </SurfaceCard>
+      ) : null}
+
+      {pendingJoinRequests.length > 0 ? (
+        <SurfaceCard style={styles.adminFocusPanel}>
+          <SectionHeader
+            title="Pending access approvals"
+            description="Review each claim here with claimant details, selected unit, and the correct reviewer route."
+          />
+          <Caption>
+            First-chairman claims are reviewed by the super user. Owner and tenant requests are reviewed by the active chairman after the first chairman is approved.
+          </Caption>
+          {pendingJoinRequests.map((request) => {
+            const isChairmanClaim = request.joinRequest.residentType === 'chairman';
+            const canReviewRequest = isChairmanClaim ? isSuperUser : canReviewResidentClaims;
+            const unitSummary = request.units.map((unit) => unit?.code).filter(Boolean).join(', ') || 'No unit selected';
+            const mobileNumber = request.residenceProfile?.phone ?? request.user?.phone ?? 'Not shared';
+
+            return (
+              <View key={request.joinRequest.id} style={styles.requestCard}>
+                <View style={styles.compactText}>
+                  <Text style={styles.cardTitle}>
+                    {request.residenceProfile?.fullName ?? request.user?.name ?? 'Resident request'}
+                  </Text>
+                  <Caption>
+                    Requested as {humanizeJoinRequestRole(request.joinRequest.residentType)} on {formatLongDate(request.joinRequest.createdAt)}
+                  </Caption>
+                </View>
+                <View style={styles.pillRow}>
+                  <Pill label={humanizeJoinRequestRole(request.joinRequest.residentType)} tone={isChairmanClaim ? 'warning' : 'primary'} />
+                  <Pill
+                    label={
+                      isChairmanClaim
+                        ? 'Reviewed by super user'
+                        : hasChairman
+                          ? 'Reviewed by chairman'
+                          : 'Waiting for chairman'
+                    }
+                    tone={isChairmanClaim ? 'accent' : hasChairman ? 'accent' : 'warning'}
+                  />
+                </View>
+                <View style={styles.compactText}>
+                  <Caption>Mobile: {mobileNumber}</Caption>
+                  <Caption>Selected unit or space: {unitSummary}</Caption>
+                  {request.residenceProfile?.email ? <Caption>Email: {request.residenceProfile.email}</Caption> : null}
+                  {request.residenceProfile?.alternatePhone ? (
+                    <Caption>Alternate mobile: {request.residenceProfile.alternatePhone}</Caption>
+                  ) : null}
+                  {request.residenceProfile ? (
+                    <Caption>
+                      Move-in date: {formatLongDate(request.residenceProfile.moveInDate)}
+                      {request.residenceProfile.emergencyContactName
+                        ? ` | Emergency contact: ${request.residenceProfile.emergencyContactName}${request.residenceProfile.emergencyContactPhone ? ` (${request.residenceProfile.emergencyContactPhone})` : ''}`
+                        : ''}
+                    </Caption>
+                  ) : null}
+                  {isChairmanClaim ? (
+                    <Caption>This person will become the first chairman for this society after approval.</Caption>
+                  ) : !hasChairman ? (
+                    <Caption>This resident request cannot move forward until the first chairman claim is approved by the super user.</Caption>
+                  ) : null}
+                  {request.joinRequest.residentType === 'tenant' ? (
+                    <Caption>
+                      Rent agreement: {request.residenceProfile?.rentAgreementFileName ? 'Attached' : 'Pending upload'}
+                    </Caption>
+                  ) : null}
+                  {!canReviewRequest ? (
+                    <Caption>
+                      {isChairmanClaim
+                        ? 'Only the super user can approve this claim.'
+                        : 'Only the current chairman of this society can approve this resident request.'}
+                    </Caption>
+                  ) : null}
+                </View>
+                <View style={styles.heroActions}>
+                  <ActionButton
+                    label={state.isSyncing ? 'Processing...' : 'Approve'}
+                    onPress={() => actions.reviewJoinRequest(request.joinRequest.id, 'approve')}
+                    disabled={state.isSyncing || !canReviewRequest}
+                  />
+                  <ActionButton
+                    label={state.isSyncing ? 'Processing...' : 'Reject'}
+                    onPress={() => actions.reviewJoinRequest(request.joinRequest.id, 'reject')}
+                    disabled={state.isSyncing || !canReviewRequest}
+                    variant="secondary"
+                  />
+                </View>
+              </View>
+            );
+          })}
+        </SurfaceCard>
+      ) : null}
+    </>
   );
 }
 
@@ -401,6 +562,16 @@ function AdminHome({ societyId, onOpenTab }: { societyId: string; onOpenTab: (ta
   const society = getSelectedSociety(state.data, societyId);
   const units = getUnitsForSociety(state.data, societyId);
   const isSuperUser = state.session.accountRole === 'superUser';
+  const currentMembership = state.session.userId
+    ? getMembershipForSociety(state.data, state.session.userId, societyId)
+    : undefined;
+  const canReviewResidentClaims = Boolean(currentMembership?.roles.includes('chairman'));
+  const hasChairman = state.data.memberships.some(
+    (membership) => membership.societyId === societyId && membership.roles.includes('chairman'),
+  );
+  const pendingChairmanClaims = pendingJoinRequests.filter(
+    (request) => request.joinRequest.residentType === 'chairman',
+  ).length;
   const [societyName, setSocietyName] = useState('');
   const [country, setCountry] = useState('');
   const [regionState, setRegionState] = useState('');
@@ -496,16 +667,44 @@ function AdminHome({ societyId, onOpenTab }: { societyId: string; onOpenTab: (ta
 
   return (
     <>
+      {isSuperUser && !hasChairman ? (
+        <SurfaceCard style={styles.adminFocusPanel}>
+          <SectionHeader
+            title="Chairman setup pending"
+            description="This society has been created by the platform, but no local chairman has been approved yet."
+          />
+          <Caption>
+            Next step: ask the intended chairman to use Join Society and submit a first-chairman claim for the correct unit or space.
+          </Caption>
+          <View style={styles.pillRow}>
+            <Pill label="Super user workflow" tone="accent" />
+            <Pill label={pendingChairmanClaims > 0 ? `${pendingChairmanClaims} claim pending` : 'No claim yet'} tone="warning" />
+            <Pill label="Resident approvals locked until chairman exists" tone="primary" />
+          </View>
+        </SurfaceCard>
+      ) : null}
+
       {pendingJoinRequests.length > 0 ? (
         <SurfaceCard style={styles.adminFocusPanel}>
-          <SectionHeader title="Pending access approvals" description="Approve ownership and tenancy claims before access is linked." />
-          {pendingJoinRequests.map((request) => (
-            <View key={request.joinRequest.id} style={styles.requestCard}>
+          <SectionHeader title="Pending access approvals" description="Approve owner, tenant, or first-chairman claims before access is linked." />
+          {pendingJoinRequests.map((request) => {
+            const canReviewRequest =
+              request.joinRequest.residentType === 'chairman'
+                ? isSuperUser
+                : canReviewResidentClaims;
+
+            return (
+              <View key={request.joinRequest.id} style={styles.requestCard}>
               <Text style={styles.cardTitle}>
                 {request.residenceProfile?.fullName ?? request.user?.name ?? 'Resident request'}
               </Text>
-              <Caption>Requested as {request.joinRequest.residentType} on {formatLongDate(request.joinRequest.createdAt)}</Caption>
+              <Caption>
+                Requested as {humanizeJoinRequestRole(request.joinRequest.residentType)} on {formatLongDate(request.joinRequest.createdAt)}
+              </Caption>
               <Caption>Units: {request.units.map((unit) => unit?.code).filter(Boolean).join(', ')}</Caption>
+              {request.joinRequest.residentType === 'chairman' ? (
+                <Caption>This request must be reviewed by the super user because the society does not have a chairman yet.</Caption>
+              ) : null}
               {request.residenceProfile ? (
                 <Caption>
                   Move-in date: {formatLongDate(request.residenceProfile.moveInDate)}
@@ -519,21 +718,29 @@ function AdminHome({ societyId, onOpenTab }: { societyId: string; onOpenTab: (ta
                   Rent agreement: {request.residenceProfile?.rentAgreementFileName ? 'Attached' : 'Pending upload'}
                 </Caption>
               ) : null}
+              {!canReviewRequest ? (
+                <Caption>
+                  {request.joinRequest.residentType === 'chairman'
+                    ? 'Only the super user can approve this claim.'
+                    : 'Only the current chairman of this society can approve this resident request.'}
+                </Caption>
+              ) : null}
               <View style={styles.heroActions}>
                 <ActionButton
                   label={state.isSyncing ? 'Processing...' : 'Approve'}
                   onPress={() => actions.reviewJoinRequest(request.joinRequest.id, 'approve')}
-                  disabled={state.isSyncing}
+                  disabled={state.isSyncing || !canReviewRequest}
                 />
                 <ActionButton
                   label={state.isSyncing ? 'Processing...' : 'Reject'}
                   onPress={() => actions.reviewJoinRequest(request.joinRequest.id, 'reject')}
-                  disabled={state.isSyncing}
+                  disabled={state.isSyncing || !canReviewRequest}
                   variant="secondary"
                 />
               </View>
-            </View>
-          ))}
+              </View>
+            );
+          })}
         </SurfaceCard>
       ) : null}
 
@@ -731,17 +938,35 @@ function AdminResidents({ societyId }: { societyId: string }) {
   const { state, actions } = useApp();
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null);
   const [chairmanResidentType, setChairmanResidentType] = useState<'owner' | 'tenant'>('owner');
-  const chairmanUserId = state.session.userId;
+  const currentUserId = state.session.userId;
   const society = getSelectedSociety(state.data, societyId);
-  const chairmanMembership = chairmanUserId
-    ? getMembershipForSociety(state.data, chairmanUserId, societyId)
+  const chairmanMembership = currentUserId
+    ? getMembershipForSociety(state.data, currentUserId, societyId)
     : undefined;
   const [selectedChairmanUnitIds, setSelectedChairmanUnitIds] = useState<string[]>(
     chairmanMembership?.unitIds ?? [],
   );
   const residents = getResidentsDirectory(state.data, societyId);
+  const communityMembers = getCommunityMembersForSociety(state.data, societyId);
+  const leadershipDirectory = getLeadershipProfilesForSociety(state.data, societyId);
+  const currentChairmanMember =
+    communityMembers.find(({ membership }) => membership.roles.includes('chairman')) ?? null;
+  const committeeMembers = communityMembers.filter(
+    ({ membership }) => membership.roles.includes('committee') && !membership.roles.includes('chairman'),
+  );
+  const leadershipCandidates = communityMembers.filter(
+    ({ membership }) =>
+      membership.userId !== currentChairmanMember?.user.id && !membership.roles.includes('security'),
+  );
+  const [selectedLeadershipUserId, setSelectedLeadershipUserId] = useState<string>(
+    leadershipCandidates[0]?.user.id ?? '',
+  );
   const activeUnitId = residents.some((entry) => entry.unit.id === selectedUnitId) ? selectedUnitId : residents[0]?.unit.id ?? null;
   const currentChairmanUnitIds = new Set(chairmanMembership?.unitIds ?? []);
+  const currentLeadershipProfile = leadershipDirectory.find(({ user }) => user.id === currentUserId)?.leadershipProfile;
+  const canEditLeadershipProfile = Boolean(
+    chairmanMembership?.roles.includes('chairman') || chairmanMembership?.roles.includes('committee'),
+  );
   const residentRoleLabels = chairmanMembership?.roles
     .filter((role) => role === 'owner' || role === 'tenant')
     .map((role) => humanizeRole(role)) ?? [];
@@ -750,6 +975,28 @@ function AdminResidents({ societyId }: { societyId: string }) {
     .map((entry) => entry.unit.code);
   const occupiedUnits = residents.filter((entry) => entry.residents.length > 0).length;
   const vacantUnits = residents.length - occupiedUnits;
+  const currentUserProfile = currentUserId ? getCurrentUser(state.data, currentUserId) : undefined;
+  const defaultLeadershipRoleLabel = chairmanMembership?.roles.includes('chairman') ? 'Chairman' : 'Committee member';
+  const [leadershipDisplayName, setLeadershipDisplayName] = useState(
+    currentLeadershipProfile?.displayName ?? currentUserProfile?.name ?? '',
+  );
+  const [leadershipRoleLabel, setLeadershipRoleLabel] = useState(
+    currentLeadershipProfile?.roleLabel ?? defaultLeadershipRoleLabel,
+  );
+  const [leadershipPhone, setLeadershipPhone] = useState(
+    currentLeadershipProfile?.phone ?? currentUserProfile?.phone ?? '',
+  );
+  const [leadershipEmail, setLeadershipEmail] = useState(
+    currentLeadershipProfile?.email ?? currentUserProfile?.email ?? '',
+  );
+  const [leadershipAvailability, setLeadershipAvailability] = useState(
+    currentLeadershipProfile?.availability ?? '',
+  );
+  const [leadershipBio, setLeadershipBio] = useState(currentLeadershipProfile?.bio ?? '');
+  const [leadershipPhotoDataUrl, setLeadershipPhotoDataUrl] = useState(
+    currentLeadershipProfile?.photoDataUrl ?? '',
+  );
+  const [leadershipProfileMessage, setLeadershipProfileMessage] = useState('');
 
   useEffect(() => {
     setSelectedChairmanUnitIds(chairmanMembership?.unitIds ?? []);
@@ -765,6 +1012,36 @@ function AdminResidents({ societyId }: { societyId: string }) {
       setChairmanResidentType('owner');
     }
   }, [chairmanMembership?.roles]);
+
+  useEffect(() => {
+    if (selectedLeadershipUserId && leadershipCandidates.some(({ user }) => user.id === selectedLeadershipUserId)) {
+      return;
+    }
+
+    setSelectedLeadershipUserId(leadershipCandidates[0]?.user.id ?? '');
+  }, [leadershipCandidates, selectedLeadershipUserId]);
+
+  useEffect(() => {
+    setLeadershipDisplayName(currentLeadershipProfile?.displayName ?? currentUserProfile?.name ?? '');
+    setLeadershipRoleLabel(currentLeadershipProfile?.roleLabel ?? defaultLeadershipRoleLabel);
+    setLeadershipPhone(currentLeadershipProfile?.phone ?? currentUserProfile?.phone ?? '');
+    setLeadershipEmail(currentLeadershipProfile?.email ?? currentUserProfile?.email ?? '');
+    setLeadershipAvailability(currentLeadershipProfile?.availability ?? '');
+    setLeadershipBio(currentLeadershipProfile?.bio ?? '');
+    setLeadershipPhotoDataUrl(currentLeadershipProfile?.photoDataUrl ?? '');
+  }, [
+    currentLeadershipProfile?.availability,
+    currentLeadershipProfile?.bio,
+    currentLeadershipProfile?.displayName,
+    currentLeadershipProfile?.email,
+    currentLeadershipProfile?.phone,
+    currentLeadershipProfile?.photoDataUrl,
+    currentLeadershipProfile?.roleLabel,
+    currentUserProfile?.email,
+    currentUserProfile?.name,
+    currentUserProfile?.phone,
+    defaultLeadershipRoleLabel,
+  ]);
 
   function toggleChairmanUnit(unitId: string) {
     setSelectedChairmanUnitIds((currentSelection) =>
@@ -782,18 +1059,102 @@ function AdminResidents({ societyId }: { societyId: string }) {
     );
   }
 
+  function getLeadershipMemberLabel(member: (typeof communityMembers)[number]) {
+    const primaryUnit = member.units[0]?.code ?? 'No unit linked';
+    return `${member.user.name} · ${primaryUnit}`;
+  }
+
+  async function handleAssignChairman() {
+    if (!selectedLeadershipUserId) {
+      return;
+    }
+
+    await actions.updateLeadershipRole(societyId, {
+      targetUserId: selectedLeadershipUserId,
+      role: 'chairman',
+      enabled: true,
+    });
+  }
+
+  async function handleCommitteeToggle(targetUserId: string, enabled: boolean) {
+    await actions.updateLeadershipRole(societyId, {
+      targetUserId,
+      role: 'committee',
+      enabled,
+    });
+  }
+
+  async function handleLeadershipPhotoSelection(capture?: 'user' | 'environment') {
+    try {
+      const selectedPhoto = await pickWebFileAsDataUrl({
+        accept: 'image/png,image/jpeg,image/webp',
+        capture,
+        maxSizeInBytes: 4 * 1024 * 1024,
+        unsupportedMessage: 'Leadership photo upload is currently available from the web workspace.',
+        tooLargeMessage: 'Choose a profile photo smaller than 4 MB.',
+        readErrorMessage: 'Could not read the selected leadership photo.',
+      });
+
+      if (!selectedPhoto) {
+        return;
+      }
+
+      setLeadershipPhotoDataUrl(selectedPhoto.dataUrl);
+      setLeadershipProfileMessage(`${selectedPhoto.fileName} is ready for the resident directory.`);
+    } catch (error) {
+      setLeadershipProfileMessage(error instanceof Error ? error.message : 'Could not attach the leadership photo.');
+    }
+  }
+
+  async function handleSaveLeadershipProfile() {
+    const saved = await actions.updateLeadershipProfile(societyId, {
+      displayName: leadershipDisplayName,
+      roleLabel: leadershipRoleLabel,
+      phone: leadershipPhone,
+      email: leadershipEmail || undefined,
+      availability: leadershipAvailability || undefined,
+      bio: leadershipBio || undefined,
+      photoDataUrl: leadershipPhotoDataUrl || undefined,
+    });
+
+    if (saved) {
+      setLeadershipProfileMessage('Resident-facing leadership profile saved.');
+    }
+  }
+
   return (
     <>
       <SectionHeader
         title="Residents hub"
         description="Monitor occupancy, unit mapping, resident links, and domestic staff visibility from the same summary-led admin layout used across the workspace."
       />
+      <PendingAccessApprovalsPanel societyId={societyId} />
       <SurfaceCard>
         <View style={styles.metricGrid}>
-          <MetricCard label="Total units" value={String(residents.length)} tone="primary" />
-          <MetricCard label="Occupied" value={String(occupiedUnits)} tone="accent" />
-          <MetricCard label="Vacant" value={String(vacantUnits)} tone="blue" />
-          <MetricCard label="Chairman links" value={String(currentChairmanUnits.length)} tone="primary" />
+          <MetricCard
+            label="Total units"
+            value={String(residents.length)}
+            tone="primary"
+            onPress={() => setSelectedUnitId(activeUnitId ?? residents[0]?.unit.id ?? null)}
+          />
+          <MetricCard
+            label="Occupied"
+            value={String(occupiedUnits)}
+            tone="accent"
+            onPress={() => setSelectedUnitId(residents.find((entry) => entry.residents.length > 0)?.unit.id ?? null)}
+          />
+          <MetricCard
+            label="Vacant"
+            value={String(vacantUnits)}
+            tone="blue"
+            onPress={() => setSelectedUnitId(residents.find((entry) => entry.residents.length === 0)?.unit.id ?? null)}
+          />
+          <MetricCard
+            label="Chairman links"
+            value={String(currentChairmanUnits.length)}
+            tone="primary"
+            onPress={() => setSelectedUnitId(residents.find((entry) => currentChairmanUnitIds.has(entry.unit.id))?.unit.id ?? null)}
+          />
         </View>
         <View style={styles.inlineSection}>
           <Caption>
@@ -855,6 +1216,220 @@ function AdminResidents({ societyId }: { societyId: string }) {
             onPress={handleChairmanResidenceLink}
             disabled={state.isSyncing || (selectedChairmanUnitIds.length === 0 && currentChairmanUnits.length === 0)}
           />
+        </SurfaceCard>
+      ) : null}
+      {society && chairmanMembership?.roles.includes('chairman') ? (
+        <SurfaceCard>
+          <SectionHeader
+            title="Leadership and committee"
+            description="Transfer chairman ownership to another linked member and manage committee access without leaving the residents hub."
+          />
+          <Caption>
+            Current chairman: {currentChairmanMember
+              ? `${currentChairmanMember.user.name}${currentChairmanMember.units[0]?.code ? ` · ${currentChairmanMember.units[0].code}` : ''}`
+              : 'Not assigned yet'}
+          </Caption>
+          <View style={styles.inlineSection}>
+            <Text style={styles.compactTitle}>Assign another chairman</Text>
+            <Caption>
+              Choose an existing resident or committee member already linked to this society. The previous chairman will remain a committee member.
+            </Caption>
+            <View style={styles.choiceRow}>
+              {leadershipCandidates.map((member) => (
+                <ChoiceChip
+                  key={member.user.id}
+                  label={getLeadershipMemberLabel(member)}
+                  selected={selectedLeadershipUserId === member.user.id}
+                  onPress={() => setSelectedLeadershipUserId(member.user.id)}
+                />
+              ))}
+            </View>
+            <ActionButton
+              label={state.isSyncing ? 'Saving...' : 'Make selected member chairman'}
+              onPress={handleAssignChairman}
+              disabled={state.isSyncing || !selectedLeadershipUserId}
+            />
+          </View>
+          <View style={styles.inlineSection}>
+            <Text style={styles.compactTitle}>Committee members</Text>
+            <Caption>
+              Grant or remove committee access for linked residents. Committee members can use the admin workspace but do not replace the active chairman.
+            </Caption>
+            {communityMembers.length > 0 ? (
+              <View style={styles.leadershipRoster}>
+                {communityMembers
+                  .filter(({ membership }) => !membership.roles.includes('security'))
+                  .map((member) => {
+                    const isChairman = member.membership.roles.includes('chairman');
+                    const isCommittee = member.membership.roles.includes('committee');
+
+                    return (
+                      <View key={member.user.id} style={styles.leadershipMemberCard}>
+                        <View style={styles.compactText}>
+                          <Text style={styles.inlineTitle}>{member.user.name}</Text>
+                          <Caption>
+                            {member.units.map((unit) => unit.code).join(', ') || 'No unit linked yet'}
+                          </Caption>
+                          <View style={styles.pillRow}>
+                            {member.membership.roles.map((role) => (
+                              <Pill
+                                key={`${member.user.id}-${role}`}
+                                label={humanizeRole(role)}
+                                tone={role === 'chairman' ? 'warning' : 'primary'}
+                              />
+                            ))}
+                          </View>
+                        </View>
+                        {isChairman ? (
+                          <Pill label="Chairman" tone="warning" />
+                        ) : (
+                          <ActionButton
+                            label={isCommittee ? 'Remove committee' : 'Make committee'}
+                            onPress={() => {
+                              void handleCommitteeToggle(member.user.id, !isCommittee);
+                            }}
+                            variant={isCommittee ? 'secondary' : 'primary'}
+                            disabled={state.isSyncing}
+                          />
+                        )}
+                      </View>
+                    );
+                  })}
+              </View>
+            ) : (
+              <Caption>No linked members are available yet. Approve at least one resident first.</Caption>
+            )}
+            {committeeMembers.length === 0 ? (
+              <Caption>No additional committee members assigned yet.</Caption>
+            ) : null}
+          </View>
+        </SurfaceCard>
+      ) : null}
+      {canEditLeadershipProfile ? (
+        <SurfaceCard>
+          <SectionHeader
+            title="Resident-facing leadership profile"
+            description="This public card appears in the resident community workspace so every household can see who runs the society and how to reach them."
+          />
+          <Caption>
+            Residents usually expect a clean committee directory with photo, role, phone, email, and availability. Update your own public details here.
+          </Caption>
+          <View style={styles.formGrid}>
+            <View style={styles.formField}>
+              <InputField
+                label="Public name"
+                value={leadershipDisplayName}
+                onChangeText={setLeadershipDisplayName}
+                placeholder="Aarav Mehta"
+              />
+            </View>
+            <View style={styles.formField}>
+              <InputField
+                label="Public role"
+                value={leadershipRoleLabel}
+                onChangeText={setLeadershipRoleLabel}
+                placeholder="Chairman"
+              />
+            </View>
+            <View style={styles.formField}>
+              <InputField
+                label="Public mobile"
+                value={leadershipPhone}
+                onChangeText={setLeadershipPhone}
+                placeholder="+91 98980 11111"
+                keyboardType="phone-pad"
+                autoCapitalize="none"
+              />
+            </View>
+            <View style={styles.formField}>
+              <InputField
+                label="Public email"
+                value={leadershipEmail}
+                onChangeText={setLeadershipEmail}
+                placeholder="committee@example.com"
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+            </View>
+            <View style={styles.formField}>
+              <InputField
+                label="Availability"
+                value={leadershipAvailability}
+                onChangeText={setLeadershipAvailability}
+                placeholder="Mon-Sat, 9:00 AM - 7:00 PM"
+              />
+            </View>
+          </View>
+          <InputField
+            label="Resident-facing summary"
+            value={leadershipBio}
+            onChangeText={setLeadershipBio}
+            multiline
+            placeholder="Tell residents what you handle, when to contact you, and what kind of requests you usually coordinate."
+          />
+          <View style={styles.inlineSection}>
+            <Text style={styles.inlineTitle}>Photo</Text>
+            <View style={styles.choiceRow}>
+              <ActionButton
+                label="Take photo"
+                variant="secondary"
+                onPress={() => {
+                  void handleLeadershipPhotoSelection('environment');
+                }}
+              />
+              <ActionButton
+                label={leadershipPhotoDataUrl ? 'Replace photo' : 'Upload photo'}
+                variant="secondary"
+                onPress={() => {
+                  void handleLeadershipPhotoSelection();
+                }}
+              />
+              {leadershipPhotoDataUrl ? (
+                <ActionButton
+                  label="Remove photo"
+                  variant="danger"
+                  onPress={() => {
+                    setLeadershipPhotoDataUrl('');
+                    setLeadershipProfileMessage('Photo removed. Save to update the resident directory.');
+                  }}
+                />
+              ) : null}
+            </View>
+            {leadershipProfileMessage ? <Caption>{leadershipProfileMessage}</Caption> : null}
+            {leadershipPhotoDataUrl ? (
+              <View style={styles.announcementMediaCard}>
+                <Image source={{ uri: leadershipPhotoDataUrl }} style={styles.announcementMediaImage} />
+              </View>
+            ) : null}
+          </View>
+          <ActionButton
+            label={state.isSyncing ? 'Saving...' : 'Save public leadership profile'}
+            onPress={handleSaveLeadershipProfile}
+            disabled={state.isSyncing || !leadershipDisplayName.trim() || !leadershipRoleLabel.trim() || !leadershipPhone.trim()}
+          />
+          {leadershipDirectory.length > 0 ? (
+            <View style={styles.inlineSection}>
+              <Text style={styles.inlineTitle}>Resident directory preview</Text>
+              <View style={styles.leadershipRoster}>
+                {leadershipDirectory.map((entry) => (
+                  <View key={entry.user.id} style={styles.leadershipMemberCard}>
+                    <View style={styles.compactText}>
+                      <Text style={styles.inlineTitle}>
+                        {entry.leadershipProfile?.displayName ?? entry.user.name}
+                      </Text>
+                      <Caption>{entry.leadershipProfile?.roleLabel ?? humanizeRole(entry.membership.roles.includes('chairman') ? 'chairman' : 'committee')}</Caption>
+                      <Caption>{entry.leadershipProfile?.phone ?? entry.user.phone}</Caption>
+                      {entry.leadershipProfile?.email ? <Caption>{entry.leadershipProfile.email}</Caption> : null}
+                    </View>
+                    <Pill
+                      label={entry.membership.roles.includes('chairman') ? 'Chairman' : 'Committee'}
+                      tone={entry.membership.roles.includes('chairman') ? 'warning' : 'primary'}
+                    />
+                  </View>
+                ))}
+              </View>
+            </View>
+          ) : null}
         </SurfaceCard>
       ) : null}
       {residents.map((entry) => {
@@ -947,8 +1522,11 @@ function AdminResidents({ societyId }: { societyId: string }) {
   );
 }
 
+type AdminBillingFocus = 'all' | 'plan' | 'manual' | 'expenses';
+
 function AdminBilling({ societyId }: { societyId: string }) {
   const { state, actions } = useApp();
+  const [billingFocus, setBillingFocus] = useState<AdminBillingFocus>('all');
   const [expenseType, setExpenseType] = useState<'maintenance' | 'adhoc'>('maintenance');
   const [title, setTitle] = useState('');
   const [amount, setAmount] = useState('');
@@ -1106,6 +1684,10 @@ function AdminBilling({ societyId }: { societyId: string }) {
     }
   }
 
+  const showBillingPlan = billingFocus === 'all' || billingFocus === 'plan';
+  const showBillingManual = billingFocus === 'all' || billingFocus === 'manual';
+  const showBillingExpenses = billingFocus === 'all' || billingFocus === 'expenses';
+
   return (
     <>
       <SectionHeader
@@ -1114,10 +1696,33 @@ function AdminBilling({ societyId }: { societyId: string }) {
       />
       <SurfaceCard>
         <View style={styles.metricGrid}>
-          <MetricCard label="Unpaid invoices" value={String(unpaidInvoices.length)} tone="accent" />
-          <MetricCard label="Captured payments" value={String(capturedPayments)} tone="primary" />
-          <MetricCard label="Expenses" value={String(expenses.length)} tone="blue" />
-          <MetricCard label="UPI configured" value={plan?.upiId || plan?.upiMobileNumber || plan?.upiQrCodeDataUrl ? 'Yes' : 'No'} tone="primary" />
+          <MetricCard
+            label={billingFocus === 'manual' ? 'Unpaid invoices - selected' : 'Unpaid invoices'}
+            value={String(unpaidInvoices.length)}
+            tone="accent"
+            onPress={() => {
+              setManualInvoiceId(unpaidInvoices[0]?.invoice.id ?? null);
+              setBillingFocus((current) => (current === 'manual' ? 'all' : 'manual'));
+            }}
+          />
+          <MetricCard
+            label={billingFocus === 'manual' ? 'Captured payments - selected' : 'Captured payments'}
+            value={String(capturedPayments)}
+            tone="primary"
+            onPress={() => setBillingFocus((current) => (current === 'manual' ? 'all' : 'manual'))}
+          />
+          <MetricCard
+            label={billingFocus === 'expenses' ? 'Expenses - selected' : 'Expenses'}
+            value={String(expenses.length)}
+            tone="blue"
+            onPress={() => setBillingFocus((current) => (current === 'expenses' ? 'all' : 'expenses'))}
+          />
+          <MetricCard
+            label={billingFocus === 'plan' ? 'UPI configured - selected' : 'UPI configured'}
+            value={plan?.upiId || plan?.upiMobileNumber || plan?.upiQrCodeDataUrl ? 'Yes' : 'No'}
+            tone="primary"
+            onPress={() => setBillingFocus((current) => (current === 'plan' ? 'all' : 'plan'))}
+          />
         </View>
         <View style={styles.inlineSection}>
           <Caption>
@@ -1125,7 +1730,7 @@ function AdminBilling({ societyId }: { societyId: string }) {
           </Caption>
         </View>
       </SurfaceCard>
-      {plan ? (
+      {plan && showBillingPlan ? (
         <SurfaceCard>
           <SectionHeader
             title="Maintenance plan"
@@ -1251,6 +1856,7 @@ function AdminBilling({ societyId }: { societyId: string }) {
         </SurfaceCard>
       ) : null}
 
+      {showBillingManual ? (
       <SurfaceCard>
         <SectionHeader
           title="Record manual payment"
@@ -1285,7 +1891,7 @@ function AdminBilling({ societyId }: { societyId: string }) {
                 </View>
                 <View style={styles.formGrid}>
                   <View style={styles.formField}>
-                    <InputField label="Paid on" value={manualPaidAt} onChangeText={setManualPaidAt} placeholder="2026-03-21T10:00" />
+                    <DateTimeField label="Paid on" value={manualPaidAt} onChangeText={setManualPaidAt} placeholder="2026-03-21T10:00" mode="datetime" />
                   </View>
                   <View style={styles.formField}>
                     <InputField
@@ -1311,53 +1917,61 @@ function AdminBilling({ societyId }: { societyId: string }) {
           <Caption>No unpaid invoices are available for manual capture.</Caption>
         )}
       </SurfaceCard>
+      ) : null}
 
-      <SurfaceCard>
-        <SectionHeader title="Record expense" description="Log maintenance and ad hoc spending from this module." />
-        <View style={styles.choiceRow}>
-          {expenseTypes.map((option) => (
-            <ChoiceChip key={option.key} label={option.label} selected={expenseType === option.key} onPress={() => setExpenseType(option.key)} />
-          ))}
-        </View>
-        <View style={styles.formGrid}>
-          <View style={styles.formField}>
-            <InputField label="Title" value={title} onChangeText={setTitle} placeholder="Water pump servicing" />
-          </View>
-          <View style={styles.formField}>
-            <InputField label="Amount (INR)" value={amount} onChangeText={setAmount} keyboardType="numeric" placeholder="12000" />
-          </View>
-          <View style={styles.formField}>
-            <InputField label="Date" value={incurredOn} onChangeText={setIncurredOn} placeholder="2026-03-20" />
-          </View>
-        </View>
-        <InputField label="Notes" value={notes} onChangeText={setNotes} multiline placeholder="Vendor note or work summary" />
-        <ActionButton label={state.isSyncing ? 'Saving...' : 'Save expense'} onPress={handleSave} disabled={state.isSyncing} />
-      </SurfaceCard>
+      {showBillingExpenses ? (
+        <>
+          <SurfaceCard>
+            <SectionHeader title="Record expense" description="Log maintenance and ad hoc spending from this module." />
+            <View style={styles.choiceRow}>
+              {expenseTypes.map((option) => (
+                <ChoiceChip key={option.key} label={option.label} selected={expenseType === option.key} onPress={() => setExpenseType(option.key)} />
+              ))}
+            </View>
+            <View style={styles.formGrid}>
+              <View style={styles.formField}>
+                <InputField label="Title" value={title} onChangeText={setTitle} placeholder="Water pump servicing" />
+              </View>
+              <View style={styles.formField}>
+                <InputField label="Amount (INR)" value={amount} onChangeText={setAmount} keyboardType="numeric" placeholder="12000" />
+              </View>
+              <View style={styles.formField}>
+                <DateTimeField label="Date" value={incurredOn} onChangeText={setIncurredOn} placeholder="2026-03-20" mode="date" />
+              </View>
+            </View>
+            <InputField label="Notes" value={notes} onChangeText={setNotes} multiline placeholder="Vendor note or work summary" />
+            <ActionButton label={state.isSyncing ? 'Saving...' : 'Save expense'} onPress={handleSave} disabled={state.isSyncing} />
+          </SurfaceCard>
 
-      <SurfaceCard>
-        <SectionHeader
-          title="Expense register"
-          description="Saved maintenance and ad hoc expenses are listed here in the same subsection card format used across admin operations."
-        />
-      </SurfaceCard>
-      {expenses.length > 0 ? expenses.map((expense) => (
-        <SurfaceCard key={expense.id}>
-          <View style={styles.rowBetween}>
-            <Text style={styles.cardTitle}>{expense.title}</Text>
-            <Pill label={expense.expenseType === 'maintenance' ? 'Maintenance' : 'Ad hoc'} tone={expense.expenseType === 'maintenance' ? 'primary' : 'accent'} />
-          </View>
-          <Caption>{formatCurrency(expense.amountInr)} - {formatLongDate(expense.incurredOn)}</Caption>
-          {expense.notes ? <Caption>{expense.notes}</Caption> : null}
-        </SurfaceCard>
-      )) : (
-        <SurfaceCard><Caption>No expense records yet.</Caption></SurfaceCard>
-      )}
+          <SurfaceCard>
+            <SectionHeader
+              title="Expense register"
+              description="Saved maintenance and ad hoc expenses are listed here in the same subsection card format used across admin operations."
+            />
+          </SurfaceCard>
+          {expenses.length > 0 ? expenses.map((expense) => (
+            <SurfaceCard key={expense.id}>
+              <View style={styles.rowBetween}>
+                <Text style={styles.cardTitle}>{expense.title}</Text>
+                <Pill label={expense.expenseType === 'maintenance' ? 'Maintenance' : 'Ad hoc'} tone={expense.expenseType === 'maintenance' ? 'primary' : 'accent'} />
+              </View>
+              <Caption>{formatCurrency(expense.amountInr)} - {formatLongDate(expense.incurredOn)}</Caption>
+              {expense.notes ? <Caption>{expense.notes}</Caption> : null}
+            </SurfaceCard>
+          )) : (
+            <SurfaceCard><Caption>No expense records yet.</Caption></SurfaceCard>
+          )}
+        </>
+      ) : null}
     </>
   );
 }
 
+type AdminCollectionsFocus = 'all' | 'approvals' | 'tracker';
+
 function AdminCollections({ societyId }: { societyId: string }) {
   const { state, actions } = useApp();
+  const [collectionsFocus, setCollectionsFocus] = useState<AdminCollectionsFocus>('all');
   const [reminderMessage, setReminderMessage] = useState('');
   const [selectedOfficeUnitId, setSelectedOfficeUnitId] = useState<string | null>(null);
   const [trackerFilter, setTrackerFilter] = useState<'all' | 'pending' | 'overdue' | 'paid'>('all');
@@ -1570,6 +2184,9 @@ function AdminCollections({ societyId }: { societyId: string }) {
     setReceiptActionMessage(await prepareReceiptWhatsappBundle(receipt));
   }
 
+  const showCollectionsApprovals = collectionsFocus === 'all' || collectionsFocus === 'approvals';
+  const showCollectionsTracker = collectionsFocus === 'all' || collectionsFocus === 'tracker';
+
   return (
     <>
       <SectionHeader
@@ -1578,10 +2195,38 @@ function AdminCollections({ societyId }: { societyId: string }) {
       />
       <SurfaceCard>
         <View style={styles.metricGrid}>
-          <MetricCard label="Outstanding dues" value={formatCurrency(totalOutstanding)} tone="accent" />
-          <MetricCard label="Pending approvals" value={String(pendingPaymentFlags.length)} tone="primary" />
-          <MetricCard label="Open maintenance entries" value={String(unpaidInvoices.length)} tone="blue" />
-          <MetricCard label="Collected" value={formatCurrency(totalCaptured)} />
+          <MetricCard
+            label={collectionsFocus === 'tracker' && trackerFilter === 'pending' ? 'Outstanding dues - selected' : 'Outstanding dues'}
+            value={formatCurrency(totalOutstanding)}
+            tone="accent"
+            onPress={() => {
+              setTrackerFilter((current) => (collectionsFocus === 'tracker' && current === 'pending' ? 'all' : 'pending'));
+              setCollectionsFocus((current) => (current === 'tracker' && trackerFilter === 'pending' ? 'all' : 'tracker'));
+            }}
+          />
+          <MetricCard
+            label={collectionsFocus === 'approvals' ? 'Pending approvals - selected' : 'Pending approvals'}
+            value={String(pendingPaymentFlags.length)}
+            tone="primary"
+            onPress={() => setCollectionsFocus((current) => (current === 'approvals' ? 'all' : 'approvals'))}
+          />
+          <MetricCard
+            label={collectionsFocus === 'tracker' && trackerFilter === 'pending' ? 'Open maintenance entries - selected' : 'Open maintenance entries'}
+            value={String(unpaidInvoices.length)}
+            tone="blue"
+            onPress={() => {
+              setTrackerFilter((current) => (collectionsFocus === 'tracker' && current === 'pending' ? 'all' : 'pending'));
+              setCollectionsFocus((current) => (current === 'tracker' && trackerFilter === 'pending' ? 'all' : 'tracker'));
+            }}
+          />
+          <MetricCard
+            label={collectionsFocus === 'tracker' && trackerFilter === 'paid' ? 'Collected - selected' : 'Collected'}
+            value={formatCurrency(totalCaptured)}
+            onPress={() => {
+              setTrackerFilter((current) => (collectionsFocus === 'tracker' && current === 'paid' ? 'all' : 'paid'));
+              setCollectionsFocus((current) => (current === 'tracker' && trackerFilter === 'paid' ? 'all' : 'tracker'));
+            }}
+          />
         </View>
         <View style={styles.inlineSection}>
           <Caption>
@@ -1590,7 +2235,7 @@ function AdminCollections({ societyId }: { societyId: string }) {
         </View>
       </SurfaceCard>
 
-      {nextBillingCycle ? (
+      {nextBillingCycle && showCollectionsTracker ? (
         <SurfaceCard>
           <SectionHeader
             title="Next billing cycle"
@@ -1613,6 +2258,7 @@ function AdminCollections({ societyId }: { societyId: string }) {
         </SurfaceCard>
       ) : null}
 
+      {showCollectionsTracker ? (
       <SurfaceCard>
         <SectionHeader
           title={isOfficeSociety ? 'Remind unpaid offices' : 'Remind unpaid residents'}
@@ -1642,8 +2288,9 @@ function AdminCollections({ societyId }: { societyId: string }) {
           disabled={state.isSyncing || !hasBulkReminderTargets}
         />
       </SurfaceCard>
+      ) : null}
 
-      {isOfficeSociety ? (
+      {isOfficeSociety && showCollectionsTracker ? (
         <SurfaceCard>
           <SectionHeader
             title="Office maintenance status"
@@ -1790,12 +2437,14 @@ function AdminCollections({ societyId }: { societyId: string }) {
         </SurfaceCard>
       ) : null}
 
+      {showCollectionsApprovals ? (
       <SectionHeader
         title={isOfficeSociety ? 'Office maintenance approvals' : 'Resident maintenance approvals'}
         description="Every maintenance proof submitted from the resident workspace lands here for approval or rejection."
       />
-      {receiptActionMessage ? <Caption>{receiptActionMessage}</Caption> : null}
-      {pendingPaymentFlags.length > 0 ? pendingPaymentFlags.map(({ payment, invoice, unit, submitter }) => (
+      ) : null}
+      {showCollectionsApprovals ? receiptActionMessage ? <Caption>{receiptActionMessage}</Caption> : null : null}
+      {showCollectionsApprovals && pendingPaymentFlags.length > 0 ? pendingPaymentFlags.map(({ payment, invoice, unit, submitter }) => (
         <SurfaceCard key={payment.id}>
           <View style={styles.rowBetween}>
             <Text style={styles.cardTitle}>{invoice.periodLabel}</Text>
@@ -1830,9 +2479,10 @@ function AdminCollections({ societyId }: { societyId: string }) {
           </View>
         </SurfaceCard>
       )) : (
-        <SurfaceCard><Caption>No maintenance payment confirmations are waiting right now.</Caption></SurfaceCard>
+        showCollectionsApprovals ? <SurfaceCard><Caption>No maintenance payment confirmations are waiting right now.</Caption></SurfaceCard> : null
       )}
 
+      {showCollectionsTracker ? (
       <SurfaceCard>
         <SectionHeader
           title={isOfficeSociety ? 'Office maintenance tracker' : 'Resident maintenance tracker'}
@@ -1848,7 +2498,8 @@ function AdminCollections({ societyId }: { societyId: string }) {
           Showing {filteredInvoiceCollection.length} {filteredInvoiceCollection.length === 1 ? 'entry' : 'entries'} in the current view.
         </Caption>
       </SurfaceCard>
-      {filteredInvoiceCollection.map(({ invoice, unit, residents, latestPayment, latestReminder }) => (
+      ) : null}
+      {showCollectionsTracker ? filteredInvoiceCollection.map(({ invoice, unit, residents, latestPayment, latestReminder }) => (
         <SurfaceCard key={invoice.id}>
           <View style={styles.rowBetween}>
             <Text style={styles.cardTitle}>{invoice.periodLabel}</Text>
@@ -1875,18 +2526,20 @@ function AdminCollections({ societyId }: { societyId: string }) {
             />
           ) : null}
         </SurfaceCard>
-      ))}
-      {filteredInvoiceCollection.length === 0 ? (
+      )) : null}
+      {showCollectionsTracker && filteredInvoiceCollection.length === 0 ? (
         <SurfaceCard><Caption>No maintenance entries match this filter right now.</Caption></SurfaceCard>
       ) : null}
 
+      {showCollectionsTracker ? (
       <SurfaceCard>
         <SectionHeader
           title="Payment reminders sent"
           description="Every reminder broadcast is preserved here so follow-up activity stays visible after the tracker actions above."
         />
       </SurfaceCard>
-      {paymentReminders.length > 0 ? paymentReminders.map(({ reminder, units, sentBy }) => (
+      ) : null}
+      {showCollectionsTracker && paymentReminders.length > 0 ? paymentReminders.map(({ reminder, units, sentBy }) => (
         <SurfaceCard key={reminder.id}>
           <Text style={styles.cardTitle}>Reminder by {sentBy?.name ?? 'Admin'}</Text>
           <Caption>{reminder.message}</Caption>
@@ -1894,7 +2547,7 @@ function AdminCollections({ societyId }: { societyId: string }) {
           <Caption>{formatLongDate(reminder.sentAt)}</Caption>
         </SurfaceCard>
       )) : (
-        <SurfaceCard><Caption>No maintenance reminders have been sent yet.</Caption></SurfaceCard>
+        showCollectionsTracker ? <SurfaceCard><Caption>No maintenance reminders have been sent yet.</Caption></SurfaceCard> : null
       )}
 
     </>
@@ -1954,10 +2607,10 @@ function AdminPaymentLedger({ societyId }: { societyId: string }) {
       />
       <SurfaceCard>
         <View style={styles.metricGrid}>
-          <MetricCard label="Total payments" value={String(payments.length)} />
-          <MetricCard label="Captured" value={String(capturedPayments.length)} tone="primary" />
-          <MetricCard label="Pending review" value={String(pendingPayments.length)} tone="accent" />
-          <MetricCard label="Receipts ready" value={String(receiptReadyCount)} tone="blue" />
+          <MetricCard label={paymentFilter === 'all' ? 'Total payments - selected' : 'Total payments'} value={String(payments.length)} onPress={() => setPaymentFilter('all')} />
+          <MetricCard label={paymentFilter === 'captured' ? 'Captured - selected' : 'Captured'} value={String(capturedPayments.length)} tone="primary" onPress={() => setPaymentFilter('captured')} />
+          <MetricCard label={paymentFilter === 'pending' ? 'Pending review - selected' : 'Pending review'} value={String(pendingPayments.length)} tone="accent" onPress={() => setPaymentFilter('pending')} />
+          <MetricCard label={paymentFilter === 'captured' ? 'Receipts ready - selected' : 'Receipts ready'} value={String(receiptReadyCount)} tone="blue" onPress={() => setPaymentFilter('captured')} />
         </View>
         {rejectedPayments.length > 0 ? (
           <Caption>{rejectedPayments.length} payment {rejectedPayments.length === 1 ? 'entry is' : 'entries are'} currently rejected.</Caption>
@@ -2025,11 +2678,13 @@ function AdminPaymentLedger({ societyId }: { societyId: string }) {
 
 function AdminAmenities({ societyId }: { societyId: string }) {
   const { state, actions } = useApp();
+  const [bookingFilter, setBookingFilter] = useState<'all' | 'pending' | 'waitlisted' | 'confirmed'>('all');
   const amenities = getAmenitiesForSociety(state.data, societyId);
   const bookings = getBookingsForSociety(state.data, societyId);
   const pendingBookings = bookings.filter(({ booking }) => booking.status === 'pending');
   const waitlistedBookings = bookings.filter(({ booking }) => booking.status === 'waitlisted');
   const confirmedBookings = bookings.filter(({ booking }) => booking.status === 'confirmed').length;
+  const visibleBookings = bookings.filter(({ booking }) => bookingFilter === 'all' || booking.status === bookingFilter);
 
   return (
     <>
@@ -2039,10 +2694,10 @@ function AdminAmenities({ societyId }: { societyId: string }) {
       />
       <SurfaceCard>
         <View style={styles.metricGrid}>
-          <MetricCard label="Amenities" value={String(amenities.length)} tone="primary" />
-          <MetricCard label="Pending" value={String(pendingBookings.length)} tone="accent" />
-          <MetricCard label="Waitlisted" value={String(waitlistedBookings.length)} tone="blue" />
-          <MetricCard label="Confirmed" value={String(confirmedBookings)} tone="primary" />
+          <MetricCard label={bookingFilter === 'all' ? 'Amenities - selected' : 'Amenities'} value={String(amenities.length)} tone="primary" onPress={() => setBookingFilter('all')} />
+          <MetricCard label={bookingFilter === 'pending' ? 'Pending - selected' : 'Pending'} value={String(pendingBookings.length)} tone="accent" onPress={() => setBookingFilter((current) => (current === 'pending' ? 'all' : 'pending'))} />
+          <MetricCard label={bookingFilter === 'waitlisted' ? 'Waitlisted - selected' : 'Waitlisted'} value={String(waitlistedBookings.length)} tone="blue" onPress={() => setBookingFilter((current) => (current === 'waitlisted' ? 'all' : 'waitlisted'))} />
+          <MetricCard label={bookingFilter === 'confirmed' ? 'Confirmed - selected' : 'Confirmed'} value={String(confirmedBookings)} tone="primary" onPress={() => setBookingFilter((current) => (current === 'confirmed' ? 'all' : 'confirmed'))} />
         </View>
         <View style={styles.inlineSection}>
           <Caption>
@@ -2058,6 +2713,7 @@ function AdminAmenities({ societyId }: { societyId: string }) {
             <Pill label={amenity.bookingType} tone="accent" />
           </View>
           <Caption>Approval: {amenity.approvalMode}{amenity.priceInr ? ` - Fee ${formatCurrency(amenity.priceInr)}` : ''}</Caption>
+          <Caption>Booking mode: {amenity.reservationScope === 'fullDay' ? 'Full-day lock' : 'Timed slots'}</Caption>
         </SurfaceCard>
       ))}
 
@@ -2067,19 +2723,19 @@ function AdminAmenities({ societyId }: { societyId: string }) {
           description="Resident booking requests land here. Confirm or waitlist them so the resident workspace and admin queue stay in sync."
         />
         <View style={styles.metricGrid}>
-          <MetricCard label="Pending review" value={String(pendingBookings.length)} tone="accent" />
-          <MetricCard label="Waitlisted" value={String(waitlistedBookings.length)} tone="blue" />
-          <MetricCard label="Total requests" value={String(bookings.length)} />
+          <MetricCard label={bookingFilter === 'pending' ? 'Pending review - selected' : 'Pending review'} value={String(pendingBookings.length)} tone="accent" onPress={() => setBookingFilter((current) => (current === 'pending' ? 'all' : 'pending'))} />
+          <MetricCard label={bookingFilter === 'waitlisted' ? 'Waitlisted - selected' : 'Waitlisted'} value={String(waitlistedBookings.length)} tone="blue" onPress={() => setBookingFilter((current) => (current === 'waitlisted' ? 'all' : 'waitlisted'))} />
+          <MetricCard label={bookingFilter === 'all' ? 'Total requests - selected' : 'Total requests'} value={String(bookings.length)} onPress={() => setBookingFilter('all')} />
         </View>
       </SurfaceCard>
 
       <SurfaceCard>
         <SectionHeader
           title="Pending, waitlisted, and confirmed bookings"
-          description="The full amenity booking queue stays grouped here after the summary cards so every status reads the same way."
+          description={bookingFilter === 'all' ? 'The full amenity booking queue stays grouped here after the summary cards so every status reads the same way.' : `Showing ${visibleBookings.length} ${bookingFilter} booking${visibleBookings.length === 1 ? '' : 's'} from the summary selection above.`}
         />
       </SurfaceCard>
-      {bookings.length > 0 ? bookings.map(({ booking, amenity, unit, user }) => (
+      {visibleBookings.length > 0 ? visibleBookings.map(({ booking, amenity, unit, user }) => (
         <SurfaceCard key={booking.id}>
           <View style={styles.rowBetween}>
             <Text style={styles.cardTitle}>{amenity?.name ?? 'Amenity booking'}</Text>
@@ -2383,8 +3039,11 @@ function AdminHelpdesk({ societyId }: { societyId: string }) {
   );
 }
 
+type AdminSecurityFocus = 'all' | 'guards' | 'staff' | 'visitors' | 'entries';
+
 function AdminSecurity({ societyId }: { societyId: string }) {
   const { state, actions } = useApp();
+  const [securityFocus, setSecurityFocus] = useState<AdminSecurityFocus>('all');
   const [guardName, setGuardName] = useState('');
   const [guardPhone, setGuardPhone] = useState('');
   const [guardShiftLabel, setGuardShiftLabel] = useState('');
@@ -2465,6 +3124,11 @@ function AdminSecurity({ societyId }: { societyId: string }) {
     }
   }
 
+  const showGuardSection = securityFocus === 'all' || securityFocus === 'guards';
+  const showStaffSection = securityFocus === 'all' || securityFocus === 'staff';
+  const showVisitorSection = securityFocus === 'all' || securityFocus === 'visitors';
+  const showEntrySection = securityFocus === 'all' || securityFocus === 'entries';
+
   return (
     <>
       <SectionHeader
@@ -2473,10 +3137,10 @@ function AdminSecurity({ societyId }: { societyId: string }) {
       />
       <SurfaceCard>
         <View style={styles.metricGrid}>
-          <MetricCard label="Guards" value={String(guards.length)} tone="primary" />
-          <MetricCard label="Pending staff" value={String(pendingStaff.length)} tone="accent" />
-          <MetricCard label="Visitor passes" value={String(visitorPasses.length)} tone="blue" />
-          <MetricCard label="Checked in" value={String(checkedInVisitorPasses)} tone="primary" />
+          <MetricCard label={securityFocus === 'guards' ? 'Guards - selected' : 'Guards'} value={String(guards.length)} tone="primary" onPress={() => setSecurityFocus((current) => (current === 'guards' ? 'all' : 'guards'))} />
+          <MetricCard label={securityFocus === 'staff' ? 'Pending staff - selected' : 'Pending staff'} value={String(pendingStaff.length)} tone="accent" onPress={() => setSecurityFocus((current) => (current === 'staff' ? 'all' : 'staff'))} />
+          <MetricCard label={securityFocus === 'visitors' ? 'Visitor passes - selected' : 'Visitor passes'} value={String(visitorPasses.length)} tone="blue" onPress={() => setSecurityFocus((current) => (current === 'visitors' ? 'all' : 'visitors'))} />
+          <MetricCard label={securityFocus === 'visitors' ? 'Checked in - selected' : 'Checked in'} value={String(checkedInVisitorPasses)} tone="primary" onPress={() => setSecurityFocus((current) => (current === 'visitors' ? 'all' : 'visitors'))} />
         </View>
         <View style={styles.inlineSection}>
           <Caption>
@@ -2485,8 +3149,11 @@ function AdminSecurity({ societyId }: { societyId: string }) {
         </View>
       </SurfaceCard>
 
-      <SectionHeader title="Security operations" description="Add guard, staff, and entry data here. Residents can then see the records tied to their units." />
+      {showGuardSection || showStaffSection || showEntrySection ? (
+        <SectionHeader title="Security operations" description="Add guard, staff, and entry data here. Residents can then see the records tied to their units." />
+      ) : null}
 
+      {showGuardSection ? (
       <SurfaceCard>
         <SectionHeader title="Guard roster" />
         <View style={styles.formGrid}>
@@ -2495,8 +3162,8 @@ function AdminSecurity({ societyId }: { societyId: string }) {
           <View style={styles.formField}><InputField label="Shift label" value={guardShiftLabel} onChangeText={setGuardShiftLabel} placeholder="Day or Night" /></View>
           <View style={styles.formField}><InputField label="Vendor" value={guardVendor} onChangeText={setGuardVendor} placeholder="SecureNest Services" /></View>
           <View style={styles.formField}><InputField label="Gate" value={guardGate} onChangeText={setGuardGate} placeholder="Main gate" /></View>
-          <View style={styles.formField}><InputField label="Shift start" value={guardShiftStart} onChangeText={setGuardShiftStart} placeholder="2026-03-20T06:00" /></View>
-          <View style={styles.formField}><InputField label="Shift end" value={guardShiftEnd} onChangeText={setGuardShiftEnd} placeholder="2026-03-20T14:00" /></View>
+          <View style={styles.formField}><DateTimeField label="Shift start" value={guardShiftStart} onChangeText={setGuardShiftStart} placeholder="2026-03-20T06:00" mode="datetime" /></View>
+          <View style={styles.formField}><DateTimeField label="Shift end" value={guardShiftEnd} onChangeText={setGuardShiftEnd} placeholder="2026-03-20T14:00" mode="datetime" /></View>
         </View>
         <ActionButton label={state.isSyncing ? 'Saving...' : 'Add guard'} onPress={saveGuard} disabled={state.isSyncing} />
         <Caption>
@@ -2511,7 +3178,9 @@ function AdminSecurity({ societyId }: { societyId: string }) {
           </View>
         )) : <Caption>No guards added yet.</Caption>}
       </SurfaceCard>
+      ) : null}
 
+      {showStaffSection ? (
       <SurfaceCard>
         <SectionHeader
           title="Domestic staff verification and approvals"
@@ -2598,7 +3267,9 @@ function AdminSecurity({ societyId }: { societyId: string }) {
           </View>
         )) : <Caption>No staff records added yet.</Caption>}
       </SurfaceCard>
+      ) : null}
 
+      {showVisitorSection ? (
       <SurfaceCard>
         <SectionHeader
           title="Visitor passes"
@@ -2653,7 +3324,9 @@ function AdminSecurity({ societyId }: { societyId: string }) {
           </View>
         )) : <Caption>No visitor passes created yet.</Caption>}
       </SurfaceCard>
+      ) : null}
 
+      {showEntrySection ? (
       <SurfaceCard>
         <SectionHeader title="Recent entry logs" />
         <View style={styles.choiceRow}>
@@ -2679,15 +3352,20 @@ function AdminSecurity({ societyId }: { societyId: string }) {
           </View>
         )) : <Caption>No entry logs added yet.</Caption>}
       </SurfaceCard>
+      ) : null}
     </>
   );
 }
 
+type AdminCommunicationsFocus = 'all' | 'announcements' | 'highPriority' | 'rules' | 'documents';
+
 function AdminAnnouncements({ societyId }: { societyId: string }) {
   const { state, actions } = useApp();
+  const [communicationsFocus, setCommunicationsFocus] = useState<AdminCommunicationsFocus>('all');
   const society = getSelectedSociety(state.data, societyId);
   const announcements = getAnnouncementsForSociety(state.data, societyId);
   const rules = getRulesForSociety(state.data, societyId);
+  const societyDocuments = getSocietyDocuments(state.data, societyId);
   const [selectedTemplateKey, setSelectedTemplateKey] = useState('custom');
   const [announcementTitle, setAnnouncementTitle] = useState('');
   const [announcementBody, setAnnouncementBody] = useState('');
@@ -2695,7 +3373,21 @@ function AdminAnnouncements({ societyId }: { societyId: string }) {
   const [announcementPhotoMessage, setAnnouncementPhotoMessage] = useState('');
   const [announcementAudience, setAnnouncementAudience] = useState<AnnouncementAudience>('all');
   const [announcementPriority, setAnnouncementPriority] = useState<AnnouncementPriority>('normal');
+  const [documentCategory, setDocumentCategory] = useState<SocietyDocumentCategory>('liftLicense');
+  const [documentTitle, setDocumentTitle] = useState('');
+  const [documentSummary, setDocumentSummary] = useState('');
+  const [documentIssuedOn, setDocumentIssuedOn] = useState('');
+  const [documentValidUntil, setDocumentValidUntil] = useState('');
+  const [documentFileName, setDocumentFileName] = useState('');
+  const [documentFileDataUrl, setDocumentFileDataUrl] = useState('');
+  const [documentUploadMessage, setDocumentUploadMessage] = useState('');
   const highPriorityAnnouncements = announcements.filter((announcement) => announcement.priority === 'high').length;
+  const visibleAnnouncements = communicationsFocus === 'highPriority'
+    ? announcements.filter((announcement) => announcement.priority === 'high')
+    : announcements;
+  const showAnnouncementSection = communicationsFocus === 'all' || communicationsFocus === 'announcements' || communicationsFocus === 'highPriority';
+  const showRulesSection = communicationsFocus === 'all' || communicationsFocus === 'rules';
+  const showDocumentsSection = communicationsFocus === 'all' || communicationsFocus === 'documents';
 
   async function handleSendAnnouncement() {
     const saved = await actions.createAnnouncement(societyId, {
@@ -2745,6 +3437,51 @@ function AdminAnnouncements({ societyId }: { societyId: string }) {
     }
   }
 
+  async function handleSocietyDocumentSelection() {
+    try {
+      const selectedFile = await pickWebFileAsDataUrl({
+        accept: 'application/pdf,image/png,image/jpeg,image/webp',
+        maxSizeInBytes: 5 * 1024 * 1024,
+        unsupportedMessage: 'Society document upload is currently available from the web workspace.',
+        tooLargeMessage: 'Choose a document smaller than 5 MB.',
+        readErrorMessage: 'Could not read the selected document.',
+      });
+
+      if (!selectedFile) {
+        return;
+      }
+
+      setDocumentFileName(selectedFile.fileName);
+      setDocumentFileDataUrl(selectedFile.dataUrl);
+      setDocumentUploadMessage(`${selectedFile.fileName} is ready to publish for residents.`);
+    } catch (error) {
+      setDocumentUploadMessage(error instanceof Error ? error.message : 'Could not attach the document.');
+    }
+  }
+
+  async function handleCreateSocietyDocument() {
+    const saved = await actions.createSocietyDocument(societyId, {
+      category: documentCategory,
+      title: documentTitle,
+      fileName: documentFileName,
+      fileDataUrl: documentFileDataUrl,
+      summary: documentSummary || undefined,
+      issuedOn: documentIssuedOn || undefined,
+      validUntil: documentValidUntil || undefined,
+    });
+
+    if (saved) {
+      setDocumentCategory('liftLicense');
+      setDocumentTitle('');
+      setDocumentSummary('');
+      setDocumentIssuedOn('');
+      setDocumentValidUntil('');
+      setDocumentFileName('');
+      setDocumentFileDataUrl('');
+      setDocumentUploadMessage('');
+    }
+  }
+
   function applyAnnouncementTemplate(templateKey: string) {
     if (templateKey === 'custom') {
       setSelectedTemplateKey('custom');
@@ -2777,10 +3514,10 @@ function AdminAnnouncements({ societyId }: { societyId: string }) {
       />
       <SurfaceCard>
         <View style={styles.metricGrid}>
-          <MetricCard label="Announcements" value={String(announcements.length)} tone="primary" />
-          <MetricCard label="High priority" value={String(highPriorityAnnouncements)} tone="accent" />
-          <MetricCard label="Rules" value={String(rules.length)} tone="blue" />
-          <MetricCard label="Templates" value={String(announcementTemplates.length)} tone="primary" />
+          <MetricCard label={communicationsFocus === 'announcements' || communicationsFocus === 'all' ? 'Announcements - selected' : 'Announcements'} value={String(announcements.length)} tone="primary" onPress={() => setCommunicationsFocus((current) => (current === 'announcements' ? 'all' : 'announcements'))} />
+          <MetricCard label={communicationsFocus === 'highPriority' ? 'High priority - selected' : 'High priority'} value={String(highPriorityAnnouncements)} tone="accent" onPress={() => setCommunicationsFocus((current) => (current === 'highPriority' ? 'all' : 'highPriority'))} />
+          <MetricCard label={communicationsFocus === 'rules' ? 'Rules - selected' : 'Rules'} value={String(rules.length)} tone="blue" onPress={() => setCommunicationsFocus((current) => (current === 'rules' ? 'all' : 'rules'))} />
+          <MetricCard label={communicationsFocus === 'documents' ? 'Compliance docs - selected' : 'Compliance docs'} value={String(societyDocuments.length)} tone="primary" onPress={() => setCommunicationsFocus((current) => (current === 'documents' ? 'all' : 'documents'))} />
         </View>
         <View style={styles.inlineSection}>
           <Caption>
@@ -2789,10 +3526,13 @@ function AdminAnnouncements({ societyId }: { societyId: string }) {
         </View>
       </SurfaceCard>
 
+      {showAnnouncementSection ? (
       <SectionHeader
         title="Targeted communications"
         description="Choose a common society announcement template or draft a custom one, then send it to the selected audience in one shot."
       />
+      ) : null}
+      {showAnnouncementSection ? (
       <SurfaceCard>
         <Text style={styles.cardTitle}>Send announcement</Text>
         <Caption>
@@ -2923,8 +3663,9 @@ function AdminAnnouncements({ societyId }: { societyId: string }) {
           />
         </View>
       </SurfaceCard>
+      ) : null}
 
-      {announcements.length > 0 ? announcements.map((announcement) => (
+      {showAnnouncementSection && visibleAnnouncements.length > 0 ? visibleAnnouncements.map((announcement) => (
         <SurfaceCard key={announcement.id}>
           <View style={styles.rowBetween}>
             <Text style={styles.cardTitle}>{announcement.title}</Text>
@@ -2944,32 +3685,159 @@ function AdminAnnouncements({ societyId }: { societyId: string }) {
           ) : null}
         </SurfaceCard>
       )) : (
-        <SurfaceCard>
+        showAnnouncementSection ? <SurfaceCard>
           <Caption>No announcements published yet.</Caption>
-        </SurfaceCard>
+        </SurfaceCard> : null
       )}
+      {showRulesSection ? (
       <SurfaceCard>
         <SectionHeader
           title="Policy and rule documents"
           description="Published rules and society policy notes are kept in one document section beneath the communications feed."
         />
       </SurfaceCard>
-      {rules.map((rule) => (
+      ) : null}
+      {showRulesSection ? rules.map((rule) => (
         <SurfaceCard key={rule.id}>
           <Text style={styles.cardTitle}>{rule.title}</Text>
           <Caption>{rule.version} - Published {formatShortDate(rule.publishedAt)}</Caption>
           {rule.summary ? <Caption>{rule.summary}</Caption> : null}
         </SurfaceCard>
-      ))}
+      )) : null}
+      {showDocumentsSection ? (
+      <SurfaceCard>
+        <SectionHeader
+          title="Compliance and utility records"
+          description="Upload resident-visible shared records like lift licenses, common-light bills, fire safety certificates, and other office documents."
+        />
+        <View style={styles.inlineSection}>
+          <Text style={styles.inlineTitle}>Document type</Text>
+          <View style={styles.choiceRow}>
+            {societyDocumentCategoryOptions.map((option) => (
+              <ChoiceChip
+                key={option.key}
+                label={option.label}
+                selected={documentCategory === option.key}
+                onPress={() => setDocumentCategory(option.key)}
+              />
+            ))}
+          </View>
+        </View>
+        <View style={styles.formGrid}>
+          <View style={styles.formField}>
+            <InputField
+              label="Document title"
+              value={documentTitle}
+              onChangeText={setDocumentTitle}
+              placeholder="Common-area electricity bill - March 2026"
+            />
+          </View>
+          <View style={styles.formField}>
+            <InputField
+              label="Issue date"
+              value={documentIssuedOn}
+              onChangeText={setDocumentIssuedOn}
+              nativeType="date"
+            />
+          </View>
+          <View style={styles.formField}>
+            <InputField
+              label="Valid until / due date"
+              value={documentValidUntil}
+              onChangeText={setDocumentValidUntil}
+              nativeType="date"
+            />
+          </View>
+        </View>
+        <InputField
+          label="Resident note"
+          value={documentSummary}
+          onChangeText={setDocumentSummary}
+          multiline
+          placeholder="Explain what this record covers and when residents may need to refer to it."
+        />
+        <View style={styles.inlineSection}>
+          <Text style={styles.inlineTitle}>Attachment</Text>
+          <View style={styles.choiceRow}>
+            <ActionButton label={documentFileDataUrl ? 'Replace file' : 'Upload file'} variant="secondary" onPress={() => {
+              void handleSocietyDocumentSelection();
+            }} />
+            {documentFileDataUrl ? (
+              <ActionButton
+                label="Open file"
+                variant="secondary"
+                onPress={() => {
+                  void openUploadedFileDataUrl(documentFileDataUrl);
+                }}
+              />
+            ) : null}
+            {documentFileDataUrl ? (
+              <ActionButton
+                label="Remove file"
+                variant="danger"
+                onPress={() => {
+                  setDocumentFileName('');
+                  setDocumentFileDataUrl('');
+                  setDocumentUploadMessage('');
+                }}
+              />
+            ) : null}
+          </View>
+          {documentFileName ? <Caption>{documentFileName}</Caption> : null}
+          {documentUploadMessage ? <Caption>{documentUploadMessage}</Caption> : null}
+        </View>
+        <ActionButton
+          label={state.isSyncing ? 'Uploading...' : 'Publish society document'}
+          onPress={handleCreateSocietyDocument}
+          disabled={state.isSyncing || !documentTitle.trim() || !documentFileName || !documentFileDataUrl}
+        />
+      </SurfaceCard>
+      ) : null}
+      {showDocumentsSection && societyDocuments.length > 0 ? societyDocuments.map((document) => (
+        <SurfaceCard key={document.id}>
+          <View style={styles.rowBetween}>
+            <Text style={styles.cardTitle}>{document.title}</Text>
+            <Pill label={humanizeSocietyDocumentCategory(document.category)} tone="accent" />
+          </View>
+          <Caption>{document.fileName}</Caption>
+          {document.summary ? <Caption>{document.summary}</Caption> : null}
+          <Caption>
+            Uploaded {formatLongDate(document.uploadedAt)}
+            {document.issuedOn ? ` | Issued ${document.issuedOn}` : ''}
+            {document.validUntil ? ` | Valid until ${document.validUntil}` : ''}
+          </Caption>
+          <View style={styles.heroActions}>
+            <ActionButton
+              label="Open document"
+              variant="secondary"
+              onPress={() => {
+                void openUploadedFileDataUrl(document.fileDataUrl);
+              }}
+            />
+          </View>
+        </SurfaceCard>
+      )) : (
+        showDocumentsSection ? <SurfaceCard>
+          <Caption>No compliance or utility records uploaded yet.</Caption>
+        </SurfaceCard> : null
+      )}
     </>
   );
 }
 
+type AdminAuditFocus = 'all' | 'today' | 'latest';
+
 function AdminAudit({ societyId }: { societyId: string }) {
   const { state } = useApp();
+  const [auditFocus, setAuditFocus] = useState<AdminAuditFocus>('all');
   const events = getAuditEvents(state.data, societyId);
   const todayPrefix = new Date().toISOString().slice(0, 10);
   const todayEvents = events.filter((event) => event.createdAt.slice(0, 10) === todayPrefix).length;
+  const visibleEvents = auditFocus === 'today'
+    ? events.filter((event) => event.createdAt.slice(0, 10) === todayPrefix)
+    : auditFocus === 'latest'
+      ? events.slice(0, 1)
+      : events;
 
   return (
     <>
@@ -2979,9 +3847,9 @@ function AdminAudit({ societyId }: { societyId: string }) {
       />
       <SurfaceCard>
         <View style={styles.metricGrid}>
-          <MetricCard label="Total events" value={String(events.length)} tone="primary" />
-          <MetricCard label="Today" value={String(todayEvents)} tone="accent" />
-          <MetricCard label="Latest event" value={events[0] ? formatShortDate(events[0].createdAt) : 'None'} tone="blue" />
+          <MetricCard label={auditFocus === 'all' ? 'Total events - selected' : 'Total events'} value={String(events.length)} tone="primary" onPress={() => setAuditFocus('all')} />
+          <MetricCard label={auditFocus === 'today' ? 'Today - selected' : 'Today'} value={String(todayEvents)} tone="accent" onPress={() => setAuditFocus((current) => (current === 'today' ? 'all' : 'today'))} />
+          <MetricCard label={auditFocus === 'latest' ? 'Latest event - selected' : 'Latest event'} value={events[0] ? formatShortDate(events[0].createdAt) : 'None'} tone="blue" onPress={() => setAuditFocus((current) => (current === 'latest' ? 'all' : 'latest'))} />
         </View>
         <View style={styles.inlineSection}>
           <Caption>
@@ -2992,10 +3860,10 @@ function AdminAudit({ societyId }: { societyId: string }) {
       <SurfaceCard>
         <SectionHeader
           title="Audit timeline"
-          description="Durable logs for notices, money movement, complaints, and security actions."
+          description={auditFocus === 'all' ? 'Durable logs for notices, money movement, complaints, and security actions.' : auditFocus === 'today' ? `Showing ${visibleEvents.length} event${visibleEvents.length === 1 ? '' : 's'} from today.` : 'Showing the latest recorded admin event.'}
         />
       </SurfaceCard>
-      {events.map((event) => (
+      {visibleEvents.map((event) => (
         <SurfaceCard key={event.id}>
           <Text style={styles.cardTitle}>{event.title}</Text>
           <Caption>{event.subtitle}</Caption>
@@ -3006,9 +3874,366 @@ function AdminAudit({ societyId }: { societyId: string }) {
   );
 }
 
+type AdminMeetingsSection = 'list' | 'create' | 'detail';
+
+function AdminMeetings({ societyId, userId }: { societyId: string; userId: string }) {
+  const { state, actions } = useApp();
+  const meetings = getMeetingsForSociety(state.data, societyId);
+  const [activeSection, setActiveSection] = useState<AdminMeetingsSection>('list');
+  const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(null);
+
+  // Create meeting form
+  const [meetingTitle, setMeetingTitle] = useState('');
+  const [meetingType, setMeetingType] = useState<'society' | 'committee' | 'emergency'>('society');
+  const [meetingDate, setMeetingDate] = useState('');
+  const [meetingTime, setMeetingTime] = useState('18:00');
+  const [meetingVenue, setMeetingVenue] = useState('');
+  const [meetingSummary, setMeetingSummary] = useState('');
+
+  // Agenda form
+  const [agendaTitle, setAgendaTitle] = useState('');
+  const [agendaDescription, setAgendaDescription] = useState('');
+  const [agendaRequiresVoting, setAgendaRequiresVoting] = useState(false);
+
+  const meetingTypeOptions: Array<{ key: 'society' | 'committee' | 'emergency'; label: string }> = [
+    { key: 'society', label: 'Society Meeting' },
+    { key: 'committee', label: 'Committee Meeting' },
+    { key: 'emergency', label: 'Emergency Meeting' },
+  ];
+
+  const selectedMeeting = selectedMeetingId
+    ? meetings.find((m) => m.id === selectedMeetingId) ?? null
+    : null;
+  const agendaItems = selectedMeetingId
+    ? getMeetingAgendaItems(state.data, selectedMeetingId)
+    : [];
+  const signatures = selectedMeetingId
+    ? getMeetingSignatures(state.data, selectedMeetingId)
+    : [];
+
+  async function handleCreateMeeting() {
+    if (!meetingTitle.trim() || !meetingDate || !meetingVenue.trim()) {
+      return;
+    }
+
+    const saved = await actions.createSocietyMeeting(societyId, {
+      title: meetingTitle,
+      meetingType,
+      scheduledAt: new Date(`${meetingDate}T${meetingTime || '00:00'}`).toISOString(),
+      venue: meetingVenue,
+      summary: meetingSummary || undefined,
+    });
+
+    if (saved) {
+      setMeetingTitle('');
+      setMeetingDate('');
+      setMeetingTime('18:00');
+      setMeetingVenue('');
+      setMeetingSummary('');
+      setActiveSection('list');
+    }
+  }
+
+  async function handleAddAgendaItem() {
+    if (!selectedMeetingId || !agendaTitle.trim()) {
+      return;
+    }
+
+    const saved = await actions.addMeetingAgendaItem(societyId, selectedMeetingId, {
+      title: agendaTitle,
+      description: agendaDescription || undefined,
+      requiresVoting: agendaRequiresVoting,
+    });
+
+    if (saved) {
+      setAgendaTitle('');
+      setAgendaDescription('');
+      setAgendaRequiresVoting(false);
+    }
+  }
+
+  async function handleCompleteMeeting() {
+    if (!selectedMeetingId) {
+      return;
+    }
+
+    await actions.completeSocietyMeeting(societyId, selectedMeetingId);
+  }
+
+  const scheduledCount = meetings.filter((m) => m.status === 'scheduled').length;
+  const completedCount = meetings.filter((m) => m.status === 'completed').length;
+
+  if (activeSection === 'create') {
+    return (
+      <>
+        <SectionHeader
+          title="Schedule a meeting"
+          description="Add a society meeting with type, venue, and agenda items."
+        />
+        <SurfaceCard>
+          <View style={styles.inlineSection}>
+            <Caption>Meeting type</Caption>
+            <View style={styles.chipRow}>
+              {meetingTypeOptions.map((option) => (
+                <ChoiceChip
+                  key={option.key}
+                  label={option.label}
+                  selected={meetingType === option.key}
+                  onPress={() => setMeetingType(option.key)}
+                />
+              ))}
+            </View>
+          </View>
+          <InputField
+            label="Meeting title"
+            value={meetingTitle}
+            onChangeText={setMeetingTitle}
+            placeholder="e.g. Annual General Meeting 2026"
+          />
+          <DateTimeField
+            label="Date"
+            value={meetingDate}
+            onChangeText={setMeetingDate}
+            placeholder="Select date"
+            mode="date"
+          />
+          <DateTimeField
+            label="Time (HH:MM)"
+            value={meetingTime}
+            onChangeText={setMeetingTime}
+            placeholder="18:00"
+            mode="time"
+          />
+          <InputField
+            label="Venue"
+            value={meetingVenue}
+            onChangeText={setMeetingVenue}
+            placeholder="e.g. Clubhouse Hall, Ground Floor"
+          />
+          <InputField
+            label="Summary (optional)"
+            value={meetingSummary}
+            onChangeText={setMeetingSummary}
+            placeholder="Brief description of the meeting purpose"
+            multiline
+          />
+          <View style={styles.rowBetween}>
+            <ActionButton label="Cancel" onPress={() => setActiveSection('list')} variant="secondary" />
+            <ActionButton
+              label={state.isSyncing ? 'Saving...' : 'Create meeting'}
+              onPress={handleCreateMeeting}
+              disabled={state.isSyncing || !meetingTitle.trim() || !meetingDate || !meetingVenue.trim()}
+            />
+          </View>
+        </SurfaceCard>
+      </>
+    );
+  }
+
+  if (activeSection === 'detail' && selectedMeeting) {
+    return (
+      <>
+        <SectionHeader
+          title={selectedMeeting.title}
+          description={`${humanizeMeetingType(selectedMeeting.meetingType)} · ${selectedMeeting.venue}`}
+        />
+        <SurfaceCard>
+          <View style={styles.metricGrid}>
+            <MetricCard label="Status" value={humanizeMeetingStatus(selectedMeeting.status)} tone={getMeetingStatusTone(selectedMeeting.status) as 'primary' | 'accent'} />
+            <MetricCard label="Agenda items" value={String(agendaItems.length)} tone="blue" />
+            <MetricCard label="Signatures" value={String(signatures.length)} tone="primary" />
+          </View>
+          {selectedMeeting.summary ? (
+            <View style={styles.inlineSection}>
+              <Caption>{selectedMeeting.summary}</Caption>
+            </View>
+          ) : null}
+          <View style={styles.rowBetween}>
+            <ActionButton label="Back to list" onPress={() => { setActiveSection('list'); setSelectedMeetingId(null); }} variant="secondary" />
+            {selectedMeeting.status === 'scheduled' ? (
+              <ActionButton label="Mark completed" onPress={handleCompleteMeeting} variant="secondary" />
+            ) : null}
+          </View>
+        </SurfaceCard>
+
+        <SurfaceCard>
+          <SectionHeader
+            title="Agenda items"
+            description="Add agenda points for discussion. Enable voting on items that need a resolution."
+          />
+          {agendaItems.length > 0 ? (
+            agendaItems.map((item) => {
+              const votes = getMeetingVotesForItem(state.data, item.id);
+              const yesVotes = votes.filter((v) => v.vote === 'yes').length;
+              const noVotes = votes.filter((v) => v.vote === 'no').length;
+              const abstainVotes = votes.filter((v) => v.vote === 'abstain').length;
+
+              return (
+                <View key={item.id} style={styles.meetingAgendaRow}>
+                  <View style={styles.meetingAgendaRowLeft}>
+                    <Text style={styles.meetingAgendaTitle}>{item.sortOrder}. {item.title}</Text>
+                    {item.description ? <Caption>{item.description}</Caption> : null}
+                    {item.requiresVoting ? (
+                      <View style={styles.meetingVoteTally}>
+                        <Caption>
+                          Voting: {item.votingStatus === 'notRequired' ? 'Not required' : item.votingStatus}
+                          {item.resolution ? ` · ${item.resolution.toUpperCase()}` : ''}
+                        </Caption>
+                        {item.votingStatus !== 'notRequired' ? (
+                          <Caption>Yes {yesVotes} · No {noVotes} · Abstain {abstainVotes}</Caption>
+                        ) : null}
+                      </View>
+                    ) : null}
+                  </View>
+                  <View style={styles.meetingAgendaActions}>
+                    {item.requiresVoting && item.votingStatus === 'pending' ? (
+                      <ActionButton label="Open voting" onPress={() => actions.openMeetingVoting(societyId, item.id)} variant="secondary" />
+                    ) : null}
+                    {item.requiresVoting && item.votingStatus === 'open' ? (
+                      <>
+                        <ActionButton label="Pass" onPress={() => actions.closeMeetingVoting(societyId, item.id, 'passed')} variant="secondary" />
+                        <ActionButton label="Reject" onPress={() => actions.closeMeetingVoting(societyId, item.id, 'rejected')} variant="danger" />
+                        <ActionButton label="Defer" onPress={() => actions.closeMeetingVoting(societyId, item.id, 'deferred')} variant="ghost" />
+                      </>
+                    ) : null}
+                  </View>
+                </View>
+              );
+            })
+          ) : (
+            <Caption>No agenda items added yet. Add the first agenda point below.</Caption>
+          )}
+        </SurfaceCard>
+
+        <SurfaceCard>
+          <SectionHeader title="Add agenda item" description="Add a discussion point or a voting resolution." />
+          <InputField
+            label="Agenda title"
+            value={agendaTitle}
+            onChangeText={setAgendaTitle}
+            placeholder="e.g. Approval of maintenance hike"
+          />
+          <InputField
+            label="Description (optional)"
+            value={agendaDescription}
+            onChangeText={setAgendaDescription}
+            placeholder="Further context or background for this item"
+            multiline
+          />
+          <View style={styles.inlineSection}>
+            <Caption>Requires resident voting?</Caption>
+            <View style={styles.chipRow}>
+              <ChoiceChip label="Yes, voting required" selected={agendaRequiresVoting} onPress={() => setAgendaRequiresVoting(true)} />
+              <ChoiceChip label="No voting" selected={!agendaRequiresVoting} onPress={() => setAgendaRequiresVoting(false)} />
+            </View>
+          </View>
+          <ActionButton
+            label="Add agenda item"
+            onPress={handleAddAgendaItem}
+            disabled={!agendaTitle.trim()}
+          />
+        </SurfaceCard>
+
+        <SurfaceCard>
+          <SectionHeader
+            title="Digital signatures"
+            description={`${signatures.length} resident(s) have digitally signed this meeting.`}
+          />
+          {signatures.length > 0 ? (
+            signatures.map((sign) => {
+              const signUser = state.data.users.find((u) => u.id === sign.userId);
+              return (
+                <View key={sign.id} style={styles.meetingSignRow}>
+                  <Text style={styles.meetingSignName}>{sign.signatureText}</Text>
+                  <Caption>{signUser?.name ?? sign.userId} · {formatShortDate(sign.signedAt)}</Caption>
+                </View>
+              );
+            })
+          ) : (
+            <Caption>No digital signatures yet. Residents can sign from their Meetings section.</Caption>
+          )}
+        </SurfaceCard>
+      </>
+    );
+  }
+
+  // Default: list view
+  return (
+    <>
+      <SectionHeader
+        title="Society meetings hub"
+        description="Schedule AGMs, SGMs, and committee meetings. Add agenda items, enable resident voting, and collect digital signatures."
+      />
+      <SurfaceCard>
+        <View style={styles.metricGrid}>
+          <MetricCard label="Total meetings" value={String(meetings.length)} tone="primary" onPress={() => { setSelectedMeetingId(null); setActiveSection('list'); }} />
+          <MetricCard label="Scheduled" value={String(scheduledCount)} tone="accent" onPress={() => {
+            const nextMeeting = meetings.find((meeting) => meeting.status === 'scheduled');
+            if (!nextMeeting) {
+              setSelectedMeetingId(null);
+              setActiveSection('list');
+              return;
+            }
+
+            setSelectedMeetingId(nextMeeting.id);
+            setActiveSection('detail');
+          }} />
+          <MetricCard label="Completed" value={String(completedCount)} tone="primary" onPress={() => {
+            const nextMeeting = meetings.find((meeting) => meeting.status === 'completed');
+            if (!nextMeeting) {
+              setSelectedMeetingId(null);
+              setActiveSection('list');
+              return;
+            }
+
+            setSelectedMeetingId(nextMeeting.id);
+            setActiveSection('detail');
+          }} />
+        </View>
+        <ActionButton label="Schedule new meeting" onPress={() => setActiveSection('create')} />
+      </SurfaceCard>
+
+      {meetings.length > 0 ? (
+        <SurfaceCard>
+          {meetings.map((meeting, index) => {
+            const items = getMeetingAgendaItems(state.data, meeting.id);
+            const openVotingCount = items.filter((item) => item.votingStatus === 'open').length;
+
+            return (
+              <Pressable
+                key={meeting.id}
+                onPress={() => { setSelectedMeetingId(meeting.id); setActiveSection('detail'); }}
+                style={[
+                  styles.meetingListRow,
+                  index < meetings.length - 1 ? styles.meetingListRowDivider : null,
+                ]}
+              >
+                <View style={styles.meetingListRowLeft}>
+                  <View style={styles.meetingListTopRow}>
+                    <Pill label={humanizeMeetingType(meeting.meetingType)} tone={meeting.meetingType === 'society' ? 'accent' : meeting.meetingType === 'emergency' ? 'warning' : 'neutral'} />
+                    <Pill label={humanizeMeetingStatus(meeting.status)} tone={getMeetingStatusTone(meeting.status) as 'primary' | 'accent' | 'warning' | 'success'} />
+                  </View>
+                  <Text style={styles.meetingListTitle}>{meeting.title}</Text>
+                  <Caption>{meeting.venue} · {formatShortDate(meeting.scheduledAt)}</Caption>
+                  {openVotingCount > 0 ? <Caption>{openVotingCount} open vote(s)</Caption> : null}
+                </View>
+                <Text style={styles.meetingListChevron}>›</Text>
+              </Pressable>
+            );
+          })}
+        </SurfaceCard>
+      ) : (
+        <SurfaceCard>
+          <Caption>No society meetings have been scheduled yet. Create the first one above.</Caption>
+        </SurfaceCard>
+      )}
+    </>
+  );
+}
+
 const styles = StyleSheet.create({
   compactWorkspaceCard: {
-    gap: spacing.sm,
+    gap: spacing.xs,
     backgroundColor: '#FFF8F0',
   },
   compactWorkspaceTopRow: {
@@ -3023,14 +4248,14 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
   },
   compactWorkspaceTitle: {
-    fontSize: 22,
-    lineHeight: 26,
+    fontSize: 20,
+    lineHeight: 24,
     fontWeight: '900',
     color: palette.ink,
   },
   compactWorkspaceStatsRow: {
     flexDirection: 'row',
-    gap: spacing.xs,
+    gap: 4,
     width: '100%',
   },
   compactWorkspaceStat: {
@@ -3051,7 +4276,8 @@ const styles = StyleSheet.create({
     color: palette.accent,
   },
   compactWorkspaceActionRow: {
-    flexDirection: 'column',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: spacing.xs,
   },
   adminFocusPanel: {
@@ -3221,11 +4447,25 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
   heroActions: { flexDirection: 'row', gap: spacing.sm, flexWrap: 'wrap' },
-  metricGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  metricGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
   pillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  compactTitle: { fontSize: 16, fontWeight: '800', color: palette.ink },
+  compactText: { flex: 1, gap: spacing.xs },
   rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: spacing.sm },
   cardTitle: { fontSize: 18, fontWeight: '800', color: palette.ink, flex: 1 },
   requestCard: { gap: spacing.sm, paddingTop: spacing.md, borderTopWidth: 1, borderTopColor: '#F0E5D8' },
+  leadershipRoster: { gap: spacing.sm },
+  leadershipMemberCard: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#E8DDCF',
+    backgroundColor: '#FFF8F1',
+  },
   recommendationGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.md },
   recommendationCard: {
     flexGrow: 1,
@@ -3291,10 +4531,62 @@ const styles = StyleSheet.create({
   helpdeskUpdateImage: { width: 220, height: 160, borderRadius: 14, backgroundColor: '#F4F1EB' },
   announcementMediaCard: { marginTop: spacing.sm, alignSelf: 'stretch', maxWidth: 420, padding: spacing.xs, borderRadius: 18, backgroundColor: palette.white, borderWidth: 1, borderColor: '#E7DDD0', ...shadow.card },
   announcementMediaImage: { width: '100%', height: 220, borderRadius: 14, backgroundColor: '#F4F1EB' },
-  choiceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  choiceRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
   inlineSection: { gap: spacing.xs, paddingTop: spacing.md, borderTopWidth: 1, borderTopColor: '#F0E5D8' },
   inlineTitle: { fontSize: 15, fontWeight: '800', color: palette.ink },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
+  meetingListRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing.sm,
+    gap: spacing.sm,
+  },
+  meetingListRowDivider: {
+    borderBottomWidth: 1,
+    borderBottomColor: palette.border,
+  },
+  meetingListRowLeft: { flex: 1, gap: spacing.xs },
+  meetingListTopRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs },
+  meetingListTitle: { fontSize: 15, fontWeight: '700', color: palette.ink },
+  meetingListChevron: { fontSize: 20, color: palette.mutedInk },
+  meetingAgendaRow: {
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0E8DF',
+    gap: spacing.xs,
+  },
+  meetingAgendaRowLeft: { gap: 2 },
+  meetingAgendaTitle: { fontSize: 14, fontWeight: '700', color: palette.ink },
+  meetingVoteTally: { gap: 2, marginTop: 2 },
+  meetingAgendaActions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.xs, marginTop: spacing.xs },
+  meetingSignRow: {
+    paddingVertical: spacing.xs,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F0E8DF',
+    gap: 2,
+  },
+  meetingSignName: { fontSize: 14, fontWeight: '700', color: palette.ink, fontStyle: 'italic' },
 });
+
+function humanizeSocietyDocumentCategory(category: SocietyDocumentCategory) {
+  switch (category) {
+    case 'liftLicense':
+      return 'Lift license';
+    case 'commonLightBill':
+      return 'Common light bill';
+    case 'waterBill':
+      return 'Water bill';
+    case 'fireSafety':
+      return 'Fire safety';
+    case 'insurance':
+      return 'Insurance';
+    case 'auditReport':
+      return 'Audit report';
+    case 'other':
+    default:
+      return 'Other document';
+  }
+}
 
 function humanizeAnnouncementAudience(audience: AnnouncementAudience) {
   switch (audience) {

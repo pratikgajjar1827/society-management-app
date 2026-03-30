@@ -13,14 +13,19 @@ import {
   SurfaceCard,
 } from '../components/ui';
 import {
+  countApartmentUnits,
   countOfficeUnits,
   expandOfficeNumbersInput,
   findDuplicateOfficeCodes,
+  formatApartmentUnitNumber,
+  normalizeApartmentBlockPlan,
+  normalizeApartmentStartingFloorNumber,
   normalizeOfficeFloorPlan,
 } from '../data/factories';
 import { useApp } from '../state/AppContext';
 import { palette, radius, spacing } from '../theme/tokens';
 import {
+  ApartmentBlockPlanEntry,
   CommercialSpaceType,
   OfficeFloorPlanEntry,
   SocietySetupDraft,
@@ -36,6 +41,44 @@ import {
 
 const structureOptions: SocietyStructureOption[] = ['apartment', 'bungalow', 'commercial'];
 const commercialSpaceTypes: CommercialSpaceType[] = ['shed', 'office'];
+const amenityCategorySections = [
+  {
+    key: 'social',
+    title: 'Social and hosting',
+    description: 'Large gathering spaces, event venues, and hospitality amenities used in premium projects.',
+    amenities: ['Clubhouse Hall', 'Banquet Hall', 'Community Hall', 'Party Lawn', 'Guest Suites', 'Cafe Lounge', 'BBQ Deck'],
+  },
+  {
+    key: 'work',
+    title: 'Work and lounge',
+    description: 'Coworking and informal resident lounge spaces for remote work and everyday meetings.',
+    amenities: ['Coworking Lounge', 'Business Lounge', 'Indoor Games Lounge', 'Senior Citizen Lounge'],
+  },
+  {
+    key: 'wellness',
+    title: 'Wellness and recreation',
+    description: 'Fitness, pool, yoga, and light recreation areas that need recurring daily access.',
+    amenities: ['Gym', 'Swimming Pool', 'Yoga Deck', 'Walking Track', 'Garden'],
+  },
+  {
+    key: 'sports',
+    title: 'Sports courts',
+    description: 'Bookable game courts and active sports facilities commonly seen in metro communities.',
+    amenities: ['Badminton Court', 'Squash Court', 'Tennis Court', 'Basketball Court'],
+  },
+  {
+    key: 'family',
+    title: 'Family and children',
+    description: 'Dedicated spaces for children, family leisure, and safe shared outdoor use.',
+    amenities: ['Childrens Play Area'],
+  },
+  {
+    key: 'pet',
+    title: 'Pet and mobility',
+    description: 'Facilities for pets, guest visitors, and community access support.',
+    amenities: ['Pet Park', 'Guest Parking'],
+  },
+] as const;
 
 function sanitizeNumber(value: string) {
   return value.replace(/[^0-9]/g, '');
@@ -50,6 +93,19 @@ function cloneOfficeFloorPlan(officeFloorPlan: OfficeFloorPlanEntry[]) {
   return officeFloorPlan.map((floor) => ({ ...floor }));
 }
 
+function cloneApartmentBlockPlan(apartmentBlockPlan: ApartmentBlockPlanEntry[]) {
+  return apartmentBlockPlan.map((block) => ({ ...block }));
+}
+
+function createApartmentBlockEntry(index: number): ApartmentBlockPlanEntry {
+  return {
+    blockName: `Block ${String.fromCharCode(65 + index)}`,
+    towerCount: index === 0 ? '2' : '1',
+    floorsPerTower: '6',
+    homesPerFloor: '4',
+  };
+}
+
 function createOfficeFloorEntry(index: number): OfficeFloorPlanEntry {
   return {
     floorLabel: index === 0 ? 'Ground Floor' : `Floor ${index + 1}`,
@@ -58,11 +114,21 @@ function createOfficeFloorEntry(index: number): OfficeFloorPlanEntry {
 }
 
 function cloneDraft(draft: SocietySetupDraft): SocietySetupDraft {
+  const apartmentBlockPlan = draft.apartmentBlockPlan ?? [];
+  const officeFloorPlan = draft.officeFloorPlan ?? [];
+
   return {
     ...draft,
+    apartmentStartingFloorNumber: String(
+      normalizeApartmentStartingFloorNumber(draft.apartmentStartingFloorNumber),
+    ),
+    apartmentBlockPlan:
+      apartmentBlockPlan.length > 0
+        ? cloneApartmentBlockPlan(apartmentBlockPlan)
+        : [createApartmentBlockEntry(0)],
     officeFloorPlan:
-      draft.officeFloorPlan.length > 0
-        ? cloneOfficeFloorPlan(draft.officeFloorPlan)
+      officeFloorPlan.length > 0
+        ? cloneOfficeFloorPlan(officeFloorPlan)
         : [createOfficeFloorEntry(0)],
   };
 }
@@ -103,7 +169,7 @@ function getDerivedTotalUnits(draft: SocietySetupDraft) {
   const enabledStructures = getEnabledStructures(draft);
   const enabledCommercialSpaceTypes = getEnabledCommercialSpaceTypes(draft);
   const apartmentUnitCount = enabledStructures.includes('apartment')
-    ? parseWholeNumber(draft.apartmentUnitCount)
+    ? countApartmentUnits(draft.apartmentBlockPlan ?? [createApartmentBlockEntry(0)])
     : 0;
   const bungalowUnitCount = enabledStructures.includes('bungalow')
     ? parseWholeNumber(draft.bungalowUnitCount)
@@ -114,7 +180,7 @@ function getDerivedTotalUnits(draft: SocietySetupDraft) {
       : 0;
   const officeUnitCount =
     enabledStructures.includes('commercial') && enabledCommercialSpaceTypes.includes('office')
-      ? countOfficeUnits(draft.officeFloorPlan)
+      ? countOfficeUnits(draft.officeFloorPlan ?? [createOfficeFloorEntry(0)])
       : 0;
   const totalUnits = apartmentUnitCount + bungalowUnitCount + shedUnitCount + officeUnitCount;
 
@@ -151,9 +217,20 @@ function syncDerivedFields(draft: SocietySetupDraft) {
     enabledCommercialSpaceTypes,
     structure: deriveStructure(enabledStructures),
     commercialSpaceType: deriveCommercialSpaceType(enabledCommercialSpaceTypes),
+    apartmentSubtype: 'block',
+    apartmentStartingFloorNumber: String(
+      normalizeApartmentStartingFloorNumber(draft.apartmentStartingFloorNumber),
+    ),
+    apartmentBlockPlan:
+      (draft.apartmentBlockPlan ?? []).length > 0
+        ? cloneApartmentBlockPlan(draft.apartmentBlockPlan ?? [])
+        : [createApartmentBlockEntry(0)],
+    apartmentUnitCount: enabledStructures.includes('apartment')
+      ? String(countApartmentUnits((draft.apartmentBlockPlan ?? []).length > 0 ? (draft.apartmentBlockPlan ?? []) : [createApartmentBlockEntry(0)]))
+      : '',
     officeFloorPlan:
-      draft.officeFloorPlan.length > 0
-        ? cloneOfficeFloorPlan(draft.officeFloorPlan)
+      (draft.officeFloorPlan ?? []).length > 0
+        ? cloneOfficeFloorPlan(draft.officeFloorPlan ?? [])
         : [createOfficeFloorEntry(0)],
     totalUnits: getDerivedTotalUnits(normalizedDraft),
   };
@@ -218,6 +295,10 @@ function getSelectionLabel(draft: SocietySetupDraft) {
 }
 
 function getUnitsSectionDescription(draft: SocietySetupDraft) {
+  if (getEnabledStructures(draft).includes('apartment')) {
+    return 'Apartment totals are calculated from the block, tower, floor, homes-per-floor, and flat-numbering plan you configure here.';
+  }
+
   const enabledCommercialSpaceTypes = getEnabledCommercialSpaceTypes(draft);
 
   if (enabledCommercialSpaceTypes.includes('office')) {
@@ -236,19 +317,57 @@ export function SocietySetupWizardScreen() {
       syncDerivedFields({
         ...currentDraft,
         ...patch,
+        apartmentBlockPlan:
+          patch.apartmentBlockPlan !== undefined
+            ? cloneApartmentBlockPlan(patch.apartmentBlockPlan)
+            : (currentDraft.apartmentBlockPlan ?? [createApartmentBlockEntry(0)]),
         officeFloorPlan:
           patch.officeFloorPlan !== undefined
             ? cloneOfficeFloorPlan(patch.officeFloorPlan)
-            : currentDraft.officeFloorPlan,
+            : (currentDraft.officeFloorPlan ?? [createOfficeFloorEntry(0)]),
       }),
     );
+  }
+
+  function updateApartmentBlock(index: number, patch: Partial<ApartmentBlockPlanEntry>) {
+    setDraft((currentDraft) =>
+      syncDerivedFields({
+        ...currentDraft,
+        apartmentBlockPlan: (currentDraft.apartmentBlockPlan ?? [createApartmentBlockEntry(0)]).map((block, blockIndex) =>
+          blockIndex === index ? { ...block, ...patch } : block,
+        ),
+      }),
+    );
+  }
+
+  function addApartmentBlock() {
+    setDraft((currentDraft) =>
+      syncDerivedFields({
+        ...currentDraft,
+        apartmentBlockPlan: [
+          ...(currentDraft.apartmentBlockPlan ?? [createApartmentBlockEntry(0)]),
+          createApartmentBlockEntry((currentDraft.apartmentBlockPlan ?? [createApartmentBlockEntry(0)]).length),
+        ],
+      }),
+    );
+  }
+
+  function removeApartmentBlock(index: number) {
+    setDraft((currentDraft) => {
+      const nextBlockPlan = (currentDraft.apartmentBlockPlan ?? [createApartmentBlockEntry(0)]).filter((_, blockIndex) => blockIndex !== index);
+
+      return syncDerivedFields({
+        ...currentDraft,
+        apartmentBlockPlan: nextBlockPlan.length > 0 ? nextBlockPlan : [createApartmentBlockEntry(0)],
+      });
+    });
   }
 
   function updateOfficeFloor(index: number, patch: Partial<OfficeFloorPlanEntry>) {
     setDraft((currentDraft) =>
       syncDerivedFields({
         ...currentDraft,
-        officeFloorPlan: currentDraft.officeFloorPlan.map((floor, floorIndex) =>
+        officeFloorPlan: (currentDraft.officeFloorPlan ?? [createOfficeFloorEntry(0)]).map((floor, floorIndex) =>
           floorIndex === index ? { ...floor, ...patch } : floor,
         ),
       }),
@@ -260,8 +379,8 @@ export function SocietySetupWizardScreen() {
       syncDerivedFields({
         ...currentDraft,
         officeFloorPlan: [
-          ...currentDraft.officeFloorPlan,
-          createOfficeFloorEntry(currentDraft.officeFloorPlan.length),
+          ...(currentDraft.officeFloorPlan ?? [createOfficeFloorEntry(0)]),
+          createOfficeFloorEntry((currentDraft.officeFloorPlan ?? [createOfficeFloorEntry(0)]).length),
         ],
       }),
     );
@@ -269,7 +388,7 @@ export function SocietySetupWizardScreen() {
 
   function removeOfficeFloor(index: number) {
     setDraft((currentDraft) => {
-      const nextFloorPlan = currentDraft.officeFloorPlan.filter((_, floorIndex) => floorIndex !== index);
+      const nextFloorPlan = (currentDraft.officeFloorPlan ?? [createOfficeFloorEntry(0)]).filter((_, floorIndex) => floorIndex !== index);
 
       return syncDerivedFields({
         ...currentDraft,
@@ -280,13 +399,45 @@ export function SocietySetupWizardScreen() {
 
   const enabledStructures = getEnabledStructures(draft);
   const enabledCommercialSpaceTypes = getEnabledCommercialSpaceTypes(draft);
-  const apartmentUnitCount = parseWholeNumber(draft.apartmentUnitCount);
+  const apartmentBlockPlan = draft.apartmentBlockPlan ?? [createApartmentBlockEntry(0)];
+  const officeFloorPlan = draft.officeFloorPlan ?? [createOfficeFloorEntry(0)];
+  const apartmentUnitCount = countApartmentUnits(apartmentBlockPlan);
+  const apartmentStartingFloorNumber = normalizeApartmentStartingFloorNumber(
+    draft.apartmentStartingFloorNumber,
+  );
   const bungalowUnitCount = parseWholeNumber(draft.bungalowUnitCount);
   const shedUnitCount = parseWholeNumber(draft.shedUnitCount);
   const totalUnits = Number.parseInt(draft.totalUnits, 10);
   const totalUnitsValid = Number.isFinite(totalUnits) && totalUnits > 0;
-  const normalizedOfficeFloors = normalizeOfficeFloorPlan(draft.officeFloorPlan);
-  const duplicateOfficeCodes = findDuplicateOfficeCodes(draft.officeFloorPlan);
+  const normalizedApartmentBlocks = normalizeApartmentBlockPlan(apartmentBlockPlan);
+  const apartmentTowerCount = normalizedApartmentBlocks.reduce((total, block) => total + block.towerCount, 0);
+  const primaryApartmentBlock = normalizedApartmentBlocks.find(
+    (block) => block.towerCount > 0 && block.floorsPerTower > 0 && block.homesPerFloor > 0,
+  );
+  const apartmentNumberingPreviewStart = primaryApartmentBlock
+    ? (
+      primaryApartmentBlock.towerCount === 1
+        ? `${primaryApartmentBlock.blockName}-${formatApartmentUnitNumber(apartmentStartingFloorNumber, 1)}`
+        : `${primaryApartmentBlock.blockName}-T1-${formatApartmentUnitNumber(apartmentStartingFloorNumber, 1)}`
+    )
+    : '';
+  const apartmentNumberingPreviewEnd = primaryApartmentBlock
+    ? (
+      primaryApartmentBlock.towerCount === 1
+        ? `${primaryApartmentBlock.blockName}-${formatApartmentUnitNumber(apartmentStartingFloorNumber + primaryApartmentBlock.floorsPerTower - 1, primaryApartmentBlock.homesPerFloor)}`
+        : `${primaryApartmentBlock.blockName}-T1-${formatApartmentUnitNumber(apartmentStartingFloorNumber + primaryApartmentBlock.floorsPerTower - 1, primaryApartmentBlock.homesPerFloor)}`
+    )
+    : '';
+  const normalizedOfficeFloors = normalizeOfficeFloorPlan(officeFloorPlan);
+  const duplicateOfficeCodes = findDuplicateOfficeCodes(officeFloorPlan);
+  const amenitySections = amenityCategorySections
+    .map((section) => ({
+      ...section,
+      amenities: section.amenities.filter((amenityName) => state.amenityLibrary.includes(amenityName)),
+    }))
+    .filter((section) => section.amenities.length > 0);
+  const categorizedAmenityNames = new Set(amenitySections.flatMap((section) => section.amenities));
+  const uncategorizedAmenities = state.amenityLibrary.filter((amenityName) => !categorizedAmenityNames.has(amenityName));
   const validationIssues: string[] = [];
 
   if (draft.societyName.trim().length <= 2) {
@@ -321,6 +472,22 @@ export function SocietySetupWizardScreen() {
     validationIssues.push('Add at least one apartment or tower home.');
   }
 
+  if (enabledStructures.includes('apartment')) {
+    const invalidApartmentBlocks = normalizedApartmentBlocks
+      .filter((block) => block.towerCount < 1 || block.floorsPerTower < 1 || block.homesPerFloor < 1)
+      .map((block) => block.blockName);
+
+    if (invalidApartmentBlocks.length > 0) {
+      validationIssues.push(
+        `Enter valid tower count, floors per tower, and homes per floor for: ${invalidApartmentBlocks.join(', ')}.`,
+      );
+    }
+
+    if (parseWholeNumber(draft.apartmentStartingFloorNumber) < 1) {
+      validationIssues.push('Enter a valid first apartment floor number greater than 0.');
+    }
+  }
+
   if (enabledStructures.includes('bungalow') && bungalowUnitCount < 1) {
     validationIssues.push('Add at least one bungalow or plot.');
   }
@@ -338,7 +505,7 @@ export function SocietySetupWizardScreen() {
   }
 
   if (enabledCommercialSpaceTypes.includes('office')) {
-    const emptyOfficeFloors = draft.officeFloorPlan
+    const emptyOfficeFloors = officeFloorPlan
       .map((floor, index) => ({
         label: floor.floorLabel.trim() || `Floor ${index + 1}`,
         officeNumbers: floor.officeNumbers.trim(),
@@ -355,7 +522,7 @@ export function SocietySetupWizardScreen() {
     const invalidOfficeFloors = normalizedOfficeFloors
       .map((floor, index) => ({
         label: floor.floorLabel,
-        rawValue: draft.officeFloorPlan[index]?.officeNumbers.trim() ?? '',
+        rawValue: officeFloorPlan[index]?.officeNumbers.trim() ?? '',
         officeCount: floor.officeCodes.length,
       }))
       .filter((floor) => floor.rawValue.length > 0 && floor.officeCount === 0)
@@ -478,6 +645,25 @@ export function SocietySetupWizardScreen() {
           />
         </View>
 
+        {enabledStructures.includes('apartment') ? (
+          <View style={styles.structurePanel}>
+            <SectionHeader
+              title="Apartment subtype"
+              description="Block layout lets you define multiple blocks, multiple towers inside each block, and the floor count for every tower."
+            />
+            <View style={styles.choiceWrap}>
+              <ChoiceChip
+                label="Block layout"
+                selected
+                onPress={() => updateDraft({ apartmentSubtype: 'block' })}
+              />
+            </View>
+            <Caption>
+              Use the units section below to add each block with tower count, floors per tower, and homes on each floor.
+            </Caption>
+          </View>
+        ) : null}
+
         {enabledStructures.includes('commercial') ? (
           <View style={styles.structurePanel}>
             <SectionHeader
@@ -513,14 +699,14 @@ export function SocietySetupWizardScreen() {
                   `F` prefix.
                 </Caption>
 
-                {draft.officeFloorPlan.map((floor, index) => {
+                {officeFloorPlan.map((floor, index) => {
                   const officeCount = expandOfficeNumbersInput(floor.officeNumbers).length;
 
                   return (
                     <View key={`${index}-${floor.floorLabel}`} style={styles.floorPlanCard}>
                       <View style={styles.floorPlanHeader}>
                         <Text style={styles.floorPlanTitle}>Floor setup {index + 1}</Text>
-                        {draft.officeFloorPlan.length > 1 ? (
+                        {officeFloorPlan.length > 1 ? (
                           <ActionButton
                             label="Remove floor"
                             onPress={() => removeOfficeFloor(index)}
@@ -570,10 +756,10 @@ export function SocietySetupWizardScreen() {
 
                 <View style={styles.previewRow}>
                   <Pill
-                    label={`${countOfficeUnits(draft.officeFloorPlan) || 0} office spaces`}
+                    label={`${countOfficeUnits(officeFloorPlan) || 0} office spaces`}
                     tone="accent"
                   />
-                  <Pill label={`${draft.officeFloorPlan.length} configured floors`} tone="primary" />
+                  <Pill label={`${officeFloorPlan.length} configured floors`} tone="primary" />
                 </View>
               </>
             ) : null}
@@ -595,13 +781,104 @@ export function SocietySetupWizardScreen() {
         />
 
         {enabledStructures.includes('apartment') ? (
-          <InputField
-            label="Apartment / tower homes"
-            value={draft.apartmentUnitCount}
-            onChangeText={(value) => updateDraft({ apartmentUnitCount: sanitizeNumber(value) })}
-            keyboardType="numeric"
-            placeholder="48"
-          />
+          <View style={styles.structurePanel}>
+            <SectionHeader
+              title="Apartment block planner"
+              description="Add every block with the number of towers, floors in each tower, homes on each floor, and the floor number used in flat codes."
+            />
+            <InputField
+              label="First apartment floor number"
+              value={draft.apartmentStartingFloorNumber}
+              onChangeText={(value) => updateDraft({ apartmentStartingFloorNumber: sanitizeNumber(value) })}
+              keyboardType="numeric"
+              placeholder="1"
+            />
+            <Caption>
+              Enter `1` for flat numbers like `101, 102, 1704`. Enter `11` if the first configured
+              floor should start like `1101, 1102, 1104`.
+            </Caption>
+            {apartmentNumberingPreviewStart && apartmentNumberingPreviewEnd ? (
+              <View style={styles.previewRow}>
+                <Pill label={`Starts from floor ${apartmentStartingFloorNumber}`} tone="warning" />
+                <Pill label={`Sample start ${apartmentNumberingPreviewStart}`} tone="primary" />
+                <Pill label={`Sample top ${apartmentNumberingPreviewEnd}`} tone="accent" />
+              </View>
+            ) : null}
+            {apartmentBlockPlan.map((block, index) => {
+              const normalizedBlock = normalizedApartmentBlocks[index];
+              const blockUnitCount =
+                (normalizedBlock?.towerCount ?? 0)
+                * (normalizedBlock?.floorsPerTower ?? 0)
+                * (normalizedBlock?.homesPerFloor ?? 0);
+
+              return (
+                <View key={`${index}-${block.blockName}`} style={styles.floorPlanCard}>
+                  <View style={styles.floorPlanHeader}>
+                    <Text style={styles.floorPlanTitle}>Block setup {index + 1}</Text>
+                    {apartmentBlockPlan.length > 1 ? (
+                      <ActionButton
+                        label="Remove block"
+                        onPress={() => removeApartmentBlock(index)}
+                        variant="secondary"
+                      />
+                    ) : null}
+                  </View>
+
+                  <InputField
+                    label="Block name"
+                    value={block.blockName}
+                    onChangeText={(value) => updateApartmentBlock(index, { blockName: value })}
+                    placeholder={`Block ${String.fromCharCode(65 + index)}`}
+                  />
+
+                  <View style={styles.twoColumn}>
+                    <View style={styles.column}>
+                      <InputField
+                        label="Towers in this block"
+                        value={block.towerCount}
+                        onChangeText={(value) => updateApartmentBlock(index, { towerCount: sanitizeNumber(value) })}
+                        keyboardType="numeric"
+                        placeholder="2"
+                      />
+                    </View>
+                    <View style={styles.column}>
+                      <InputField
+                        label="Floors per tower"
+                        value={block.floorsPerTower}
+                        onChangeText={(value) => updateApartmentBlock(index, { floorsPerTower: sanitizeNumber(value) })}
+                        keyboardType="numeric"
+                        placeholder="6"
+                      />
+                    </View>
+                  </View>
+
+                  <InputField
+                    label="Homes on each floor"
+                    value={block.homesPerFloor}
+                    onChangeText={(value) => updateApartmentBlock(index, { homesPerFloor: sanitizeNumber(value) })}
+                    keyboardType="numeric"
+                    placeholder="4"
+                  />
+
+                  <View style={styles.previewRow}>
+                    <Pill label={`${normalizedBlock?.towerCount ?? 0} towers`} tone="primary" />
+                    <Pill label={`${normalizedBlock?.floorsPerTower ?? 0} floors per tower`} tone="warning" />
+                    <Pill label={`${blockUnitCount} homes`} tone="accent" />
+                  </View>
+                </View>
+              );
+            })}
+
+            <View style={styles.officeActions}>
+              <ActionButton label="Add another block" onPress={addApartmentBlock} variant="secondary" />
+            </View>
+
+            <View style={styles.previewRow}>
+              <Pill label={`${apartmentBlockPlan.length} blocks`} tone="primary" />
+              <Pill label={`${apartmentTowerCount} towers`} tone="warning" />
+              <Pill label={`${apartmentUnitCount} apartment homes`} tone="accent" />
+            </View>
+          </View>
         ) : null}
 
         {enabledStructures.includes('bungalow') ? (
@@ -626,10 +903,10 @@ export function SocietySetupWizardScreen() {
 
         {enabledCommercialSpaceTypes.includes('office') ? (
           <View style={styles.generatedSummary}>
-            <Text style={styles.generatedValue}>{countOfficeUnits(draft.officeFloorPlan) || 0} office spaces</Text>
+            <Text style={styles.generatedValue}>{countOfficeUnits(officeFloorPlan) || 0} office spaces</Text>
             <Caption>
-              Based on {draft.officeFloorPlan.length} floor allocation
-              {draft.officeFloorPlan.length === 1 ? '' : 's'} and the exact office codes you enter.
+              Based on {officeFloorPlan.length} floor allocation
+              {officeFloorPlan.length === 1 ? '' : 's'} and the exact office codes you enter.
             </Caption>
           </View>
         ) : null}
@@ -667,18 +944,55 @@ export function SocietySetupWizardScreen() {
       <SurfaceCard>
         <SectionHeader
           title="4. Common amenities"
-          description="Pick the amenities you want the society to start with. Booking rules can be refined later."
+          description="Pick the amenities you want the society to start with. The catalog is grouped to match how big metro projects usually organize social, sports, wellness, family, and pet/community spaces."
         />
-        <View style={styles.choiceWrap}>
-          {state.amenityLibrary.map((amenityName) => (
-            <ChoiceChip
-              key={amenityName}
-              label={amenityName}
-              selected={draft.selectedAmenities.includes(amenityName)}
-              onPress={() => setDraft((currentDraft) => toggleAmenity(currentDraft, amenityName))}
-            />
-          ))}
+        <View style={styles.previewRow}>
+          <Pill label={`${draft.selectedAmenities.length} selected`} tone="accent" />
+          <Pill label={`${state.amenityLibrary.length} available in catalog`} tone="primary" />
         </View>
+        {amenitySections.map((section) => {
+          const selectedCount = section.amenities.filter((amenityName) => draft.selectedAmenities.includes(amenityName)).length;
+
+          return (
+            <View key={section.key} style={styles.amenityCategoryCard}>
+              <View style={styles.floorPlanHeader}>
+                <View style={styles.categoryHeading}>
+                  <Text style={styles.floorPlanTitle}>{section.title}</Text>
+                  <Caption>{section.description}</Caption>
+                </View>
+                <Pill label={`${selectedCount}/${section.amenities.length} selected`} tone="warning" />
+              </View>
+              <View style={styles.choiceWrap}>
+                {section.amenities.map((amenityName) => (
+                  <ChoiceChip
+                    key={amenityName}
+                    label={amenityName}
+                    selected={draft.selectedAmenities.includes(amenityName)}
+                    onPress={() => setDraft((currentDraft) => toggleAmenity(currentDraft, amenityName))}
+                  />
+                ))}
+              </View>
+            </View>
+          );
+        })}
+        {uncategorizedAmenities.length > 0 ? (
+          <View style={styles.amenityCategoryCard}>
+            <View style={styles.categoryHeading}>
+              <Text style={styles.floorPlanTitle}>Other amenities</Text>
+              <Caption>Additional facilities kept available in the catalog but not part of the main grouped sections above.</Caption>
+            </View>
+            <View style={styles.choiceWrap}>
+              {uncategorizedAmenities.map((amenityName) => (
+                <ChoiceChip
+                  key={amenityName}
+                  label={amenityName}
+                  selected={draft.selectedAmenities.includes(amenityName)}
+                  onPress={() => setDraft((currentDraft) => toggleAmenity(currentDraft, amenityName))}
+                />
+              ))}
+            </View>
+          </View>
+        ) : null}
       </SurfaceCard>
 
       <SurfaceCard>
@@ -695,7 +1009,7 @@ export function SocietySetupWizardScreen() {
       <SurfaceCard>
         <SectionHeader
           title="Workspace preview"
-          description="This starter setup will generate a chairman-managed society workspace and make it discoverable in the join portal through the location filters."
+          description="This starter setup will create a discoverable society workspace. The first local chairman can then claim it from the join portal for super user approval."
         />
         <View style={styles.previewRow}>
           <Pill label={`${draft.totalUnits || '0'} ${getSocietyUnitCollectionLabel(draft)}`} tone="primary" />
@@ -705,7 +1019,7 @@ export function SocietySetupWizardScreen() {
         </View>
         <Caption>
           After creation, people will be able to find this society by country, state, city, and
-          area before selecting their {getSelectionLabel(draft)}.
+          area before selecting their {getSelectionLabel(draft)}. Resident approvals begin after the first chairman is approved.
         </Caption>
         {validationIssues.length > 0 ? (
           <View style={styles.validationBox}>
@@ -776,6 +1090,19 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: spacing.sm,
     flexWrap: 'wrap',
+  },
+  amenityCategoryCard: {
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: palette.surfaceMuted,
+    borderWidth: 1,
+    borderColor: palette.border,
+  },
+  categoryHeading: {
+    flex: 1,
+    gap: spacing.xs,
+    minWidth: 220,
   },
   generatedSummary: {
     gap: spacing.xs,

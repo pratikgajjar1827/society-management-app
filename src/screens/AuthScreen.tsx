@@ -43,6 +43,9 @@ export function AuthScreen() {
   const phoneFloat = useRef(new Animated.Value(0)).current;
 
   const challenge = state.pendingChallenge;
+  const developmentOtp = challenge?.provider === 'development' ? challenge.developmentCode ?? '' : '';
+  const isDevelopmentFallback = developmentOtp.length > 0;
+  const challengeDestination = challenge?.destination || destination.trim();
   const expiryLabel = formatChallengeExpiry(challenge?.expiresAt);
 
   useEffect(() => {
@@ -106,10 +109,16 @@ export function AuthScreen() {
   }, [challenge?.challengeId]);
 
   useEffect(() => {
-    if (challenge?.provider === 'development' && challenge.developmentCode) {
-      setCode(challenge.developmentCode);
+    if (developmentOtp) {
+      setCode(developmentOtp);
     }
-  }, [challenge?.challengeId, challenge?.developmentCode, challenge?.provider]);
+  }, [challenge?.challengeId, developmentOtp]);
+
+  useEffect(() => {
+    if (challenge?.destination) {
+      setDestination(challenge.destination);
+    }
+  }, [challenge?.challengeId, challenge?.destination]);
 
   useEffect(() => {
     setDestination('');
@@ -245,12 +254,6 @@ export function AuthScreen() {
                       onPress={() => actions.requestOtp(destination)}
                       disabled={state.isSyncing || destination.trim().length === 0}
                     />
-                    <ActionButton
-                      label={state.isSyncing ? 'Trying local login...' : 'Development quick login'}
-                      onPress={() => actions.loginWithDevelopmentOtp(destination)}
-                      disabled={state.isSyncing || destination.trim().length === 0}
-                      variant="secondary"
-                    />
                   </View>
 
                   <View style={styles.supportPills}>
@@ -277,6 +280,21 @@ export function AuthScreen() {
                     keyboardType="numeric"
                   />
 
+                  {isDevelopmentFallback ? (
+                    <View style={styles.devOtpCard}>
+                      <Text style={styles.devOtpTitle}>Local OTP ready for login</Text>
+                      <Caption style={styles.devHint}>
+                        SMS is not configured on this server. Use this OTP to continue, or tap Verify OTP because it has already been filled in.
+                      </Caption>
+                      <View style={styles.devOtpActionStack}>
+                        <View style={styles.devOtpRow}>
+                          <Text style={styles.devOtpValue}>{developmentOtp}</Text>
+                          <ActionButton label="Use this OTP" onPress={() => setCode(developmentOtp)} variant="secondary" />
+                        </View>
+                      </View>
+                    </View>
+                  ) : null}
+
                   {state.noticeMessage ? (
                     <View style={styles.noticeCard}>
                       <Text style={styles.noticeTitle}>OTP delivery update</Text>
@@ -291,9 +309,9 @@ export function AuthScreen() {
                     </View>
                   ) : null}
 
-                  {challenge?.provider === 'development' && code ? (
+                  {isDevelopmentFallback && code ? (
                     <Caption style={styles.devAutoFillHint}>
-                      Development backend detected. The OTP has been auto-filled for this request.
+                      Local OTP fallback detected. The code has been auto-filled for this request.
                     </Caption>
                   ) : null}
 
@@ -305,8 +323,16 @@ export function AuthScreen() {
 
                   {challenge ? (
                     <View style={styles.statusCard}>
-                      <Text style={styles.statusTitle}>Code sent to {challenge.destination}</Text>
-                      <Caption>{expiryLabel}</Caption>
+                      <Text style={styles.statusTitle}>
+                        {isDevelopmentFallback
+                          ? `Local OTP generated for ${challengeDestination || 'your mobile number'}`
+                          : `Code sent to ${challengeDestination || 'your mobile number'}`}
+                      </Text>
+                      <Caption>
+                        {isDevelopmentFallback
+                          ? 'Use the OTP shown above, then tap Verify OTP to continue.'
+                          : expiryLabel}
+                      </Caption>
                     </View>
                   ) : (
                     <View style={styles.statusCard}>
@@ -314,25 +340,6 @@ export function AuthScreen() {
                       <Caption>Request the OTP first, then enter it here.</Caption>
                     </View>
                   )}
-
-                  {challenge?.provider === 'development' && challenge.developmentCode ? (
-                    <View style={styles.devOtpCard}>
-                      <Text style={styles.devOtpTitle}>Local OTP for this backend</Text>
-                      <Caption style={styles.devHint}>
-                        SMS is not configured on this server, so use this generated code to continue login.
-                      </Caption>
-                      <View style={styles.devOtpActionStack}>
-                        <View style={styles.devOtpRow}>
-                          <Text style={styles.devOtpValue}>{challenge.developmentCode}</Text>
-                          <ActionButton
-                            label="Use this OTP"
-                            onPress={() => setCode(challenge.developmentCode ?? '')}
-                            variant="secondary"
-                          />
-                        </View>
-                      </View>
-                    </View>
-                  ) : null}
 
                   {challenge ? (
                     <ActionButton label="Use another mobile number" onPress={actions.resetAuthFlow} variant="secondary" />

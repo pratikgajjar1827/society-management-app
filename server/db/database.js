@@ -3,10 +3,13 @@ const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
 
 const {
+  countApartmentUnits,
   countOfficeUnits,
   createAmenitiesFromSelection,
   createUnitStructure,
   findDuplicateOfficeCodes,
+  normalizeApartmentBlockPlan,
+  normalizeApartmentStartingFloorNumber,
   normalizeOfficeFloorPlan,
 } = require('../seed/factories');
 const { DEMO_USER_ID, SUPER_USER_ID, seedData } = require('../seed/seedData');
@@ -26,8 +29,10 @@ const tableConfigs = [
   ['occupancy'],
   ['vehicleRegistrations'],
   ['importantContacts'],
+  ['leadershipProfiles'],
   ['announcements', ['readByUserIds']],
   ['rules', ['acknowledgedByUserIds']],
+  ['societyDocuments'],
   ['amenities'],
   ['amenityScheduleRules', ['blackoutDates']],
   ['bookings'],
@@ -59,6 +64,51 @@ const seededRoleMap = {
   'user-rohan': 'owner',
   'user-kavya': 'tenant',
 };
+const premiumApartmentAmenityDefaults = [
+  'Clubhouse Hall',
+  'Banquet Hall',
+  'Community Hall',
+  'Party Lawn',
+  'Guest Suites',
+  'Coworking Lounge',
+  'Business Lounge',
+  'Cafe Lounge',
+  'Gym',
+  'Swimming Pool',
+  'Indoor Games Lounge',
+  'Badminton Court',
+  'Squash Court',
+  'Tennis Court',
+  'Basketball Court',
+  'Childrens Play Area',
+  'Senior Citizen Lounge',
+  'Pet Park',
+  'BBQ Deck',
+  'Yoga Deck',
+  'Guest Parking',
+  'Garden',
+  'Walking Track',
+];
+const premiumBungalowAmenityDefaults = [
+  'Clubhouse Hall',
+  'Banquet Hall',
+  'Community Hall',
+  'Party Lawn',
+  'Guest Suites',
+  'Cafe Lounge',
+  'Gym',
+  'Swimming Pool',
+  'Badminton Court',
+  'Tennis Court',
+  'Childrens Play Area',
+  'Senior Citizen Lounge',
+  'Pet Park',
+  'BBQ Deck',
+  'Yoga Deck',
+  'Guest Parking',
+  'Garden',
+  'Walking Track',
+];
 
 function normalizeSeedPhone(value) {
   const digits = String(value ?? '').replace(/\D/g, '');
@@ -114,6 +164,9 @@ function ensureSchema() {
     ['enabledStructures', 'TEXT'],
     ['commercialSpaceType', 'TEXT'],
     ['enabledCommercialSpaceTypes', 'TEXT'],
+    ['apartmentSubtype', 'TEXT'],
+    ['apartmentBlockPlan', 'TEXT'],
+    ['apartmentStartingFloorNumber', 'INTEGER'],
     ['apartmentUnitCount', 'INTEGER'],
     ['bungalowUnitCount', 'INTEGER'],
     ['shedUnitCount', 'INTEGER'],
@@ -200,6 +253,17 @@ function ensureSchema() {
 
   for (const [columnName, definition] of missingAnnouncementColumns) {
     db.exec(`ALTER TABLE announcements ADD COLUMN ${columnName} ${definition}`);
+  }
+
+  const amenityColumns = new Set(
+    db.prepare("PRAGMA table_info('amenities')").all().map((column) => column.name),
+  );
+  const missingAmenityColumns = [
+    ['reservationScope', "TEXT NOT NULL DEFAULT 'timeSlot'"],
+  ].filter(([columnName]) => !amenityColumns.has(columnName));
+
+  for (const [columnName, definition] of missingAmenityColumns) {
+    db.exec(`ALTER TABLE amenities ADD COLUMN ${columnName} ${definition}`);
   }
 
   const vehicleColumns = new Set(
@@ -381,6 +445,100 @@ function ensureSecurityGuardAccess() {
   }
 }
 
+function getRecommendedAmenitiesForSociety(societyRow) {
+  const enabledStructures = fromStoredValue('enabledStructures', societyRow.enabledStructures);
+  const normalizedEnabledStructures = Array.isArray(enabledStructures) && enabledStructures.length > 0
+    ? enabledStructures
+    : [societyRow.structure].filter(Boolean);
+
+  if (
+    normalizedEnabledStructures.includes('apartment') ||
+    societyRow.structure === 'apartment' ||
+    societyRow.structure === 'mixed'
+  ) {
+    return premiumApartmentAmenityDefaults;
+  }
+
+  if (normalizedEnabledStructures.includes('bungalow') || societyRow.structure === 'bungalow') {
+    return premiumBungalowAmenityDefaults;
+  }
+
+  return [];
+}
+
+function ensureResidentialAmenityCatalog() {
+  const societies = db
+    .prepare('SELECT id, structure, enabledStructures FROM societies ORDER BY createdAt ASC')
+    .all();
+
+  for (const society of societies) {
+    const recommendedAmenities = getRecommendedAmenitiesForSociety(society);
+
+    if (recommendedAmenities.length === 0) {
+      continue;
+    }
+
+    const generatedSetup = createAmenitiesFromSelection(society.id, recommendedAmenities);
+    const generatedAmenityByName = new Map(generatedSetup.amenities.map((amenity) => [amenity.name, amenity]));
+    const generatedRulesByAmenityId = new Map();
+
+    generatedSetup.rules.forEach((rule) => {
+      const rules = generatedRulesByAmenityId.get(rule.amenityId) ?? [];
+      rules.push(rule);
+      generatedRulesByAmenityId.set(rule.amenityId, rules);
+    });
+
+    const existingAmenities = db
+      .prepare(
+        'SELECT id, societyId, name, bookingType, reservationScope, approvalMode, capacity, priceInr FROM amenities WHERE societyId = ?',
+      )
+      .all(society.id);
+
+    runTransaction(() => {
+      existingAmenities.forEach((amenity) => {
+        const generatedAmenity = generatedAmenityByName.get(amenity.name);
+
+        if (!generatedAmenity) {
+          return;
+        }
+
+        db.prepare(
+          `UPDATE amenities
+           SET bookingType = ?, reservationScope = ?, approvalMode = ?, capacity = ?, priceInr = ?
+           WHERE id = ?`,
+        ).run(
+          generatedAmenity.bookingType,
+          generatedAmenity.reservationScope,
+          generatedAmenity.approvalMode,
+          generatedAmenity.capacity ?? null,
+          generatedAmenity.priceInr ?? null,
+          amenity.id,
+        );
+
+        db.prepare('DELETE FROM amenityScheduleRules WHERE amenityId = ?').run(amenity.id);
+        insertMany(
+          'amenityScheduleRules',
+          (generatedRulesByAmenityId.get(generatedAmenity.id) ?? []).map((rule) => ({
+            ...rule,
+            amenityId: amenity.id,
+          })),
+        );
+      });
+
+      const existingAmenityNames = new Set(existingAmenities.map((amenity) => amenity.name));
+      const missingAmenities = generatedSetup.amenities.filter((amenity) => !existingAmenityNames.has(amenity.name));
+
+      if (missingAmenities.length > 0) {
+        insertMany('amenities', missingAmenities);
+        insertMany(
+          'amenityScheduleRules',
+          generatedSetup.rules.filter((rule) => missingAmenities.some((amenity) => amenity.id === rule.amenityId)),
+        );
+      }
+    });
+  }
+}
+
 function listAll(tableName) {
   return db.prepare(`SELECT * FROM ${tableName} ORDER BY rowid ASC`).all();
 }
@@ -417,6 +575,7 @@ function fromStoredValue(columnName, value) {
       columnName === 'employerUnitIds' ||
       columnName === 'enabledStructures' ||
       columnName === 'enabledCommercialSpaceTypes' ||
+      columnName === 'apartmentBlockPlan' ||
       columnName === 'officeFloorPlan' ||
       columnName === 'invoiceIds' ||
       columnName === 'unitIds'
@@ -436,6 +595,7 @@ function fromStoredValue(columnName, value) {
     columnName === 'employerUnitIds' ||
     columnName === 'enabledStructures' ||
     columnName === 'enabledCommercialSpaceTypes' ||
+    columnName === 'apartmentBlockPlan' ||
     columnName === 'officeFloorPlan' ||
     columnName === 'invoiceIds' ||
     columnName === 'unitIds'
@@ -547,6 +707,15 @@ function getSnapshot() {
     });
   }
 
+  snapshot.userProfiles = listAll('userProfiles').map((row) => {
+    const normalized = {};
+    for (const [key, value] of Object.entries(row)) {
+      normalized[key] = fromStoredValue(key, value);
+    }
+
+    return normalized;
+  });
+
   return snapshot;
 }
 
@@ -605,8 +774,14 @@ function buildStructureTagline(structureSetup) {
   const segments = [];
 
   if (structureSetup.apartmentUnitCount) {
+    const apartmentBlockCount = structureSetup.apartmentBlockPlan.length;
+    const apartmentTowerCount = structureSetup.apartmentBlockPlan.reduce(
+      (total, block) => total + (Number.parseInt(block.towerCount, 10) || 0),
+      0,
+    );
+
     segments.push(
-      `${structureSetup.apartmentUnitCount} apartment home${structureSetup.apartmentUnitCount === 1 ? '' : 's'}`,
+      `${structureSetup.apartmentUnitCount} apartment home${structureSetup.apartmentUnitCount === 1 ? '' : 's'} across ${apartmentBlockCount} block${apartmentBlockCount === 1 ? '' : 's'} and ${apartmentTowerCount} tower${apartmentTowerCount === 1 ? '' : 's'}`,
     );
   }
 
@@ -656,14 +831,36 @@ function buildStructureTagline(structureSetup) {
     return `Bungalow cluster workspace with ${structureSetup.bungalowUnitCount} plot${structureSetup.bungalowUnitCount === 1 ? '' : 's'}`;
   }
 
-  return `Apartment community workspace with ${structureSetup.apartmentUnitCount} home${structureSetup.apartmentUnitCount === 1 ? '' : 's'}`;
+  const apartmentBlockCount = structureSetup.apartmentBlockPlan.length;
+  const apartmentTowerCount = structureSetup.apartmentBlockPlan.reduce(
+    (total, block) => total + (Number.parseInt(block.towerCount, 10) || 0),
+    0,
+  );
+
+  return `Apartment community workspace with ${apartmentBlockCount} block${apartmentBlockCount === 1 ? '' : 's'}, ${apartmentTowerCount} tower${apartmentTowerCount === 1 ? '' : 's'}, and ${structureSetup.apartmentUnitCount} home${structureSetup.apartmentUnitCount === 1 ? '' : 's'}`;
 }
 
 function resolveStructureSetup(draft) {
   const enabledStructures = getEnabledStructuresFromDraft(draft);
   const enabledCommercialSpaceTypes = getEnabledCommercialSpaceTypesFromDraft(draft, enabledStructures);
+  const apartmentBlockPlan =
+    enabledStructures.includes('apartment') && Array.isArray(draft.apartmentBlockPlan)
+      ? normalizeApartmentBlockPlan(draft.apartmentBlockPlan)
+        .filter((block) => block.towerCount > 0 && block.floorsPerTower > 0 && block.homesPerFloor > 0)
+        .map((block) => ({
+          blockName: block.blockName,
+          towerCount: String(block.towerCount),
+          floorsPerTower: String(block.floorsPerTower),
+          homesPerFloor: String(block.homesPerFloor),
+        }))
+      : [];
+  const apartmentStartingFloorNumber = enabledStructures.includes('apartment')
+    ? normalizeApartmentStartingFloorNumber(draft.apartmentStartingFloorNumber)
+    : null;
   const apartmentUnitCount = enabledStructures.includes('apartment')
-    ? getDraftUnitCount(draft.apartmentUnitCount, enabledStructures.length === 1 ? draft.totalUnits : null)
+    ? (apartmentBlockPlan.length > 0
+      ? countApartmentUnits(apartmentBlockPlan)
+      : getDraftUnitCount(draft.apartmentUnitCount, enabledStructures.length === 1 ? draft.totalUnits : null))
     : 0;
   const bungalowUnitCount = enabledStructures.includes('bungalow')
     ? getDraftUnitCount(draft.bungalowUnitCount, enabledStructures.length === 1 ? draft.totalUnits : null)
@@ -694,7 +891,10 @@ function resolveStructureSetup(draft) {
     generationPlan.push({
       structure: 'apartment',
       totalUnits: apartmentUnitCount,
-      unitStructureOptions: {},
+      unitStructureOptions: {
+        apartmentBlockPlan,
+        apartmentStartingFloorNumber,
+      },
     });
   }
 
@@ -732,6 +932,9 @@ function resolveStructureSetup(draft) {
     enabledStructures,
     commercialSpaceType,
     enabledCommercialSpaceTypes,
+    apartmentSubtype: apartmentUnitCount > 0 ? 'block' : null,
+    apartmentBlockPlan,
+    apartmentStartingFloorNumber,
     apartmentUnitCount: apartmentUnitCount || null,
     bungalowUnitCount: bungalowUnitCount || null,
     shedUnitCount: shedUnitCount || null,
@@ -798,10 +1001,6 @@ function createSocietyWorkspace(userId, draft) {
   const preferredRoleToPersist = existingUserProfile?.preferredRole ?? null;
 
   runTransaction(() => {
-    const existingMembershipCount = Number(
-      db.prepare('SELECT COUNT(*) AS count FROM memberships WHERE userId = ?').get(userId)?.count ?? 0,
-    );
-
     insertMany('societies', [
       {
         id: societyId,
@@ -815,6 +1014,9 @@ function createSocietyWorkspace(userId, draft) {
         enabledStructures: structureSetup.enabledStructures,
         commercialSpaceType: structureSetup.commercialSpaceType,
         enabledCommercialSpaceTypes: structureSetup.enabledCommercialSpaceTypes,
+        apartmentSubtype: structureSetup.apartmentSubtype,
+        apartmentBlockPlan: structureSetup.apartmentBlockPlan,
+        apartmentStartingFloorNumber: structureSetup.apartmentStartingFloorNumber,
         apartmentUnitCount: structureSetup.apartmentUnitCount,
         bungalowUnitCount: structureSetup.bungalowUnitCount,
         shedUnitCount: structureSetup.shedUnitCount,
@@ -835,23 +1037,13 @@ function createSocietyWorkspace(userId, draft) {
        VALUES (?, ?, ?, ?)
        ON CONFLICT(userId) DO UPDATE SET preferredRole = excluded.preferredRole, updatedAt = excluded.updatedAt`,
     ).run(userId, preferredRoleToPersist, now, now);
-    insertMany('memberships', [
-      {
-        id: nextId('membership'),
-        userId,
-        societyId,
-        roles: ['chairman'],
-        unitIds: [],
-        isPrimary: existingMembershipCount === 0,
-      },
-    ]);
 
     insertMany('announcements', [
       {
         id: nextId('announcement'),
         societyId,
         title: 'Workspace created',
-        body: 'Chairman setup is complete. You can now invite owners, tenants, staff, and committee members.',
+        body: 'Workspace setup is complete. The first local chairman can now claim this society for approval.',
         audience: 'all',
         createdAt: now,
         priority: 'normal',
@@ -936,6 +1128,7 @@ function initializeDatabase() {
   }
   ensureSuperUserAccount();
   ensureSupplementalSeedRows();
+  ensureResidentialAmenityCatalog();
   ensureSecurityGuardAccess();
 }
 

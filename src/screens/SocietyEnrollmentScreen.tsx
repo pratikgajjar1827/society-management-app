@@ -25,12 +25,13 @@ import { palette, radius, shadow, spacing } from '../theme/tokens';
 import { SocietyWorkspace, VehicleType } from '../types/domain';
 import { pickWebFileAsDataUrl, tryDetectVehicleRegistrationFromDataUrl } from '../utils/fileUploads';
 import {
+  doesSocietyHaveChairman,
   getSocietyStructureLabel,
   getSocietyUnitCollectionLabel,
 } from '../utils/selectors';
 
 type EnrollmentStep = 1 | 2 | 3 | 4;
-type ResidentProfile = 'owner' | 'tenant' | 'committee';
+type ResidentProfile = 'owner' | 'tenant' | 'chairman';
 type CityCard = ReturnType<typeof buildCityTiles>[number];
 type EditableVehicleDraft = {
   id: string;
@@ -284,6 +285,10 @@ export function SocietyEnrollmentScreen() {
   }, [selectedSocietyId, state.data.units]);
 
   const selectedSociety = matchingSocieties.find((society) => society.id === selectedSocietyId);
+  const selectedSocietyHasChairman = useMemo(
+    () => (selectedSocietyId ? doesSocietyHaveChairman(state.data, selectedSocietyId) : false),
+    [selectedSocietyId, state.data],
+  );
   const hasMemberships = Boolean(state.onboarding?.membershipsCount);
   const hasIncompleteVehicle = vehicles.some(
     (vehicle) =>
@@ -500,6 +505,7 @@ export function SocietyEnrollmentScreen() {
           const isSelected = society.id === selectedSocietyId;
           const isAlreadyLinked = existingSocietyIds.has(society.id);
           const canOpenDirectly = canCreateSociety || isAlreadyLinked;
+          const societyHasChairman = doesSocietyHaveChairman(state.data, society.id);
 
           return (
             <SurfaceCard key={society.id}>
@@ -523,6 +529,7 @@ export function SocietyEnrollmentScreen() {
                   label={`${society.totalUnits} ${getSocietyUnitCollectionLabel(society)}`}
                   tone="primary"
                 />
+                {!societyHasChairman ? <Pill label="Chairman needed" tone="warning" /> : null}
                 {isAlreadyLinked ? <Pill label="Already linked" tone="success" /> : null}
               </View>
 
@@ -555,7 +562,11 @@ export function SocietyEnrollmentScreen() {
           <SurfaceCard>
             <SectionHeader
               title="Choose one or more unit or space numbers"
-              description="Owners or committee members can claim multiple apartments, offices, sheds, or bungalows in one approval request."
+              description={
+                selectedSocietyHasChairman
+                  ? 'Owners or tenants can claim one or more apartments, offices, sheds, or bungalows in one approval request.'
+                  : 'This society does not have a chairman yet. Select your unit or space first, then continue to claim the first chairman role.'
+              }
             />
             <View style={styles.choiceWrap}>
               {availableUnits.map((unit) => (
@@ -598,7 +609,11 @@ export function SocietyEnrollmentScreen() {
         <SurfaceCard>
           <SectionHeader
             title="Page 5. Residence profile details"
-            description="Choose how this mobile user belongs to the selected unit or commercial space."
+            description={
+              selectedSocietyHasChairman
+                ? 'Choose how this mobile user belongs to the selected unit or commercial space.'
+                : 'This society does not have a chairman yet. Submit the first-chairman claim using the selected unit or commercial space.'
+            }
           />
           <View style={styles.summaryBlock}>
             <Caption>Country: {selectedCountry}</Caption>
@@ -616,22 +631,33 @@ export function SocietyEnrollmentScreen() {
           </View>
 
           <View style={styles.choiceWrap}>
-            <ChoiceChip
-              label="Owner"
-              selected={residentProfile === 'owner'}
-              onPress={() => setResidentProfile('owner')}
-            />
-            <ChoiceChip
-              label="Tenant"
-              selected={residentProfile === 'tenant'}
-              onPress={() => setResidentProfile('tenant')}
-            />
-            <ChoiceChip
-              label="Society Committee Member"
-              selected={residentProfile === 'committee'}
-              onPress={() => setResidentProfile('committee')}
-            />
+            {selectedSocietyHasChairman ? (
+              <>
+                <ChoiceChip
+                  label="Owner"
+                  selected={residentProfile === 'owner'}
+                  onPress={() => setResidentProfile('owner')}
+                />
+                <ChoiceChip
+                  label="Tenant"
+                  selected={residentProfile === 'tenant'}
+                  onPress={() => setResidentProfile('tenant')}
+                />
+              </>
+            ) : (
+              <ChoiceChip
+                label="Claim first chairman access"
+                selected={residentProfile === 'chairman'}
+                onPress={() => setResidentProfile('chairman')}
+              />
+            )}
           </View>
+
+          {!selectedSocietyHasChairman ? (
+            <Caption>
+              Resident enrollment is paused until the first chairman is approved. Submit this claim and the super user can activate the society leadership.
+            </Caption>
+          ) : null}
 
           <View style={styles.inlineSection}>
             <Text style={styles.formSectionTitle}>Minimal resident information</Text>
@@ -899,11 +925,19 @@ export function SocietyEnrollmentScreen() {
           </View>
 
           <Caption>
-            Your claim will be sent to the society chairman for confirmation before access is granted. This supports members who own or manage multiple units or office spaces in the same society.
+            {residentProfile === 'chairman'
+              ? 'Your first-chairman claim will be sent to the platform super user for confirmation. After approval, you can open the admin workspace and start approving resident requests.'
+              : 'Your claim will be sent to the society chairman for confirmation before access is granted. This supports members who own or manage multiple units or office spaces in the same society.'}
           </Caption>
 
           <ActionButton
-            label={state.isSyncing ? 'Sending request...' : 'Send request for chairman approval'}
+            label={
+              state.isSyncing
+                ? 'Sending request...'
+                : residentProfile === 'chairman'
+                  ? 'Send first-chairman claim'
+                  : 'Send request for chairman approval'
+            }
             onPress={() =>
               actions.enrollIntoSociety(
                 selectedSocietyId ?? '',

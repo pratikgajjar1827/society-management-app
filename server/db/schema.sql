@@ -20,6 +20,9 @@ CREATE TABLE IF NOT EXISTS societies (
   enabledStructures TEXT,
   commercialSpaceType TEXT,
   enabledCommercialSpaceTypes TEXT,
+  apartmentSubtype TEXT,
+  apartmentBlockPlan TEXT,
+  apartmentStartingFloorNumber INTEGER,
   apartmentUnitCount INTEGER,
   bungalowUnitCount INTEGER,
   shedUnitCount INTEGER,
@@ -143,6 +146,23 @@ CREATE TABLE IF NOT EXISTS importantContacts (
   FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS leadershipProfiles (
+  id TEXT PRIMARY KEY,
+  societyId TEXT NOT NULL,
+  userId TEXT NOT NULL,
+  roleLabel TEXT NOT NULL,
+  displayName TEXT NOT NULL,
+  phone TEXT NOT NULL,
+  email TEXT,
+  availability TEXT,
+  bio TEXT,
+  photoDataUrl TEXT,
+  updatedAt TEXT NOT NULL,
+  FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE,
+  FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE,
+  UNIQUE (societyId, userId)
+);
+
 CREATE TABLE IF NOT EXISTS announcements (
   id TEXT PRIMARY KEY,
   societyId TEXT NOT NULL,
@@ -168,11 +188,28 @@ CREATE TABLE IF NOT EXISTS rules (
   FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS societyDocuments (
+  id TEXT PRIMARY KEY,
+  societyId TEXT NOT NULL,
+  category TEXT NOT NULL,
+  title TEXT NOT NULL,
+  fileName TEXT NOT NULL,
+  fileDataUrl TEXT NOT NULL,
+  summary TEXT,
+  issuedOn TEXT,
+  validUntil TEXT,
+  uploadedByUserId TEXT NOT NULL,
+  uploadedAt TEXT NOT NULL,
+  FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE,
+  FOREIGN KEY (uploadedByUserId) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS amenities (
   id TEXT PRIMARY KEY,
   societyId TEXT NOT NULL,
   name TEXT NOT NULL,
   bookingType TEXT NOT NULL,
+  reservationScope TEXT NOT NULL DEFAULT 'timeSlot',
   approvalMode TEXT NOT NULL,
   capacity INTEGER,
   priceInr INTEGER,

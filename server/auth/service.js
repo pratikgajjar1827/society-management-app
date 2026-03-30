@@ -1,11 +1,12 @@
 const crypto = require('node:crypto');
 
 const { db, getSnapshot } = require('../db/database');
+const { SUPER_USER_ID } = require('../seed/seedData');
 
 const OTP_TTL_MINUTES = 10;
 const SESSION_TTL_DAYS = 30;
 const ACCOUNT_ROLES = new Set(['superUser', 'chairman', 'owner', 'tenant']);
-const RESIDENT_JOIN_ROLES = new Set(['owner', 'tenant', 'committee']);
+const RESIDENT_JOIN_ROLES = new Set(['owner', 'tenant', 'committee', 'chairman']);
 const CHAIRMAN_SELF_ASSIGN_ROLES = new Set(['owner', 'tenant']);
 const JOIN_REQUEST_DECISIONS = new Set(['approve', 'reject']);
 const AUTH_INTENTS = new Set(['signUp', 'signIn', 'auto']);
@@ -45,6 +46,15 @@ const CHAT_THREAD_TYPES = new Set(['society', 'direct']);
 const STAFF_REVIEW_STATES = new Set(['verified', 'expired']);
 const MAINTENANCE_FREQUENCIES = new Set(['monthly', 'quarterly']);
 const VEHICLE_TYPES = new Set(['car', 'bike', 'scooter']);
+const SOCIETY_DOCUMENT_CATEGORIES = new Set([
+  'liftLicense',
+  'commonLightBill',
+  'waterBill',
+  'fireSafety',
+  'insurance',
+  'auditReport',
+  'other',
+]);
 
 class HttpError extends Error {
   constructor(statusCode, message) {
@@ -311,6 +321,41 @@ function normalizeComplaintUpdatePhotoDataUrl(dataUrlInput) {
   return dataUrl;
 }
 
+function normalizeLeadershipProfileInput(input, fallbackUser, roleSet) {
+  const fallbackRoleLabel = roleSet.has('chairman') ? 'Chairman' : 'Committee member';
+  return {
+    displayName: requireText(input?.displayName || fallbackUser?.name, 'Enter the public display name.'),
+    roleLabel: requireText(input?.roleLabel || fallbackRoleLabel, 'Enter the public role label.'),
+    phone: normalizeOptionalPhoneNumber(input?.phone || fallbackUser?.phone, 'public contact number'),
+    email: normalizeOptionalText(input?.email, 120),
+    availability: normalizeOptionalText(input?.availability, 120),
+    bio: normalizeOptionalText(input?.bio, 400),
+    photoDataUrl: normalizeOptionalImageDataUrl(input?.photoDataUrl, 'the leadership profile photo'),
+  };
+}
+
+function normalizeSocietyDocumentAttachment(fileNameInput, dataUrlInput) {
+  const fileName = String(fileNameInput ?? '').trim();
+  const dataUrl = String(dataUrlInput ?? '').trim();
+
+  if (!fileName || !dataUrl) {
+    throw new HttpError(400, 'Finish attaching the society document before uploading.');
+  }
+
+  if (!/^data:(application\/pdf|image\/png|image\/jpeg|image\/webp);base64,/i.test(dataUrl)) {
+    throw new HttpError(400, 'Upload the document as a PDF, PNG, JPG, or WEBP file.');
+  }
+
+  if (dataUrl.length > 8_000_000) {
+    throw new HttpError(400, 'Choose a document smaller than 5 MB.');
+  }
+
+  return {
+    fileName: fileName.slice(0, 160),
+    fileDataUrl: dataUrl,
+  };
+}
+
 function normalizeVehicleRegistrationNumber(value) {
   const normalized = String(value ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
@@ -364,7 +409,7 @@ function normalizeResidenceProfileInput(input, residentType, allowedUnitIds = []
   }
 
   if (!RESIDENT_JOIN_ROLES.has(residentType)) {
-    throw new HttpError(400, 'Choose owner, tenant, or society committee member.');
+    throw new HttpError(400, 'Choose owner, tenant, society committee member, or first chairman claim.');
   }
 
   if (input.dataProtectionConsent !== true) {
@@ -550,6 +595,16 @@ function getUserProfile(userId) {
   return db.prepare('SELECT * FROM userProfiles WHERE userId = ?').get(userId);
 }
 
+function isPlatformSuperUserAccount(userId) {
+  return userId === SUPER_USER_ID || getUserProfile(userId)?.preferredRole === 'superUser';
+}
+
+function requireNonPlatformSuperUserResidentAccess(userId) {
+  if (isPlatformSuperUserAccount(userId)) {
+    throw new HttpError(403, 'The platform super user account cannot join a society as a resident.');
+  }
+}
+
 function getResidenceProfileRecord(userId, societyId) {
   return db
     .prepare('SELECT * FROM residenceProfiles WHERE userId = ? AND societyId = ?')
@@ -618,6 +673,18 @@ function hasAssignedChairman(excludedUserId = null) {
     : db.prepare("SELECT COUNT(*) AS count FROM userProfiles WHERE preferredRole = 'chairman'");
   const row = excludedUserId ? statement.get(excludedUserId) : statement.get();
   return Number(row?.count ?? 0) > 0;
+}
+
+function societyHasAssignedChairman(societyId, excludedUserId = null) {
+  const memberships = db
+    .prepare('SELECT userId, roles FROM memberships WHERE societyId = ?')
+    .all(societyId);
+
+  return memberships.some(
+    (membership) =>
+      membership.userId !== excludedUserId &&
+      parseStoredJson(membership.roles).includes('chairman'),
+  );
 }
 
 function getMembershipCount(userId) {
@@ -897,7 +964,7 @@ function getMaintenancePlan(planId) {
 
 function getAmenity(amenityId) {
   return db
-    .prepare('SELECT id, societyId, name, bookingType, approvalMode, capacity, priceInr FROM amenities WHERE id = ?')
+    .prepare('SELECT id, societyId, name, bookingType, reservationScope, approvalMode, capacity, priceInr FROM amenities WHERE id = ?')
     .get(amenityId);
 }
 
@@ -1424,6 +1491,33 @@ function requireSocietyAnnouncementPublisher(userId, societyId) {
   }
 }
 
+function requireSocietyLeadershipManager(userId, societyId) {
+  const society = getSociety(societyId);
+
+  if (!society) {
+    throw new HttpError(404, 'Selected society was not found.');
+  }
+
+  const membership = getMembership(userId, societyId);
+  const roleSet = membership ? new Set(parseStoredJson(membership.roles)) : new Set();
+
+  if (!roleSet.has('chairman') && !roleSet.has('committee')) {
+    throw new HttpError(403, 'Only a chairman or committee member can publish resident-facing leadership details.');
+  }
+
+  const user = getUserById(userId);
+
+  if (!user) {
+    throw new HttpError(404, 'Authenticated member was not found.');
+  }
+
+  return {
+    membership,
+    roleSet,
+    user,
+  };
+}
+
 function syncResidenceVehicles(userId, societyId, allowedUnitIds, vehicles) {
   db.prepare('DELETE FROM vehicleRegistrations WHERE userId = ? AND societyId = ?').run(
     userId,
@@ -1604,6 +1698,7 @@ function resolveResidentTypeForProfile(userId, societyId, requestedResidentType)
 }
 
 function selectSocietyForResident(userId, societyId, unitIdsInput, residentType, residenceProfileInput) {
+  requireNonPlatformSuperUserResidentAccess(userId);
   const society = db.prepare('SELECT id, name FROM societies WHERE id = ?').get(societyId);
 
   if (!society) {
@@ -1617,7 +1712,11 @@ function selectSocietyForResident(userId, societyId, unitIdsInput, residentType,
   }
 
   if (!RESIDENT_JOIN_ROLES.has(residentType)) {
-    throw new HttpError(400, 'Choose owner, tenant, or society committee member.');
+    throw new HttpError(400, 'Choose owner, tenant, society committee member, or first chairman claim.');
+  }
+
+  if (residentType === 'chairman' && societyHasAssignedChairman(societyId)) {
+    throw new HttpError(400, 'This society already has a chairman. Join as an owner or tenant instead.');
   }
 
   const units = unitIds.map((unitId) => getUnit(unitId));
@@ -1626,7 +1725,12 @@ function selectSocietyForResident(userId, societyId, unitIdsInput, residentType,
     throw new HttpError(404, 'One or more selected resident numbers or spaces were not found in this society.');
   }
 
-  const normalizedPreferredRole = residentType === 'tenant' ? 'tenant' : 'owner';
+  const normalizedPreferredRole =
+    residentType === 'chairman'
+      ? 'chairman'
+      : residentType === 'tenant'
+        ? 'tenant'
+        : 'owner';
   const now = nowIso();
 
   runTransaction(() => {
@@ -1726,7 +1830,13 @@ function reviewJoinRequest(userId, joinRequestId, decision, reviewNoteInput = ''
     throw new HttpError(400, 'This join request has already been reviewed.');
   }
 
-  requireSocietyChairman(userId, joinRequest.societyId);
+  const isChairmanClaim = joinRequest.residentType === 'chairman';
+
+  if (isChairmanClaim) {
+    requireSuperUserRole(userId);
+  } else {
+    requireSocietyChairman(userId, joinRequest.societyId);
+  }
 
   const requestedUnitIds = normalizeRequestedUnitIds(parseStoredJson(joinRequest.unitIds));
 
@@ -1740,9 +1850,20 @@ function reviewJoinRequest(userId, joinRequestId, decision, reviewNoteInput = ''
     throw new HttpError(400, 'One or more requested units no longer belong to this society.');
   }
 
-  const normalizedPreferredRole = joinRequest.residentType === 'tenant' ? 'tenant' : 'owner';
+  if (isChairmanClaim && decision === 'approve' && societyHasAssignedChairman(joinRequest.societyId)) {
+    throw new HttpError(400, 'This society already has a chairman. Reject this claim or transfer chairman access from admin.');
+  }
+
+  const normalizedPreferredRole =
+    joinRequest.residentType === 'chairman'
+      ? 'chairman'
+      : joinRequest.residentType === 'tenant'
+        ? 'tenant'
+        : 'owner';
   const membershipRoles =
-    joinRequest.residentType === 'committee'
+    joinRequest.residentType === 'chairman'
+      ? new Set(['chairman', 'committee', 'owner'])
+      : joinRequest.residentType === 'committee'
       ? new Set(['owner', 'committee'])
       : new Set([joinRequest.residentType]);
   const occupancyCategory = joinRequest.residentType === 'tenant' ? 'tenant' : 'owner';
@@ -2300,12 +2421,16 @@ function resolveAmenityAvailability(amenity, date, startTime, endTime, guests, e
       (booking) =>
         booking.id !== excludedBookingId &&
         (booking.status === 'pending' || booking.status === 'confirmed') &&
-        rangesOverlap(booking.startTime, booking.endTime, startTime, endTime),
+        (
+          amenity.reservationScope === 'fullDay' ||
+          rangesOverlap(booking.startTime, booking.endTime, startTime, endTime)
+        ),
     );
 
   if (amenity.bookingType === 'exclusive') {
     return {
       canConfirm: activeBookings.length === 0,
+      activeBookings,
       matchingRules,
     };
   }
@@ -2324,14 +2449,35 @@ function resolveAmenityAvailability(amenity, date, startTime, endTime, guests, e
 
     return {
       canConfirm: capacityLimit === null ? true : bookedGuests + guests <= capacityLimit,
+      activeBookings,
       matchingRules,
     };
   }
 
   return {
     canConfirm: false,
+    activeBookings,
     matchingRules,
   };
+}
+
+function buildAmenityConflictMessage(amenity, activeBookings, date) {
+  if (!Array.isArray(activeBookings) || activeBookings.length === 0) {
+    return 'This amenity slot is no longer available.';
+  }
+
+  const visibleBookingDetails = activeBookings.slice(0, 3).map((booking) => {
+    const unit = booking.unitId ? getUnit(booking.unitId) : null;
+    const user = getUserById(booking.userId);
+    const residentLabel = user?.name ? ` by ${user.name}` : '';
+    return `${unit?.code ?? 'linked unit'}${residentLabel} (${booking.startTime}-${booking.endTime})`;
+  });
+
+  if (amenity.reservationScope === 'fullDay') {
+    return `${amenity.name} is already booked on ${date}. Current booking: ${visibleBookingDetails.join(', ')}. This venue is locked for the full day once reserved.`;
+  }
+
+  return `${amenity.name} already has a conflicting booking for this slot: ${visibleBookingDetails.join(', ')}.`;
 }
 
 function resolveAmenityBookingStatus(amenity, availability) {
@@ -2401,6 +2547,101 @@ function assignChairmanResidence(userId, societyId, unitIdsInput, residentTypeIn
   return buildSocietyMutationPayload(userId, societyId);
 }
 
+function updateLeadershipRole(userId, societyId, targetUserIdInput, roleInput, enabledInput = true) {
+  const society = getSociety(societyId);
+
+  if (!society) {
+    throw new HttpError(404, 'Selected society was not found.');
+  }
+
+  requireSocietyChairman(userId, societyId);
+
+  const targetUserId = requireText(targetUserIdInput, 'Choose the member you want to update.');
+  const role = String(roleInput ?? '').trim();
+  const enabled = Boolean(enabledInput);
+  const targetMembership = getMembership(targetUserId, societyId);
+  const targetUser = getUserById(targetUserId);
+
+  if (!targetUser || !targetMembership) {
+    throw new HttpError(404, 'Choose a member who already belongs to this society.');
+  }
+
+  const targetRoleSet = new Set(parseStoredJson(targetMembership.roles));
+  const canHoldLeadership =
+    targetRoleSet.has('owner') ||
+    targetRoleSet.has('tenant') ||
+    targetRoleSet.has('family') ||
+    targetRoleSet.has('authorizedOccupant') ||
+    targetRoleSet.has('committee') ||
+    targetRoleSet.has('chairman');
+
+  if (!canHoldLeadership) {
+    throw new HttpError(400, 'Only resident or committee members can hold chairman or committee access.');
+  }
+
+  const now = nowIso();
+
+  runTransaction(() => {
+    if (role === 'committee') {
+      const nextRoles = new Set(parseStoredJson(targetMembership.roles));
+
+      if (enabled) {
+        nextRoles.add('committee');
+      } else {
+        if (nextRoles.has('chairman')) {
+          throw new HttpError(400, 'Transfer chairman access before removing committee access from this member.');
+        }
+
+        nextRoles.delete('committee');
+      }
+
+      if (nextRoles.size === 0) {
+        throw new HttpError(400, 'This member would lose all society access.');
+      }
+
+      db.prepare('UPDATE memberships SET roles = ? WHERE id = ?').run(
+        JSON.stringify([...nextRoles]),
+        targetMembership.id,
+      );
+
+      return;
+    }
+
+    if (role !== 'chairman') {
+      throw new HttpError(400, 'Choose chairman or committee as the role update.');
+    }
+
+    const societyMemberships = db
+      .prepare('SELECT id, userId, roles FROM memberships WHERE societyId = ?')
+      .all(societyId);
+
+    for (const membership of societyMemberships) {
+      const nextRoles = new Set(parseStoredJson(membership.roles));
+
+      if (membership.userId === targetUserId) {
+        nextRoles.add('chairman');
+        nextRoles.add('committee');
+      } else if (nextRoles.has('chairman')) {
+        nextRoles.delete('chairman');
+        nextRoles.add('committee');
+      }
+
+      db.prepare('UPDATE memberships SET roles = ? WHERE id = ?').run(
+        JSON.stringify([...nextRoles]),
+        membership.id,
+      );
+    }
+
+    db.prepare(
+      `INSERT INTO userProfiles (userId, preferredRole, createdAt, updatedAt)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(userId) DO UPDATE SET preferredRole = excluded.preferredRole, updatedAt = excluded.updatedAt`,
+    ).run(targetUserId, 'chairman', now, now);
+  });
+
+  return buildSocietyMutationPayload(userId, societyId);
+}
+
 function createAmenityBooking(userId, societyId, input) {
   const amenityId = requireText(input?.amenityId, 'Choose the amenity you want to book.');
   const amenity = getAmenity(amenityId);
@@ -2457,6 +2698,11 @@ function createAmenityBooking(userId, societyId, input) {
   }
 
   const availability = resolveAmenityAvailability(amenity, date, startTime, endTime, guests);
+
+  if (amenity.reservationScope === 'fullDay' && !availability.canConfirm) {
+    throw new HttpError(409, buildAmenityConflictMessage(amenity, availability.activeBookings, date));
+  }
+
   const status = resolveAmenityBookingStatus(amenity, availability);
 
   db.prepare(
@@ -2511,7 +2757,7 @@ function reviewAmenityBooking(userId, bookingId, statusInput) {
     if (!availability.canConfirm) {
       throw new HttpError(
         400,
-        'This slot is no longer available to confirm. Move it to waitlisted or adjust the booking window.',
+        buildAmenityConflictMessage(amenity, availability.activeBookings, booking.date),
       );
     }
   }
@@ -2854,6 +3100,108 @@ function createAnnouncement(userId, societyId, input) {
     nowIso(),
     priority,
     JSON.stringify([]),
+  );
+
+  return buildSocietyMutationPayload(userId, societyId);
+}
+
+function updateLeadershipProfile(userId, societyId, input) {
+  const { roleSet, user } = requireSocietyLeadershipManager(userId, societyId);
+  const normalized = normalizeLeadershipProfileInput(input, user, roleSet);
+  const existing = db
+    .prepare('SELECT id FROM leadershipProfiles WHERE societyId = ? AND userId = ?')
+    .get(societyId, userId);
+  const updatedAt = nowIso();
+
+  if (existing) {
+    db.prepare(
+      `UPDATE leadershipProfiles
+       SET roleLabel = ?, displayName = ?, phone = ?, email = ?, availability = ?, bio = ?, photoDataUrl = ?, updatedAt = ?
+       WHERE id = ?`,
+    ).run(
+      normalized.roleLabel,
+      normalized.displayName,
+      normalized.phone,
+      normalized.email || null,
+      normalized.availability || null,
+      normalized.bio || null,
+      normalized.photoDataUrl || null,
+      updatedAt,
+      existing.id,
+    );
+  } else {
+    db.prepare(
+      `INSERT INTO leadershipProfiles (
+        id,
+        societyId,
+        userId,
+        roleLabel,
+        displayName,
+        phone,
+        email,
+        availability,
+        bio,
+        photoDataUrl,
+        updatedAt
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      nextId('leadership-profile'),
+      societyId,
+      userId,
+      normalized.roleLabel,
+      normalized.displayName,
+      normalized.phone,
+      normalized.email || null,
+      normalized.availability || null,
+      normalized.bio || null,
+      normalized.photoDataUrl || null,
+      updatedAt,
+    );
+  }
+
+  return buildSocietyMutationPayload(userId, societyId);
+}
+
+function createSocietyDocument(userId, societyId, input) {
+  requireSocietyAnnouncementPublisher(userId, societyId);
+
+  const category = String(input?.category ?? '').trim();
+  const title = requireText(input?.title, 'Enter a document title.');
+  const summary = normalizeOptionalText(input?.summary, 300);
+  const issuedOn = input?.issuedOn ? normalizeDateOnlyInput(input.issuedOn, 'the issue date') : null;
+  const validUntil = input?.validUntil ? normalizeDateOnlyInput(input.validUntil, 'the expiry date') : null;
+  const attachment = normalizeSocietyDocumentAttachment(input?.fileName, input?.fileDataUrl);
+
+  if (!SOCIETY_DOCUMENT_CATEGORIES.has(category)) {
+    throw new HttpError(400, 'Choose a valid society document category.');
+  }
+
+  db.prepare(
+    `INSERT INTO societyDocuments (
+      id,
+      societyId,
+      category,
+      title,
+      fileName,
+      fileDataUrl,
+      summary,
+      issuedOn,
+      validUntil,
+      uploadedByUserId,
+      uploadedAt
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    nextId('society-document'),
+    societyId,
+    category,
+    title,
+    attachment.fileName,
+    attachment.fileDataUrl,
+    summary || null,
+    issuedOn,
+    validUntil,
+    userId,
+    nowIso(),
   );
 
   return buildSocietyMutationPayload(userId, societyId);
@@ -3783,6 +4131,7 @@ module.exports = {
   createAnnouncement,
   createAmenityBooking,
   createComplaintTicket,
+  createSocietyDocument,
   getOnboardingState,
   hasAssignedChairman,
   isOtpDeliveryConfigured,
@@ -3816,9 +4165,11 @@ module.exports = {
   setPreferredRole,
   submitResidentPayment,
   updateResidenceProfile,
+  updateLeadershipProfile,
   updateMaintenancePlanSettings,
   updateMaintenanceBillingConfig,
   updateSocietyProfile,
   updateComplaintTicket,
   verifyOtp,
+  updateLeadershipRole,
 };

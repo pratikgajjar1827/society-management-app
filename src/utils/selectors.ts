@@ -3,6 +3,7 @@ import {
   CommercialSpaceType,
   ComplaintTicket,
   JoinRequest,
+  LeadershipProfile,
   Membership,
   MembershipRole,
   ResidenceProfile,
@@ -12,12 +13,14 @@ import {
   SecurityGuestRequest,
   SecurityGuestRequestStatus,
   SeedData,
+  SocietyDocument,
   SocietySetupDraft,
   SocietyStructureOption,
   SocietyWorkspace,
   UserProfile,
   VisitorPass,
 } from '../types/domain';
+import { SUPER_USER_ID } from '../data/seed';
 
 export type AdminRecommendationTab =
   | 'residents'
@@ -83,6 +86,26 @@ export function humanizeRole(role: MembershipRole) {
     default:
       return role.charAt(0).toUpperCase() + role.slice(1);
   }
+}
+
+export function humanizeJoinRequestRole(role: JoinRequest['residentType']) {
+  switch (role) {
+    case 'committee':
+      return 'Society committee member';
+    case 'chairman':
+      return 'First chairman claimant';
+    case 'tenant':
+      return 'Tenant';
+    case 'owner':
+    default:
+      return 'Owner';
+  }
+}
+
+export function doesSocietyHaveChairman(data: SeedData, societyId: string) {
+  return data.memberships.some(
+    (membership) => membership.societyId === societyId && membership.roles.includes('chairman'),
+  );
 }
 
 export function humanizeProfile(profile: RoleProfile) {
@@ -248,7 +271,7 @@ export function getSocietyStructurePreviewLabel(society: StructureDescriptor) {
     return enabledCommercialTypes[0] === 'office' ? 'Office floors enabled' : 'Shed registry enabled';
   }
 
-  return enabledStructures[0] === 'apartment' ? 'Tower hierarchy enabled' : 'Plot hierarchy enabled';
+  return enabledStructures[0] === 'apartment' ? 'Block and tower hierarchy enabled' : 'Plot hierarchy enabled';
 }
 
 export function deriveProfiles(roles: MembershipRole[]): RoleProfile[] {
@@ -276,6 +299,37 @@ export function getSecurityMembershipForSociety(data: SeedData, userId: string, 
 
 export function getCurrentUser(data: SeedData, userId?: string) {
   return data.users.find((user) => user.id === userId);
+}
+
+export function getAccountProfileForUser(data: SeedData, userId?: string) {
+  return (Array.isArray(data.userProfiles) ? data.userProfiles : []).find((profile) => profile.userId === userId);
+}
+
+function isPlatformSuperUserAccount(data: SeedData, userId?: string) {
+  const normalizedUserId = String(userId ?? '').trim();
+
+  if (!normalizedUserId) {
+    return false;
+  }
+
+  if (normalizedUserId === SUPER_USER_ID) {
+    return true;
+  }
+
+  const accountProfile = getAccountProfileForUser(data, normalizedUserId);
+
+  if (accountProfile?.preferredRole === 'superUser') {
+    return true;
+  }
+
+  const user = getCurrentUser(data, normalizedUserId);
+
+  return Boolean(
+    user && (
+      /super user/i.test(user.name)
+      || /superuser@/i.test(user.email)
+    ),
+  );
 }
 
 export function getSelectedSociety(data: SeedData, societyId?: string) {
@@ -1024,7 +1078,9 @@ export function getResidentsDirectory(data: SeedData, societyId: string) {
 
 export function getCommunityMembersForSociety(data: SeedData, societyId: string) {
   return data.memberships
-    .filter((membership) => membership.societyId === societyId)
+    .filter(
+      (membership) => membership.societyId === societyId && !isPlatformSuperUserAccount(data, membership.userId),
+    )
     .map((membership) => {
       const user = getCurrentUser(data, membership.userId);
 
@@ -1161,6 +1217,47 @@ export function getImportantContactsForSociety(data: SeedData, societyId: string
 
       return left.name.localeCompare(right.name);
     });
+}
+
+export function getLeadershipProfilesForSociety(data: SeedData, societyId: string) {
+  const leadershipProfiles = Array.isArray(data.leadershipProfiles) ? data.leadershipProfiles : [];
+  const profileMap = new Map(
+    leadershipProfiles
+      .filter((profile) => profile.societyId === societyId)
+      .map((profile) => [profile.userId, profile] as const),
+  );
+
+  return getCommunityMembersForSociety(data, societyId)
+    .filter(
+      ({ membership }) =>
+        membership.roles.includes('chairman') || membership.roles.includes('committee'),
+    )
+    .map((member) => ({
+      ...member,
+      leadershipProfile: profileMap.get(member.user.id),
+    }))
+    .sort((left, right) => {
+      const leftPriority = left.membership.roles.includes('chairman') ? 0 : 1;
+      const rightPriority = right.membership.roles.includes('chairman') ? 0 : 1;
+
+      if (leftPriority !== rightPriority) {
+        return leftPriority - rightPriority;
+      }
+
+      return left.user.name.localeCompare(right.user.name);
+    }) as Array<{
+    membership: Membership;
+    user: UserProfile;
+    units: SeedData['units'];
+    residenceProfile?: ResidenceProfile;
+    leadershipProfile?: LeadershipProfile;
+  }>;
+}
+
+export function getSocietyDocuments(data: SeedData, societyId: string) {
+  return [...(Array.isArray(data.societyDocuments) ? data.societyDocuments : [])]
+    .filter((document) => document.societyId === societyId)
+    .sort((left, right) => Date.parse(right.uploadedAt) - Date.parse(left.uploadedAt)) as SocietyDocument[];
 }
 
 export function getGuardRosterForSociety(data: SeedData, societyId: string) {
@@ -1466,4 +1563,51 @@ function getAgeInDays(value: string) {
   }
 
   return Math.max(0, Math.floor(difference / (1000 * 60 * 60 * 24)));
+}
+
+export function getMeetingsForSociety(data: SeedData, societyId: string) {
+  return (data.societyMeetings ?? [])
+    .filter((meeting) => meeting.societyId === societyId)
+    .sort((a, b) => b.scheduledAt.localeCompare(a.scheduledAt));
+}
+
+export function getMeetingAgendaItems(data: SeedData, meetingId: string) {
+  return (data.meetingAgendaItems ?? [])
+    .filter((item) => item.meetingId === meetingId)
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+}
+
+export function getMeetingVotesForItem(data: SeedData, agendaItemId: string) {
+  return (data.meetingVotes ?? []).filter((vote) => vote.agendaItemId === agendaItemId);
+}
+
+export function getMeetingSignatures(data: SeedData, meetingId: string) {
+  return (data.meetingAttendeeSigns ?? []).filter((sign) => sign.meetingId === meetingId);
+}
+
+export function humanizeMeetingType(type: string) {
+  switch (type) {
+    case 'society': return 'Society Meeting';
+    case 'committee': return 'Committee Meeting';
+    case 'emergency': return 'Emergency Meeting';
+    default: return type;
+  }
+}
+
+export function humanizeMeetingStatus(status: string) {
+  switch (status) {
+    case 'scheduled': return 'Scheduled';
+    case 'completed': return 'Completed';
+    case 'cancelled': return 'Cancelled';
+    default: return status;
+  }
+}
+
+export function getMeetingStatusTone(status: string): 'primary' | 'accent' | 'warning' | 'success' | 'neutral' {
+  switch (status) {
+    case 'scheduled': return 'primary';
+    case 'completed': return 'success';
+    case 'cancelled': return 'warning';
+    default: return 'neutral';
+  }
 }

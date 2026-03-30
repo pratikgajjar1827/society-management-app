@@ -1,6 +1,7 @@
 export type SocietyStructureOption = 'apartment' | 'bungalow' | 'commercial';
 export type SocietyStructure = SocietyStructureOption | 'mixed';
 export type CommercialSpaceType = 'shed' | 'office';
+export type ApartmentSubtype = 'block';
 export type AuthChannel = 'sms' | 'email';
 export type AuthIntent = 'signUp' | 'signIn' | 'auto';
 export type AccountRole = 'superUser' | 'chairman' | 'owner' | 'tenant';
@@ -10,7 +11,7 @@ export type OnboardingNextStep =
   | 'joinSociety'
   | 'workspaceSelection';
 export type JoinRequestStatus = 'pending' | 'approved' | 'rejected';
-export type JoinRequestRole = 'owner' | 'tenant' | 'committee';
+export type JoinRequestRole = 'owner' | 'tenant' | 'committee' | 'chairman';
 
 export type MembershipRole =
   | 'chairman'
@@ -26,6 +27,7 @@ export type RoleProfile = 'resident' | 'admin' | 'security';
 export type AnnouncementAudience = 'all' | 'residents' | 'committee' | 'owners' | 'tenants';
 export type AnnouncementPriority = 'critical' | 'high' | 'normal';
 export type AmenityBookingType = 'exclusive' | 'capacity' | 'info';
+export type AmenityReservationScope = 'timeSlot' | 'fullDay';
 export type ApprovalMode = 'auto' | 'committee';
 export type MaintenanceFrequency = 'monthly' | 'quarterly';
 export type InvoiceStatus = 'paid' | 'pending' | 'overdue';
@@ -64,10 +66,30 @@ export type ImportantContactCategory =
   | 'maintenance'
   | 'emergency'
   | 'amenity';
+export type SocietyDocumentCategory =
+  | 'liftLicense'
+  | 'commonLightBill'
+  | 'waterBill'
+  | 'fireSafety'
+  | 'insurance'
+  | 'auditReport'
+  | 'other';
+
+export type SocietyMeetingType = 'society' | 'committee' | 'emergency';
+export type SocietyMeetingStatus = 'scheduled' | 'completed' | 'cancelled';
+export type AgendaVotingStatus = 'notRequired' | 'pending' | 'open' | 'closed';
+export type AgendaResolution = 'passed' | 'rejected' | 'deferred';
 
 export interface OfficeFloorPlanEntry {
   floorLabel: string;
   officeNumbers: string;
+}
+
+export interface ApartmentBlockPlanEntry {
+  blockName: string;
+  towerCount: string;
+  floorsPerTower: string;
+  homesPerFloor: string;
 }
 
 export interface SocietyWorkspace {
@@ -82,6 +104,9 @@ export interface SocietyWorkspace {
   enabledStructures?: SocietyStructureOption[] | null;
   commercialSpaceType?: CommercialSpaceType | null;
   enabledCommercialSpaceTypes?: CommercialSpaceType[] | null;
+  apartmentSubtype?: ApartmentSubtype | null;
+  apartmentBlockPlan?: ApartmentBlockPlanEntry[] | null;
+  apartmentStartingFloorNumber?: number | null;
   apartmentUnitCount?: number | null;
   bungalowUnitCount?: number | null;
   shedUnitCount?: number | null;
@@ -117,6 +142,13 @@ export interface UserProfile {
   phone: string;
   email: string;
   avatarInitials: string;
+}
+
+export interface UserAccountProfile {
+  userId: string;
+  preferredRole: AccountRole | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface AuthChallenge {
@@ -177,6 +209,20 @@ export interface ImportantContact {
   notes?: string;
 }
 
+export interface LeadershipProfile {
+  id: string;
+  societyId: string;
+  userId: string;
+  roleLabel: string;
+  displayName: string;
+  phone: string;
+  email?: string;
+  availability?: string;
+  bio?: string;
+  photoDataUrl?: string;
+  updatedAt: string;
+}
+
 export interface Announcement {
   id: string;
   societyId: string;
@@ -200,11 +246,26 @@ export interface RuleDocument {
   acknowledgedByUserIds: string[];
 }
 
+export interface SocietyDocument {
+  id: string;
+  societyId: string;
+  category: SocietyDocumentCategory;
+  title: string;
+  fileName: string;
+  fileDataUrl: string;
+  summary?: string;
+  issuedOn?: string;
+  validUntil?: string;
+  uploadedByUserId: string;
+  uploadedAt: string;
+}
+
 export interface Amenity {
   id: string;
   societyId: string;
   name: string;
   bookingType: AmenityBookingType;
+  reservationScope: AmenityReservationScope;
   approvalMode: ApprovalMode;
   capacity?: number;
   priceInr?: number;
@@ -511,6 +572,9 @@ export interface SocietySetupDraft {
   enabledStructures: SocietyStructureOption[];
   commercialSpaceType: CommercialSpaceType;
   enabledCommercialSpaceTypes: CommercialSpaceType[];
+  apartmentSubtype: ApartmentSubtype;
+  apartmentBlockPlan: ApartmentBlockPlanEntry[];
+  apartmentStartingFloorNumber: string;
   apartmentUnitCount: string;
   bungalowUnitCount: string;
   shedUnitCount: string;
@@ -522,8 +586,55 @@ export interface SocietySetupDraft {
   rulesSummary: string;
 }
 
+export interface SocietyMeeting {
+  id: string;
+  societyId: string;
+  title: string;
+  meetingType: SocietyMeetingType;
+  scheduledAt: string;
+  venue: string;
+  status: SocietyMeetingStatus;
+  minutesDocumentDataUrl?: string | null;
+  summary?: string;
+  createdByUserId: string;
+  createdAt: string;
+}
+
+export interface MeetingAgendaItem {
+  id: string;
+  meetingId: string;
+  societyId: string;
+  title: string;
+  description?: string;
+  requiresVoting: boolean;
+  votingStatus: AgendaVotingStatus;
+  votingDeadline?: string;
+  resolution?: AgendaResolution;
+  sortOrder: number;
+}
+
+export interface MeetingVote {
+  id: string;
+  agendaItemId: string;
+  meetingId: string;
+  societyId: string;
+  userId: string;
+  vote: 'yes' | 'no' | 'abstain';
+  castAt: string;
+}
+
+export interface MeetingAttendeeSign {
+  id: string;
+  meetingId: string;
+  societyId: string;
+  userId: string;
+  signatureText: string;
+  signedAt: string;
+}
+
 export interface SeedData {
   users: UserProfile[];
+  userProfiles: UserAccountProfile[];
   societies: SocietyWorkspace[];
   buildings: Building[];
   units: Unit[];
@@ -532,8 +643,10 @@ export interface SeedData {
   occupancy: UnitOccupancy[];
   vehicleRegistrations: VehicleRegistration[];
   importantContacts: ImportantContact[];
+  leadershipProfiles: LeadershipProfile[];
   announcements: Announcement[];
   rules: RuleDocument[];
+  societyDocuments: SocietyDocument[];
   amenities: Amenity[];
   amenityScheduleRules: AmenityScheduleRule[];
   bookings: AmenityBooking[];
@@ -556,4 +669,8 @@ export interface SeedData {
   securityGuestLogs: SecurityGuestLog[];
   chatThreads: ChatThread[];
   chatMessages: ChatMessage[];
+  societyMeetings: SocietyMeeting[];
+  meetingAgendaItems: MeetingAgendaItem[];
+  meetingVotes: MeetingVote[];
+  meetingAttendeeSigns: MeetingAttendeeSign[];
 }
