@@ -280,14 +280,18 @@ export function MetricCard({
       style={[
         styles.metricCard,
         isCompact ? styles.metricCardCompact : null,
-        isPhone ? styles.metricCardPhone : null,
+        !onPress && isPhone ? styles.metricCardPhone : null,
+        onPress && isPhone ? styles.metricCardPressableInnerPhone : null,
         {
           backgroundColor: toneMap[tone].backgroundColor,
           borderColor: toneMap[tone].borderColor,
         },
       ]}
       >
-      <Text style={[styles.metricLabel, isCompact ? styles.metricLabelCompact : null, isPhone ? styles.metricLabelPhone : null]} numberOfLines={2}>
+      <Text
+        style={[styles.metricLabel, isCompact ? styles.metricLabelCompact : null, isPhone ? styles.metricLabelPhone : null]}
+        numberOfLines={isPhone ? 3 : 2}
+      >
         {label}
       </Text>
       <Text style={[
@@ -909,25 +913,37 @@ const styles = StyleSheet.create({
   metricCard: {
     flex: 1,
     minWidth: 100,
+    minHeight: 96,
     borderRadius: radius.md,
     padding: spacing.md,
     gap: spacing.xs,
     borderWidth: 1,
+    justifyContent: 'space-between',
   },
   metricCardCompact: {
     minWidth: 84,
+    minHeight: 84,
     borderRadius: 16,
     padding: spacing.xs,
   },
   metricCardPhone: {
     flex: 0,
-    flexBasis: '48%',
-    flexGrow: 0,
-    flexShrink: 0,
-    maxWidth: '48%',
+    width: '48.5%',
+    maxWidth: '48.5%',
     minWidth: 0,
-    padding: 8,
-    borderRadius: 14,
+    minHeight: 78,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    borderRadius: 16,
+  },
+  metricCardPressableInnerPhone: {
+    width: '100%',
+    maxWidth: '100%',
+    minWidth: 0,
+    minHeight: 78,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+    borderRadius: 16,
   },
   metricPressable: {
     flex: 1,
@@ -935,10 +951,8 @@ const styles = StyleSheet.create({
   },
   metricPressablePhone: {
     flex: 0,
-    flexBasis: '48%',
-    flexGrow: 0,
-    flexShrink: 0,
-    maxWidth: '48%',
+    width: '48.5%',
+    maxWidth: '48.5%',
     minWidth: 0,
   },
   metricPressed: {
@@ -957,15 +971,15 @@ const styles = StyleSheet.create({
     fontSize: 12,
   },
   metricLabelPhone: {
-    fontSize: 11,
-    lineHeight: 14,
+    fontSize: 10,
+    lineHeight: 13,
   },
   metricValueCompact: {
     fontSize: 24,
   },
   metricValuePhone: {
-    fontSize: 18,
-    lineHeight: 22,
+    fontSize: 17,
+    lineHeight: 20,
   },
   metricValueAndroidCompact: {
     fontSize: 20,

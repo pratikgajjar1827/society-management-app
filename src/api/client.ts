@@ -99,7 +99,10 @@ export interface ResidenceVehicleInput {
 export interface ResidenceProfileInput {
   residentType: JoinRequestRole;
   fullName: string;
+  photoDataUrl?: string;
   email?: string;
+  businessName?: string;
+  businessDetails?: string;
   alternatePhone?: string;
   emergencyContactName?: string;
   emergencyContactPhone?: string;
@@ -138,6 +141,15 @@ export interface SocietyDocumentCreateInput {
   summary?: string;
   issuedOn?: string;
   validUntil?: string;
+}
+
+export interface SocietyDocumentDownloadRequestInput {
+  requestNote?: string;
+}
+
+export interface SocietyDocumentDownloadReviewInput {
+  decision: 'approve' | 'reject';
+  reviewNote?: string;
 }
 
 export interface VisitorPassCreateInput {
@@ -204,6 +216,7 @@ function normalizeSeedDataSnapshot(data: unknown) {
     chatThreads?: unknown;
     chatMessages?: unknown;
     societyDocuments?: unknown;
+    societyDocumentDownloadRequests?: unknown;
   };
 
   return {
@@ -220,6 +233,9 @@ function normalizeSeedDataSnapshot(data: unknown) {
     chatThreads: Array.isArray(snapshot.chatThreads) ? snapshot.chatThreads : [],
     chatMessages: Array.isArray(snapshot.chatMessages) ? snapshot.chatMessages : [],
     societyDocuments: Array.isArray(snapshot.societyDocuments) ? snapshot.societyDocuments : [],
+    societyDocumentDownloadRequests: Array.isArray(snapshot.societyDocumentDownloadRequests)
+      ? snapshot.societyDocumentDownloadRequests
+      : [],
   };
 }
 
@@ -603,6 +619,37 @@ export async function createSocietyDocument(
   );
 }
 
+export async function requestSocietyDocumentDownload(
+  sessionToken: string,
+  societyId: string,
+  documentId: string,
+  input: SocietyDocumentDownloadRequestInput = {},
+) {
+  return requestJson<SocietyAdminMutationResponse>(
+    `/api/societies/${encodeURIComponent(societyId)}/documents/${encodeURIComponent(documentId)}/download-requests`,
+    {
+      method: 'POST',
+      headers: createAuthHeaders(sessionToken),
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function reviewSocietyDocumentDownloadRequest(
+  sessionToken: string,
+  requestId: string,
+  input: SocietyDocumentDownloadReviewInput,
+) {
+  return requestJson<SocietyAdminMutationResponse>(
+    `/api/document-download-requests/${encodeURIComponent(requestId)}/review`,
+    {
+      method: 'POST',
+      headers: createAuthHeaders(sessionToken),
+      body: JSON.stringify(input),
+    },
+  );
+}
+
 export async function createExpenseRecord(
   sessionToken: string,
   societyId: string,
@@ -781,6 +828,11 @@ export async function updateMaintenanceBillingConfig(
     upiPayeeName?: string;
     upiQrCodeDataUrl?: string;
     upiQrPayload?: string;
+    bankAccountName?: string;
+    bankAccountNumber?: string;
+    bankIfscCode?: string;
+    bankName?: string;
+    bankBranchName?: string;
   },
 ) {
   return requestJson<SocietyAdminMutationResponse>(

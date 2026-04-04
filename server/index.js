@@ -1,8 +1,11 @@
+require('./config/load-env');
+
 const http = require('node:http');
 
 const {
   createSocietyWorkspace,
   dbPath,
+  dbDialect,
   deleteSocietyWorkspace,
   initializeDatabase,
   resetDatabase,
@@ -10,10 +13,12 @@ const {
 const {
   countApartmentUnits,
   countOfficeUnits,
+  countShedUnits,
   findDuplicateOfficeCodes,
   normalizeApartmentBlockPlan,
   normalizeApartmentStartingFloorNumber,
   normalizeOfficeFloorPlan,
+  normalizeShedBlockPlan,
 } = require('./seed/factories');
 const {
   assignChairmanResidence,
@@ -23,6 +28,7 @@ const {
   createAmenityBooking,
   createComplaintTicket,
   createSocietyDocument,
+  requestSocietyDocumentDownload,
   createEntryLogRecord,
   createExpenseRecord,
   createSecurityGuard,
@@ -41,6 +47,7 @@ const {
   requireSession,
   ringSecurityGuestRequest,
   reviewAmenityBooking,
+  reviewSocietyDocumentDownloadRequest,
   reviewJoinRequest,
   reviewSecurityGuestRequest,
   reviewResidentPayment,
@@ -209,9 +216,13 @@ function validateSocietyDraft(draft) {
     : 0;
   const shedUnitCount =
     enabledStructures.includes('commercial') && enabledCommercialSpaceTypes.includes('shed')
-      ? getDraftUnitCount(
-        draft.shedUnitCount,
-        enabledStructures.length === 1 && enabledCommercialSpaceTypes.length === 1 ? draft.totalUnits : null,
+      ? (
+        Array.isArray(draft.shedBlockPlan) && draft.shedBlockPlan.length > 0
+          ? countShedUnits(draft.shedBlockPlan)
+          : getDraftUnitCount(
+            draft.shedUnitCount,
+            enabledStructures.length === 1 && enabledCommercialSpaceTypes.length === 1 ? draft.totalUnits : null,
+          )
       )
       : 0;
 
@@ -253,6 +264,25 @@ function validateSocietyDraft(draft) {
       throw new HttpError(400, 'Add at least one shed before creating the society.');
     }
 
+    if (enabledCommercialSpaceTypes.includes('shed')) {
+      const shedBlockPlan = Array.isArray(draft.shedBlockPlan) ? normalizeShedBlockPlan(draft.shedBlockPlan) : [];
+
+      if (shedBlockPlan.length === 0) {
+        throw new HttpError(400, 'Add at least one shed block before creating the society.');
+      }
+
+      const invalidShedBlocks = shedBlockPlan
+        .filter((block) => block.shedCount < 1)
+        .map((block) => block.blockName);
+
+      if (invalidShedBlocks.length > 0) {
+        throw new HttpError(
+          400,
+          `Enter at least one shed for: ${invalidShedBlocks.join(', ')}.`,
+        );
+      }
+    }
+
     if (enabledCommercialSpaceTypes.includes('office')) {
       const officeFloorPlan = Array.isArray(draft.officeFloorPlan) ? draft.officeFloorPlan : [];
       const configuredFloors = normalizeOfficeFloorPlan(officeFloorPlan);
@@ -268,14 +298,14 @@ function validateSocietyDraft(draft) {
       if (configuredFloors.some((floor) => floor.officeCodes.length === 0)) {
         throw new HttpError(
           400,
-          'Each configured floor must include at least one office number, code, or numeric range.',
+          'Each configured commercial floor must include at least one office number, code, or numeric range.',
         );
       }
 
       if (duplicateOfficeCodes.length > 0) {
         throw new HttpError(
           400,
-          `Duplicate office numbers found: ${duplicateOfficeCodes.join(', ')}. Each office code must be unique in the society.`,
+          `Duplicate office numbers found: ${duplicateOfficeCodes.join(', ')}. Repeated office numbers are only allowed across different commercial towers or blocks.`,
         );
       }
 
@@ -685,6 +715,9 @@ async function requestHandler(request, response) {
     const societyDocumentCreateRouteMatch = request.method === 'POST'
       ? url.pathname.match(/^\/api\/societies\/([^/]+)\/documents$/)
       : null;
+    const societyDocumentDownloadRequestRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/societies\/([^/]+)\/documents\/([^/]+)\/download-requests$/)
+      : null;
 
     if (billingReminderRouteMatch) {
       const userId = requireSession(getBearerToken(request));
@@ -730,6 +763,23 @@ async function requestHandler(request, response) {
       return;
     }
 
+    if (societyDocumentDownloadRequestRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = requestSocietyDocumentDownload(
+        userId,
+        decodeURIComponent(societyDocumentDownloadRequestRouteMatch[1]),
+        decodeURIComponent(societyDocumentDownloadRequestRouteMatch[2]),
+        body,
+      );
+      sendJson(response, 201, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
     const announcementReadRouteMatch = request.method === 'POST'
       ? url.pathname.match(/^\/api\/announcements\/([^/]+)\/read$/)
       : null;
@@ -747,6 +797,9 @@ async function requestHandler(request, response) {
 
     const maintenanceBillingConfigRouteMatch = request.method === 'POST'
       ? url.pathname.match(/^\/api\/maintenance-plans\/([^/]+)\/billing-config$/)
+      : null;
+    const documentDownloadReviewRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/document-download-requests\/([^/]+)\/review$/)
       : null;
 
     const maintenancePlanSettingsRouteMatch = request.method === 'POST'
@@ -773,6 +826,23 @@ async function requestHandler(request, response) {
       const userId = requireSession(getBearerToken(request));
       const body = await parseBody(request);
       const result = updateMaintenanceBillingConfig(userId, decodeURIComponent(maintenanceBillingConfigRouteMatch[1]), body);
+      sendJson(response, 200, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    if (documentDownloadReviewRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = reviewSocietyDocumentDownloadRequest(
+        userId,
+        decodeURIComponent(documentDownloadReviewRouteMatch[1]),
+        body.decision,
+        body.reviewNote,
+      );
       sendJson(response, 200, {
         ...result,
         amenityLibrary,
@@ -1100,7 +1170,11 @@ if (require.main === module) {
   const server = startServer(DEFAULT_PORT);
   server.on('listening', () => {
     console.log(`SocietyOS backend running on http://0.0.0.0:${DEFAULT_PORT}`);
-    console.log(`SQLite database: ${dbPath}`);
+    console.log(
+      dbDialect === 'postgres'
+        ? `Database backend: PostgreSQL (${String(process.env.DATABASE_URL ?? '').trim() ? 'DATABASE_URL configured' : 'DATABASE_URL missing'})`
+        : `Database backend: SQLite (${dbPath})`,
+    );
     console.log(
       isOtpDeliveryConfigured()
         ? 'OTP delivery mode: Twilio Verify is configured. SMS OTP requests will be sent through Twilio.'

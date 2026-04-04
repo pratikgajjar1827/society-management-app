@@ -141,6 +141,7 @@ function BackendConnectionPanel() {
 
 function AppRoot() {
   const { state } = useApp();
+  const isAuthScreen = state.screen === 'auth';
   const pendingSecurityApprovals =
     state.session.userId &&
     state.session.selectedSocietyId &&
@@ -198,18 +199,18 @@ function AppRoot() {
 
   return (
     <View style={styles.appShell}>
-      <BackendConnectionPanel />
-      {state.apiError ? (
+      {!isAuthScreen ? <BackendConnectionPanel /> : null}
+      {!isAuthScreen && state.apiError ? (
         <View style={styles.banner}>
           <Text style={styles.bannerText}>{state.apiError}</Text>
         </View>
       ) : null}
-      {!state.apiError && state.noticeMessage ? (
+      {!isAuthScreen && !state.apiError && state.noticeMessage ? (
         <View style={styles.noticeBanner}>
           <Text style={styles.noticeBannerText}>{state.noticeMessage}</Text>
         </View>
       ) : null}
-      {pendingSecurityApprovals > 0 ? (
+      {!isAuthScreen && pendingSecurityApprovals > 0 ? (
         <View style={styles.urgentBanner}>
           <Text style={styles.urgentBannerText}>
             {pendingSecurityApprovals === 1

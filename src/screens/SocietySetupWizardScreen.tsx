@@ -15,12 +15,14 @@ import {
 import {
   countApartmentUnits,
   countOfficeUnits,
+  countShedUnits,
   expandOfficeNumbersInput,
   findDuplicateOfficeCodes,
   formatApartmentUnitNumber,
   normalizeApartmentBlockPlan,
   normalizeApartmentStartingFloorNumber,
   normalizeOfficeFloorPlan,
+  normalizeShedBlockPlan,
 } from '../data/factories';
 import { useApp } from '../state/AppContext';
 import { palette, radius, spacing } from '../theme/tokens';
@@ -28,6 +30,7 @@ import {
   ApartmentBlockPlanEntry,
   CommercialSpaceType,
   OfficeFloorPlanEntry,
+  ShedBlockPlanEntry,
   SocietySetupDraft,
   SocietyStructure,
   SocietyStructureOption,
@@ -97,6 +100,14 @@ function cloneApartmentBlockPlan(apartmentBlockPlan: ApartmentBlockPlanEntry[]) 
   return apartmentBlockPlan.map((block) => ({ ...block }));
 }
 
+function cloneShedBlockPlan(shedBlockPlan: ShedBlockPlanEntry[]) {
+  return shedBlockPlan.map((block) => ({ ...block }));
+}
+
+function getTowerLabel(index: number) {
+  return `Tower ${String.fromCharCode(65 + index)}`;
+}
+
 function createApartmentBlockEntry(index: number): ApartmentBlockPlanEntry {
   return {
     blockName: `Block ${String.fromCharCode(65 + index)}`,
@@ -106,15 +117,50 @@ function createApartmentBlockEntry(index: number): ApartmentBlockPlanEntry {
   };
 }
 
-function createOfficeFloorEntry(index: number): OfficeFloorPlanEntry {
+function createOfficeFloorEntry(index: number, blockName = getTowerLabel(0)): OfficeFloorPlanEntry {
   return {
+    blockName,
     floorLabel: index === 0 ? 'Ground Floor' : `Floor ${index + 1}`,
     officeNumbers: '',
   };
 }
 
+function createShedBlockEntry(index: number): ShedBlockPlanEntry {
+  return {
+    blockName: `Block ${String.fromCharCode(65 + index)}`,
+    shedCount: '',
+  };
+}
+
+function getOfficeFloorsForBlock(officeFloorPlan: OfficeFloorPlanEntry[], blockName: string) {
+  const normalizedBlockName = blockName.trim().toLowerCase();
+  return officeFloorPlan.filter(
+    (floor) => String(floor.blockName ?? '').trim().toLowerCase() === normalizedBlockName,
+  );
+}
+
+function getNextOfficeBlockName(officeFloorPlan: OfficeFloorPlanEntry[]) {
+  const existingBlockNames = new Set(
+    normalizeOfficeFloorPlan(officeFloorPlan).map((floor) => floor.blockName.toLowerCase()),
+  );
+  let nextIndex = 0;
+
+  while (existingBlockNames.has(getTowerLabel(nextIndex).toLowerCase())) {
+    nextIndex += 1;
+  }
+
+  return getTowerLabel(nextIndex);
+}
+
+function getOfficeFloorDescriptor(floor: OfficeFloorPlanEntry, index: number) {
+  const blockName = String(floor.blockName ?? '').trim() || 'Commercial Tower';
+  const floorLabel = floor.floorLabel.trim() || (index === 0 ? 'Ground Floor' : `Floor ${index + 1}`);
+  return `${blockName} - ${floorLabel}`;
+}
+
 function cloneDraft(draft: SocietySetupDraft): SocietySetupDraft {
   const apartmentBlockPlan = draft.apartmentBlockPlan ?? [];
+  const shedBlockPlan = draft.shedBlockPlan ?? [];
   const officeFloorPlan = draft.officeFloorPlan ?? [];
 
   return {
@@ -126,6 +172,10 @@ function cloneDraft(draft: SocietySetupDraft): SocietySetupDraft {
       apartmentBlockPlan.length > 0
         ? cloneApartmentBlockPlan(apartmentBlockPlan)
         : [createApartmentBlockEntry(0)],
+    shedBlockPlan:
+      shedBlockPlan.length > 0
+        ? cloneShedBlockPlan(shedBlockPlan)
+        : [createShedBlockEntry(0)],
     officeFloorPlan:
       officeFloorPlan.length > 0
         ? cloneOfficeFloorPlan(officeFloorPlan)
@@ -176,7 +226,7 @@ function getDerivedTotalUnits(draft: SocietySetupDraft) {
     : 0;
   const shedUnitCount =
     enabledStructures.includes('commercial') && enabledCommercialSpaceTypes.includes('shed')
-      ? parseWholeNumber(draft.shedUnitCount)
+      ? countShedUnits(draft.shedBlockPlan ?? [createShedBlockEntry(0)])
       : 0;
   const officeUnitCount =
     enabledStructures.includes('commercial') && enabledCommercialSpaceTypes.includes('office')
@@ -187,7 +237,7 @@ function getDerivedTotalUnits(draft: SocietySetupDraft) {
   return totalUnits > 0 ? String(totalUnits) : '';
 }
 
-function syncDerivedFields(draft: SocietySetupDraft) {
+function syncDerivedFields(draft: SocietySetupDraft): SocietySetupDraft {
   const normalizedStructureSelections = normalizeStructureSelections(draft.enabledStructures);
   const enabledStructures =
     normalizedStructureSelections.length > 0
@@ -205,7 +255,7 @@ function syncDerivedFields(draft: SocietySetupDraft) {
         ? [draft.commercialSpaceType]
         : []
     : [];
-  const normalizedDraft = {
+  const normalizedDraft: SocietySetupDraft = {
     ...draft,
     enabledStructures,
     enabledCommercialSpaceTypes,
@@ -227,6 +277,13 @@ function syncDerivedFields(draft: SocietySetupDraft) {
         : [createApartmentBlockEntry(0)],
     apartmentUnitCount: enabledStructures.includes('apartment')
       ? String(countApartmentUnits((draft.apartmentBlockPlan ?? []).length > 0 ? (draft.apartmentBlockPlan ?? []) : [createApartmentBlockEntry(0)]))
+      : '',
+    shedBlockPlan:
+      (draft.shedBlockPlan ?? []).length > 0
+        ? cloneShedBlockPlan(draft.shedBlockPlan ?? [])
+        : [createShedBlockEntry(0)],
+    shedUnitCount: enabledStructures.includes('commercial') && enabledCommercialSpaceTypes.includes('shed')
+      ? String(countShedUnits((draft.shedBlockPlan ?? []).length > 0 ? (draft.shedBlockPlan ?? []) : [createShedBlockEntry(0)]))
       : '',
     officeFloorPlan:
       (draft.officeFloorPlan ?? []).length > 0
@@ -302,7 +359,11 @@ function getUnitsSectionDescription(draft: SocietySetupDraft) {
   const enabledCommercialSpaceTypes = getEnabledCommercialSpaceTypes(draft);
 
   if (enabledCommercialSpaceTypes.includes('office')) {
-    return 'Office totals are calculated from the floor-wise office allocations you configure above.';
+    return 'Office totals are calculated from the commercial tower/block and floor-wise office allocations you configure above.';
+  }
+
+  if (enabledCommercialSpaceTypes.includes('shed')) {
+    return 'Shed totals are calculated from the block-wise shed allocations you configure here.';
   }
 
   return 'Set the count for each structure type this society manages. Total inventory is calculated automatically.';
@@ -321,6 +382,10 @@ export function SocietySetupWizardScreen() {
           patch.apartmentBlockPlan !== undefined
             ? cloneApartmentBlockPlan(patch.apartmentBlockPlan)
             : (currentDraft.apartmentBlockPlan ?? [createApartmentBlockEntry(0)]),
+        shedBlockPlan:
+          patch.shedBlockPlan !== undefined
+            ? cloneShedBlockPlan(patch.shedBlockPlan)
+            : (currentDraft.shedBlockPlan ?? [createShedBlockEntry(0)]),
         officeFloorPlan:
           patch.officeFloorPlan !== undefined
             ? cloneOfficeFloorPlan(patch.officeFloorPlan)
@@ -374,16 +439,72 @@ export function SocietySetupWizardScreen() {
     );
   }
 
-  function addOfficeFloor() {
+  function updateShedBlock(index: number, patch: Partial<ShedBlockPlanEntry>) {
     setDraft((currentDraft) =>
       syncDerivedFields({
         ...currentDraft,
-        officeFloorPlan: [
-          ...(currentDraft.officeFloorPlan ?? [createOfficeFloorEntry(0)]),
-          createOfficeFloorEntry((currentDraft.officeFloorPlan ?? [createOfficeFloorEntry(0)]).length),
+        shedBlockPlan: (currentDraft.shedBlockPlan ?? [createShedBlockEntry(0)]).map((block, blockIndex) =>
+          blockIndex === index ? { ...block, ...patch } : block,
+        ),
+      }),
+    );
+  }
+
+  function addShedBlock() {
+    setDraft((currentDraft) =>
+      syncDerivedFields({
+        ...currentDraft,
+        shedBlockPlan: [
+          ...(currentDraft.shedBlockPlan ?? [createShedBlockEntry(0)]),
+          createShedBlockEntry((currentDraft.shedBlockPlan ?? [createShedBlockEntry(0)]).length),
         ],
       }),
     );
+  }
+
+  function removeShedBlock(index: number) {
+    setDraft((currentDraft) => {
+      const nextShedBlockPlan = (currentDraft.shedBlockPlan ?? [createShedBlockEntry(0)]).filter((_, blockIndex) => blockIndex !== index);
+
+      return syncDerivedFields({
+        ...currentDraft,
+        shedBlockPlan: nextShedBlockPlan.length > 0 ? nextShedBlockPlan : [createShedBlockEntry(0)],
+      });
+    });
+  }
+
+  function addOfficeFloor() {
+    setDraft((currentDraft) =>
+      {
+        const currentFloorPlan = currentDraft.officeFloorPlan ?? [createOfficeFloorEntry(0)];
+        const lastConfiguredFloor = currentFloorPlan[currentFloorPlan.length - 1];
+        const blockName = String(lastConfiguredFloor?.blockName ?? '').trim() || getTowerLabel(0);
+        const nextFloorIndex = getOfficeFloorsForBlock(currentFloorPlan, blockName).length;
+
+        return syncDerivedFields({
+          ...currentDraft,
+          officeFloorPlan: [
+            ...currentFloorPlan,
+            createOfficeFloorEntry(nextFloorIndex, blockName),
+          ],
+        });
+      },
+    );
+  }
+
+  function addOfficeBlock() {
+    setDraft((currentDraft) => {
+      const currentFloorPlan = currentDraft.officeFloorPlan ?? [createOfficeFloorEntry(0)];
+      const nextBlockName = getNextOfficeBlockName(currentFloorPlan);
+
+      return syncDerivedFields({
+        ...currentDraft,
+        officeFloorPlan: [
+          ...currentFloorPlan,
+          createOfficeFloorEntry(0, nextBlockName),
+        ],
+      });
+    });
   }
 
   function removeOfficeFloor(index: number) {
@@ -400,16 +521,18 @@ export function SocietySetupWizardScreen() {
   const enabledStructures = getEnabledStructures(draft);
   const enabledCommercialSpaceTypes = getEnabledCommercialSpaceTypes(draft);
   const apartmentBlockPlan = draft.apartmentBlockPlan ?? [createApartmentBlockEntry(0)];
+  const shedBlockPlan = draft.shedBlockPlan ?? [createShedBlockEntry(0)];
   const officeFloorPlan = draft.officeFloorPlan ?? [createOfficeFloorEntry(0)];
   const apartmentUnitCount = countApartmentUnits(apartmentBlockPlan);
   const apartmentStartingFloorNumber = normalizeApartmentStartingFloorNumber(
     draft.apartmentStartingFloorNumber,
   );
   const bungalowUnitCount = parseWholeNumber(draft.bungalowUnitCount);
-  const shedUnitCount = parseWholeNumber(draft.shedUnitCount);
+  const shedUnitCount = countShedUnits(shedBlockPlan);
   const totalUnits = Number.parseInt(draft.totalUnits, 10);
   const totalUnitsValid = Number.isFinite(totalUnits) && totalUnits > 0;
   const normalizedApartmentBlocks = normalizeApartmentBlockPlan(apartmentBlockPlan);
+  const normalizedShedBlocks = normalizeShedBlockPlan(shedBlockPlan);
   const apartmentTowerCount = normalizedApartmentBlocks.reduce((total, block) => total + block.towerCount, 0);
   const primaryApartmentBlock = normalizedApartmentBlocks.find(
     (block) => block.towerCount > 0 && block.floorsPerTower > 0 && block.homesPerFloor > 0,
@@ -430,13 +553,16 @@ export function SocietySetupWizardScreen() {
     : '';
   const normalizedOfficeFloors = normalizeOfficeFloorPlan(officeFloorPlan);
   const duplicateOfficeCodes = findDuplicateOfficeCodes(officeFloorPlan);
+  const officeBlockCount = new Set(normalizedOfficeFloors.map((floor) => floor.blockName.toLowerCase())).size;
   const amenitySections = amenityCategorySections
     .map((section) => ({
       ...section,
       amenities: section.amenities.filter((amenityName) => state.amenityLibrary.includes(amenityName)),
     }))
     .filter((section) => section.amenities.length > 0);
-  const categorizedAmenityNames = new Set(amenitySections.flatMap((section) => section.amenities));
+  const categorizedAmenityNames = new Set<string>(
+    amenitySections.flatMap((section) => [...section.amenities]),
+  );
   const uncategorizedAmenities = state.amenityLibrary.filter((amenityName) => !categorizedAmenityNames.has(amenityName));
   const validationIssues: string[] = [];
 
@@ -500,6 +626,16 @@ export function SocietySetupWizardScreen() {
     validationIssues.push('Add at least one shed when commercial sheds are enabled.');
   }
 
+  if (enabledCommercialSpaceTypes.includes('shed')) {
+    const invalidShedBlocks = normalizedShedBlocks
+      .filter((block) => block.shedCount < 1)
+      .map((block) => block.blockName);
+
+    if (invalidShedBlocks.length > 0) {
+      validationIssues.push(`Enter at least one shed for: ${invalidShedBlocks.join(', ')}.`);
+    }
+  }
+
   if (!totalUnitsValid) {
     validationIssues.push('Add at least one unit or commercial space.');
   }
@@ -507,7 +643,7 @@ export function SocietySetupWizardScreen() {
   if (enabledCommercialSpaceTypes.includes('office')) {
     const emptyOfficeFloors = officeFloorPlan
       .map((floor, index) => ({
-        label: floor.floorLabel.trim() || `Floor ${index + 1}`,
+        label: getOfficeFloorDescriptor(floor, index),
         officeNumbers: floor.officeNumbers.trim(),
       }))
       .filter((floor) => floor.officeNumbers.length === 0)
@@ -521,7 +657,7 @@ export function SocietySetupWizardScreen() {
 
     const invalidOfficeFloors = normalizedOfficeFloors
       .map((floor, index) => ({
-        label: floor.floorLabel,
+        label: getOfficeFloorDescriptor(officeFloorPlan[index] ?? { blockName: floor.blockName, floorLabel: floor.floorLabel, officeNumbers: '' }, index),
         rawValue: officeFloorPlan[index]?.officeNumbers.trim() ?? '',
         officeCount: floor.officeCodes.length,
       }))
@@ -536,7 +672,7 @@ export function SocietySetupWizardScreen() {
 
     if (duplicateOfficeCodes.length > 0) {
       validationIssues.push(
-        `Duplicate office numbers found: ${duplicateOfficeCodes.join(', ')}.`,
+        `Duplicate office numbers found: ${duplicateOfficeCodes.join(', ')}. Repeated office numbers are only allowed across different commercial towers when the tower name is different.`,
       );
     }
   }
@@ -694,18 +830,19 @@ export function SocietySetupWizardScreen() {
             {enabledCommercialSpaceTypes.includes('office') ? (
               <>
                 <Caption>
-                  Add each floor separately and enter the exact office numbers or ranges the society
-                  uses. The app will create office names exactly from your input, without adding an
-                  `F` prefix.
+                  Add each commercial tower or block, then list its floors separately with the exact
+                  office numbers or ranges the society uses. When multiple towers are configured,
+                  generated office numbers will include the tower name so repeated numbers like
+                  `101` can exist in both towers.
                 </Caption>
 
                 {officeFloorPlan.map((floor, index) => {
                   const officeCount = expandOfficeNumbersInput(floor.officeNumbers).length;
 
                   return (
-                    <View key={`${index}-${floor.floorLabel}`} style={styles.floorPlanCard}>
+                    <View key={`commercial-floor-${index}`} style={styles.floorPlanCard}>
                       <View style={styles.floorPlanHeader}>
-                        <Text style={styles.floorPlanTitle}>Floor setup {index + 1}</Text>
+                        <Text style={styles.floorPlanTitle}>Commercial floor setup {index + 1}</Text>
                         {officeFloorPlan.length > 1 ? (
                           <ActionButton
                             label="Remove floor"
@@ -714,6 +851,13 @@ export function SocietySetupWizardScreen() {
                           />
                         ) : null}
                       </View>
+
+                      <InputField
+                        label="Block / tower name"
+                        value={floor.blockName ?? ''}
+                        onChangeText={(value) => updateOfficeFloor(index, { blockName: value })}
+                        placeholder="Tower A"
+                      />
 
                       <InputField
                         label="Floor name"
@@ -732,6 +876,7 @@ export function SocietySetupWizardScreen() {
 
                       <View style={styles.previewRow}>
                         <Pill label={`${officeCount} offices`} tone="accent" />
+                        <Pill label={String(floor.blockName ?? '').trim() || 'Commercial Tower'} tone="primary" />
                         <Pill label={floor.floorLabel.trim() || `Floor ${index + 1}`} tone="warning" />
                       </View>
                     </View>
@@ -740,6 +885,7 @@ export function SocietySetupWizardScreen() {
 
                 <View style={styles.officeActions}>
                   <ActionButton label="Add another floor" onPress={addOfficeFloor} variant="secondary" />
+                  <ActionButton label="Add another tower" onPress={addOfficeBlock} variant="secondary" />
                 </View>
 
                 <Caption>
@@ -749,8 +895,8 @@ export function SocietySetupWizardScreen() {
 
                 {duplicateOfficeCodes.length > 0 ? (
                   <Text style={styles.validationError}>
-                    Duplicate office numbers found: {duplicateOfficeCodes.join(', ')}. Each office
-                    code must be unique across the society.
+                    Duplicate office numbers found: {duplicateOfficeCodes.join(', ')}. Repeat the
+                    office number only when it belongs to a different tower or block.
                   </Text>
                 ) : null}
 
@@ -759,15 +905,16 @@ export function SocietySetupWizardScreen() {
                     label={`${countOfficeUnits(officeFloorPlan) || 0} office spaces`}
                     tone="accent"
                   />
-                  <Pill label={`${officeFloorPlan.length} configured floors`} tone="primary" />
+                  <Pill label={`${officeBlockCount} configured tower${officeBlockCount === 1 ? '' : 's'}`} tone="primary" />
+                  <Pill label={`${officeFloorPlan.length} configured floors`} tone="warning" />
                 </View>
               </>
             ) : null}
 
             {enabledCommercialSpaceTypes.includes('shed') ? (
               <Caption>
-                Each shed will be created as an individual commercial space and can be assigned
-                later during occupancy and billing setup.
+                Configure each shed block separately so the created shed numbers stay grouped under
+                the correct commercial block or tower.
               </Caption>
             ) : null}
           </View>
@@ -812,7 +959,7 @@ export function SocietySetupWizardScreen() {
                 * (normalizedBlock?.homesPerFloor ?? 0);
 
               return (
-                <View key={`${index}-${block.blockName}`} style={styles.floorPlanCard}>
+                <View key={`apartment-block-${index}`} style={styles.floorPlanCard}>
                   <View style={styles.floorPlanHeader}>
                     <Text style={styles.floorPlanTitle}>Block setup {index + 1}</Text>
                     {apartmentBlockPlan.length > 1 ? (
@@ -892,21 +1039,67 @@ export function SocietySetupWizardScreen() {
         ) : null}
 
         {enabledCommercialSpaceTypes.includes('shed') ? (
-          <InputField
-            label="Commercial sheds"
-            value={draft.shedUnitCount}
-            onChangeText={(value) => updateDraft({ shedUnitCount: sanitizeNumber(value) })}
-            keyboardType="numeric"
-            placeholder="8"
-          />
+          <View style={styles.structurePanel}>
+            <SectionHeader
+              title="Shed block planner"
+              description="Add each commercial block and enter how many sheds belong to that block."
+            />
+            {shedBlockPlan.map((block, index) => {
+              const normalizedBlock = normalizedShedBlocks[index];
+
+              return (
+                <View key={`shed-block-${index}`} style={styles.floorPlanCard}>
+                  <View style={styles.floorPlanHeader}>
+                    <Text style={styles.floorPlanTitle}>Shed block {index + 1}</Text>
+                    {shedBlockPlan.length > 1 ? (
+                      <ActionButton
+                        label="Remove block"
+                        onPress={() => removeShedBlock(index)}
+                        variant="secondary"
+                      />
+                    ) : null}
+                  </View>
+
+                  <InputField
+                    label="Block name"
+                    value={block.blockName}
+                    onChangeText={(value) => updateShedBlock(index, { blockName: value })}
+                    placeholder={`Block ${String.fromCharCode(65 + index)}`}
+                  />
+
+                  <InputField
+                    label="Sheds in this block"
+                    value={block.shedCount}
+                    onChangeText={(value) => updateShedBlock(index, { shedCount: sanitizeNumber(value) })}
+                    keyboardType="numeric"
+                    placeholder="8"
+                  />
+
+                  <View style={styles.previewRow}>
+                    <Pill label={normalizedBlock?.blockName ?? `Block ${String.fromCharCode(65 + index)}`} tone="primary" />
+                    <Pill label={`${normalizedBlock?.shedCount ?? 0} sheds`} tone="accent" />
+                  </View>
+                </View>
+              );
+            })}
+
+            <View style={styles.officeActions}>
+              <ActionButton label="Add another shed block" onPress={addShedBlock} variant="secondary" />
+            </View>
+
+            <View style={styles.previewRow}>
+              <Pill label={`${shedBlockPlan.length} shed block${shedBlockPlan.length === 1 ? '' : 's'}`} tone="primary" />
+              <Pill label={`${shedUnitCount} sheds`} tone="accent" />
+            </View>
+          </View>
         ) : null}
 
         {enabledCommercialSpaceTypes.includes('office') ? (
           <View style={styles.generatedSummary}>
             <Text style={styles.generatedValue}>{countOfficeUnits(officeFloorPlan) || 0} office spaces</Text>
             <Caption>
-              Based on {officeFloorPlan.length} floor allocation
-              {officeFloorPlan.length === 1 ? '' : 's'} and the exact office codes you enter.
+              Based on {officeBlockCount} commercial tower{officeBlockCount === 1 ? '' : 's'} and{' '}
+              {officeFloorPlan.length} configured floor allocation{officeFloorPlan.length === 1 ? '' : 's'}.
             </Caption>
           </View>
         ) : null}

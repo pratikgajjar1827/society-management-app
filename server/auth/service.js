@@ -1,6 +1,7 @@
 const crypto = require('node:crypto');
 
 const { db, getSnapshot } = require('../db/database');
+const { normalizeSocietyLocationFields } = require('../utils/location-normalization');
 const { SUPER_USER_ID } = require('../seed/seedData');
 
 const OTP_TTL_MINUTES = 10;
@@ -15,6 +16,7 @@ const ANNOUNCEMENT_AUDIENCES = new Set(['all', 'residents', 'committee', 'owners
 const ANNOUNCEMENT_PRIORITIES = new Set(['critical', 'high', 'normal']);
 const PAYMENT_METHODS = new Set(['upi', 'netbanking', 'cash']);
 const PAYMENT_REVIEW_DECISIONS = new Set(['approve', 'reject']);
+const SOCIETY_DOCUMENT_DOWNLOAD_REVIEW_DECISIONS = new Set(['approve', 'reject']);
 const BOOKING_REVIEW_STATUSES = new Set(['confirmed', 'waitlisted']);
 const COMPLAINT_CATEGORIES = new Set(['plumbing', 'security', 'billing', 'cleaning', 'general']);
 const COMPLAINT_STATUSES = new Set(['open', 'inProgress', 'resolved']);
@@ -422,7 +424,10 @@ function normalizeResidenceProfileInput(input, residentType, allowedUnitIds = []
   return {
     residentType,
     fullName: normalizeRequiredText(input.fullName, 'the resident full name'),
+    photoDataUrl: normalizeOptionalImageDataUrl(input.photoDataUrl, 'the resident profile photo'),
     email: normalizeOptionalEmail(input.email),
+    businessName: normalizeOptionalText(input.businessName, 120),
+    businessDetails: normalizeOptionalText(input.businessDetails, 400),
     alternatePhone: normalizeOptionalPhoneNumber(input.alternatePhone, 'alternate mobile number'),
     emergencyContactName: normalizeOptionalText(input.emergencyContactName),
     emergencyContactPhone: normalizeOptionalPhoneNumber(
@@ -488,6 +493,16 @@ function parseStoredJson(value, fallback = []) {
   }
 }
 
+function isConfiguredSecret(value) {
+  const normalized = String(value ?? '').trim();
+
+  if (!normalized) {
+    return false;
+  }
+
+  return !/^your_|^replace-with-|_here$/i.test(normalized);
+}
+
 function getTwilioConfig() {
   const serviceSid = process.env.TWILIO_VERIFY_SERVICE_SID?.trim();
   const username =
@@ -495,7 +510,7 @@ function getTwilioConfig() {
   const password =
     process.env.TWILIO_API_KEY_SECRET?.trim() || process.env.TWILIO_AUTH_TOKEN?.trim();
 
-  if (!serviceSid || !username || !password) {
+  if (!isConfiguredSecret(serviceSid) || !isConfiguredSecret(username) || !isConfiguredSecret(password)) {
     return null;
   }
 
@@ -617,7 +632,7 @@ function getLatestJoinRequestForUserSociety(userId, societyId) {
       `SELECT id, residentType, status, createdAt
        FROM joinRequests
        WHERE userId = ? AND societyId = ?
-       ORDER BY datetime(createdAt) DESC
+       ORDER BY createdAt DESC
        LIMIT 1`,
     )
     .get(userId, societyId);
@@ -634,7 +649,7 @@ function getRegisteredSocietyNames(userId) {
        FROM memberships
        INNER JOIN societies ON societies.id = memberships.societyId
        WHERE memberships.userId = ?
-       ORDER BY societies.name COLLATE NOCASE ASC`,
+       ORDER BY LOWER(societies.name) ASC`,
     )
     .all(userId)
     .map((row) => row.name);
@@ -717,6 +732,26 @@ function getUnit(unitId) {
 
 function getSociety(societyId) {
   return db.prepare('SELECT * FROM societies WHERE id = ?').get(societyId);
+}
+
+function getSocietyDocument(documentId) {
+  return db
+    .prepare(
+      `SELECT id, societyId, category, title, fileName, fileDataUrl, summary, issuedOn, validUntil, uploadedByUserId, uploadedAt
+       FROM societyDocuments
+       WHERE id = ?`,
+    )
+    .get(documentId);
+}
+
+function getSocietyDocumentDownloadRequest(requestId) {
+  return db
+    .prepare(
+      `SELECT id, societyId, documentId, requesterUserId, status, requestNote, requestedAt, reviewedAt, reviewedByUserId, reviewNote, accessExpiresAt
+       FROM societyDocumentDownloadRequests
+       WHERE id = ?`,
+    )
+    .get(requestId);
 }
 
 function getStaffProfile(staffId) {
@@ -957,7 +992,7 @@ function getPayment(paymentId) {
 function getMaintenancePlan(planId) {
   return db
     .prepare(
-      'SELECT id, societyId, frequency, dueDay, amountInr, lateFeeInr, calculationMethod, receiptPrefix, upiId, upiMobileNumber, upiPayeeName, upiQrCodeDataUrl, upiQrPayload FROM maintenancePlans WHERE id = ?',
+      'SELECT id, societyId, frequency, dueDay, amountInr, lateFeeInr, calculationMethod, receiptPrefix, upiId, upiMobileNumber, upiPayeeName, upiQrCodeDataUrl, upiQrPayload, bankAccountName, bankAccountNumber, bankIfscCode, bankName, bankBranchName FROM maintenancePlans WHERE id = ?',
     )
     .get(planId);
 }
@@ -1491,6 +1526,21 @@ function requireSocietyAnnouncementPublisher(userId, societyId) {
   }
 }
 
+function requireSocietyDocumentDownloadReviewer(userId, societyId) {
+  const society = getSociety(societyId);
+
+  if (!society) {
+    throw new HttpError(404, 'Selected society was not found.');
+  }
+
+  const membership = getMembership(userId, societyId);
+  const roleSet = membership ? new Set(parseStoredJson(membership.roles)) : new Set();
+
+  if (!roleSet.has('chairman') && !roleSet.has('committee')) {
+    throw new HttpError(403, 'Only the chairman or committee can review document download requests.');
+  }
+}
+
 function requireSocietyLeadershipManager(userId, societyId) {
   const society = getSociety(societyId);
 
@@ -1594,7 +1644,10 @@ function saveResidenceProfile(userId, societyId, residentType, input, allowedUni
       residentType,
       fullName,
       phone,
+      photoDataUrl,
       email,
+      businessName,
+      businessDetails,
       alternatePhone,
       emergencyContactName,
       emergencyContactPhone,
@@ -1606,12 +1659,15 @@ function saveResidenceProfile(userId, societyId, residentType, input, allowedUni
       rentAgreementDataUrl,
       rentAgreementUploadedAt,
       updatedAt
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(societyId, userId) DO UPDATE SET
       residentType = excluded.residentType,
       fullName = excluded.fullName,
       phone = excluded.phone,
+      photoDataUrl = excluded.photoDataUrl,
       email = excluded.email,
+      businessName = excluded.businessName,
+      businessDetails = excluded.businessDetails,
       alternatePhone = excluded.alternatePhone,
       emergencyContactName = excluded.emergencyContactName,
       emergencyContactPhone = excluded.emergencyContactPhone,
@@ -1630,7 +1686,10 @@ function saveResidenceProfile(userId, societyId, residentType, input, allowedUni
     residentType,
     normalized.fullName,
     user.phone,
+    normalized.photoDataUrl,
     normalized.email,
+    normalized.businessName,
+    normalized.businessDetails,
     normalized.alternatePhone,
     normalized.emergencyContactName,
     normalized.emergencyContactPhone,
@@ -2012,6 +2071,34 @@ function normalizeUpiMobileNumber(value) {
   );
 }
 
+function normalizeBankAccountNumber(value) {
+  const digits = String(value ?? '').replace(/\s+/g, '').trim();
+
+  if (!digits) {
+    return null;
+  }
+
+  if (!/^\d{9,18}$/.test(digits)) {
+    throw new HttpError(400, 'Enter a valid bank account number using 9 to 18 digits.');
+  }
+
+  return digits;
+}
+
+function normalizeIfscCode(value) {
+  const normalized = String(value ?? '').trim().toUpperCase();
+
+  if (!normalized) {
+    return null;
+  }
+
+  if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(normalized)) {
+    throw new HttpError(400, 'Enter a valid IFSC code in the standard 11-character format.');
+  }
+
+  return normalized;
+}
+
 function normalizeCalendarDate(value, message) {
   const normalized = String(value ?? '').trim();
 
@@ -2217,10 +2304,10 @@ function synchronizeMaintenanceInvoices(referenceDateInput = new Date()) {
       societies.createdAt AS societyCreatedAt
      FROM maintenancePlans
      INNER JOIN societies ON societies.id = maintenancePlans.societyId
-     ORDER BY maintenancePlans.rowid ASC`,
+     ORDER BY maintenancePlans.id ASC`,
   ).all();
   const listUnitsForSocietyStatement = db.prepare(
-    'SELECT id FROM units WHERE societyId = ? ORDER BY rowid ASC',
+    "SELECT id FROM units WHERE societyId = ? ORDER BY COALESCE(buildingId, ''), code ASC, id ASC",
   );
   const findLatestInvoiceStatement = db.prepare(
     'SELECT dueDate FROM invoices WHERE planId = ? AND unitId = ? ORDER BY dueDate DESC LIMIT 1',
@@ -3207,6 +3294,113 @@ function createSocietyDocument(userId, societyId, input) {
   return buildSocietyMutationPayload(userId, societyId);
 }
 
+function requestSocietyDocumentDownload(userId, societyId, documentId, input = {}) {
+  const document = getSocietyDocument(documentId);
+
+  if (!document || document.societyId !== societyId) {
+    throw new HttpError(404, 'Society document not found.');
+  }
+
+  const membership = getMembership(userId, societyId);
+
+  if (!membership) {
+    throw new HttpError(403, 'Only society residents can request document downloads.');
+  }
+
+  const requestNote = normalizeOptionalText(input?.requestNote, 240);
+  const referenceIso = nowIso();
+  const pendingRequest = db
+    .prepare(
+      `SELECT id
+       FROM societyDocumentDownloadRequests
+       WHERE documentId = ? AND requesterUserId = ? AND status = 'pending'
+       ORDER BY requestedAt DESC
+       LIMIT 1`,
+    )
+    .get(documentId, userId);
+
+  if (pendingRequest) {
+    throw new HttpError(400, 'A download request for this document is already waiting for admin approval.');
+  }
+
+  const activeApproval = db
+    .prepare(
+      `SELECT id
+       FROM societyDocumentDownloadRequests
+       WHERE documentId = ? AND requesterUserId = ? AND status = 'approved' AND accessExpiresAt IS NOT NULL AND accessExpiresAt > ?
+       ORDER BY requestedAt DESC
+       LIMIT 1`,
+    )
+    .get(documentId, userId, referenceIso);
+
+  if (activeApproval) {
+    throw new HttpError(400, 'You already have an approved download window for this document.');
+  }
+
+  db.prepare(
+    `INSERT INTO societyDocumentDownloadRequests (
+      id,
+      societyId,
+      documentId,
+      requesterUserId,
+      status,
+      requestNote,
+      requestedAt,
+      reviewedAt,
+      reviewedByUserId,
+      reviewNote,
+      accessExpiresAt
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    nextId('document-download-request'),
+    societyId,
+    documentId,
+    userId,
+    'pending',
+    requestNote,
+    referenceIso,
+    null,
+    null,
+    null,
+    null,
+  );
+
+  return buildSocietyMutationPayload(userId, societyId);
+}
+
+function reviewSocietyDocumentDownloadRequest(userId, requestId, decisionInput, reviewNoteInput) {
+  const request = getSocietyDocumentDownloadRequest(requestId);
+
+  if (!request) {
+    throw new HttpError(404, 'Document download request not found.');
+  }
+
+  requireSocietyDocumentDownloadReviewer(userId, request.societyId);
+
+  if (request.status !== 'pending') {
+    throw new HttpError(400, 'Only pending document download requests can be reviewed.');
+  }
+
+  const decision = String(decisionInput ?? '').trim().toLowerCase();
+
+  if (!SOCIETY_DOCUMENT_DOWNLOAD_REVIEW_DECISIONS.has(decision)) {
+    throw new HttpError(400, 'Choose approve or reject for the document download request.');
+  }
+
+  const reviewNote = normalizeOptionalText(reviewNoteInput, 240);
+  const reviewedAt = nowIso();
+  const nextStatus = decision === 'approve' ? 'approved' : 'rejected';
+  const accessExpiresAt = decision === 'approve' ? addDays(new Date(), 7) : null;
+
+  db.prepare(
+    `UPDATE societyDocumentDownloadRequests
+     SET status = ?, reviewedAt = ?, reviewedByUserId = ?, reviewNote = ?, accessExpiresAt = ?
+     WHERE id = ?`,
+  ).run(nextStatus, reviewedAt, userId, reviewNote, accessExpiresAt, requestId);
+
+  return buildSocietyMutationPayload(userId, request.societyId);
+}
+
 function markAnnouncementRead(userId, announcementId) {
   const announcement = getAnnouncement(announcementId);
 
@@ -3247,13 +3441,28 @@ function updateMaintenanceBillingConfig(userId, planId, input) {
   const upiPayeeName = String(input?.upiPayeeName ?? '').trim() || society?.name || null;
   const upiQrCodeDataUrl = String(input?.upiQrCodeDataUrl ?? '').trim();
   const upiQrPayload = String(input?.upiQrPayload ?? '').trim();
+  const bankAccountName = normalizeOptionalText(input?.bankAccountName, 120) || society?.name || null;
+  const bankAccountNumber = normalizeBankAccountNumber(input?.bankAccountNumber);
+  const bankIfscCode = normalizeIfscCode(input?.bankIfscCode);
+  const bankName = normalizeOptionalText(input?.bankName, 120);
+  const bankBranchName = normalizeOptionalText(input?.bankBranchName, 120);
+  const hasAnyBankField = Boolean(bankAccountName || bankAccountNumber || bankIfscCode || bankName || bankBranchName);
 
-  db.prepare('UPDATE maintenancePlans SET upiId = ?, upiMobileNumber = ?, upiPayeeName = ?, upiQrCodeDataUrl = ?, upiQrPayload = ? WHERE id = ?').run(
+  if (hasAnyBankField && (!bankAccountName || !bankAccountNumber || !bankIfscCode || !bankName)) {
+    throw new HttpError(400, 'Bank transfer setup requires account holder name, account number, IFSC code, and bank name.');
+  }
+
+  db.prepare('UPDATE maintenancePlans SET upiId = ?, upiMobileNumber = ?, upiPayeeName = ?, upiQrCodeDataUrl = ?, upiQrPayload = ?, bankAccountName = ?, bankAccountNumber = ?, bankIfscCode = ?, bankName = ?, bankBranchName = ? WHERE id = ?').run(
     upiId || null,
     upiMobileNumber,
     upiPayeeName,
     upiQrCodeDataUrl || null,
     upiQrPayload || null,
+    hasAnyBankField ? bankAccountName : null,
+    hasAnyBankField ? bankAccountNumber : null,
+    hasAnyBankField ? bankIfscCode : null,
+    hasAnyBankField ? bankName : null,
+    hasAnyBankField ? bankBranchName : null,
     plan.id,
   );
 
@@ -3269,37 +3478,39 @@ function updateSocietyProfile(userId, societyId, input) {
     throw new HttpError(404, 'Selected society was not found.');
   }
 
-  const name = requireText(input?.name, 'Enter the society name.');
-  const country = requireText(input?.country, 'Enter the country.');
-  const state = requireText(input?.state, 'Enter the state.');
-  const city = requireText(input?.city, 'Enter the city.');
-  const area = requireText(input?.area, 'Enter the area.');
-  const address = requireText(input?.address, 'Enter the full address.');
-  const tagline = String(input?.tagline ?? '').trim();
+  const locationFields = normalizeSocietyLocationFields({
+    name: requireText(input?.name, 'Enter the society name.'),
+    country: requireText(input?.country, 'Enter the country.'),
+    state: requireText(input?.state, 'Enter the state.'),
+    city: requireText(input?.city, 'Enter the city.'),
+    area: requireText(input?.area, 'Enter the area.'),
+    address: requireText(input?.address, 'Enter the full address.'),
+    tagline: String(input?.tagline ?? '').trim(),
+  });
 
-  if (name.length < 3) {
+  if (locationFields.name.length < 3) {
     throw new HttpError(400, 'Enter a society name with at least 3 characters.');
   }
 
   db.prepare(
     'UPDATE societies SET name = ?, country = ?, state = ?, city = ?, area = ?, address = ?, tagline = ? WHERE id = ?',
   ).run(
-    name,
-    country,
-    state,
-    city,
-    area,
-    address,
-    tagline || society.tagline,
+    locationFields.name,
+    locationFields.country,
+    locationFields.state,
+    locationFields.city,
+    locationFields.area,
+    locationFields.address,
+    locationFields.tagline || society.tagline,
     societyId,
   );
 
   const currentPlan = db
-    .prepare('SELECT id, upiPayeeName FROM maintenancePlans WHERE societyId = ? ORDER BY rowid ASC LIMIT 1')
+    .prepare('SELECT id, upiPayeeName FROM maintenancePlans WHERE societyId = ? ORDER BY id ASC LIMIT 1')
     .get(societyId);
 
   if (currentPlan && (!currentPlan.upiPayeeName || currentPlan.upiPayeeName === society.name)) {
-    db.prepare('UPDATE maintenancePlans SET upiPayeeName = ? WHERE id = ?').run(name, currentPlan.id);
+    db.prepare('UPDATE maintenancePlans SET upiPayeeName = ? WHERE id = ?').run(locationFields.name, currentPlan.id);
   }
 
   return buildSocietyMutationPayload(userId, societyId);
@@ -3439,7 +3650,7 @@ function createSecurityGuard(userId, societyId, input) {
     ).run(guardId, societyId, name, phone, shiftLabel, vendorName || null);
 
     db.prepare(
-      'INSERT INTO securityShifts (id, guardId, societyId, start, end, gate) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT INTO securityShifts (id, guardId, societyId, "start", "end", gate) VALUES (?, ?, ?, ?, ?, ?)',
     ).run(nextId('shift'), guardId, societyId, shiftStart, shiftEnd, gate);
 
     ensureMembershipRole(securityUserId, societyId, 'security');
@@ -4132,6 +4343,7 @@ module.exports = {
   createAmenityBooking,
   createComplaintTicket,
   createSocietyDocument,
+  requestSocietyDocumentDownload,
   getOnboardingState,
   hasAssignedChairman,
   isOtpDeliveryConfigured,
@@ -4152,6 +4364,7 @@ module.exports = {
   createVisitorPass,
   getSynchronizedSnapshot,
   reviewAmenityBooking,
+  reviewSocietyDocumentDownloadRequest,
   reviewSecurityGuestRequest,
   reviewResidentPayment,
   reviewStaffVerification,

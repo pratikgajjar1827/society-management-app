@@ -24,6 +24,7 @@ import { useApp } from '../state/AppContext';
 import { palette, radius, shadow, spacing } from '../theme/tokens';
 import { SocietyWorkspace, VehicleType } from '../types/domain';
 import { pickWebFileAsDataUrl, tryDetectVehicleRegistrationFromDataUrl } from '../utils/fileUploads';
+import { pickResidentProfilePhoto } from '../utils/media';
 import {
   doesSocietyHaveChairman,
   getSocietyStructureLabel,
@@ -50,6 +51,10 @@ function uniqueValues(values: string[]) {
   );
 }
 
+function normalizeLocationLabel(value: string | undefined) {
+  return String(value ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
 function buildCountryOptions(societies: SocietyWorkspace[]) {
   const seededCountries = uniqueValues(societies.map((society) => society.country));
 
@@ -65,7 +70,9 @@ function buildCountryOptions(societies: SocietyWorkspace[]) {
       subtitle:
         catalog?.subtitle ??
         'Managed societies, apartment communities, bungalow clusters, and commercial campuses',
-      societyCount: societies.filter((society) => society.country === countryName).length,
+      societyCount: societies.filter(
+        (society) => normalizeLocationLabel(society.country) === normalizeLocationLabel(countryName),
+      ).length,
     };
   });
 }
@@ -78,7 +85,7 @@ function buildCityTiles(country: string | undefined, societies: SocietyWorkspace
   const catalog = getCountryCatalog(country);
   const dataCities = uniqueValues(
     societies
-      .filter((society) => society.country === country)
+      .filter((society) => normalizeLocationLabel(society.country) === normalizeLocationLabel(country))
       .map((society) => society.city),
   );
 
@@ -86,7 +93,9 @@ function buildCityTiles(country: string | undefined, societies: SocietyWorkspace
     catalog?.cities.map((city) => ({
       ...city,
       societyCount: societies.filter(
-        (society) => society.country === country && society.city === city.name,
+        (society) =>
+          normalizeLocationLabel(society.country) === normalizeLocationLabel(country) &&
+          normalizeLocationLabel(society.city) === normalizeLocationLabel(city.name),
       ).length,
     })) ?? [];
 
@@ -101,7 +110,9 @@ function buildCityTiles(country: string | undefined, societies: SocietyWorkspace
       )}`,
       imagePageTitle: cityName.replace(/\s+/g, '_'),
       societyCount: societies.filter(
-        (society) => society.country === country && society.city === cityName,
+        (society) =>
+          normalizeLocationLabel(society.country) === normalizeLocationLabel(country) &&
+          normalizeLocationLabel(society.city) === normalizeLocationLabel(cityName),
       ).length,
     }));
 
@@ -202,6 +213,8 @@ export function SocietyEnrollmentScreen() {
     : undefined;
   const [residentFullName, setResidentFullName] = useState(() => currentUser?.name ?? '');
   const [residentEmail, setResidentEmail] = useState(() => currentUser?.email ?? '');
+  const [businessName, setBusinessName] = useState('');
+  const [businessDetails, setBusinessDetails] = useState('');
   const [hasEditedResidentFullName, setHasEditedResidentFullName] = useState(false);
   const [hasEditedResidentEmail, setHasEditedResidentEmail] = useState(false);
   const [alternatePhone, setAlternatePhone] = useState('');
@@ -210,6 +223,8 @@ export function SocietyEnrollmentScreen() {
   const [secondaryEmergencyContactName, setSecondaryEmergencyContactName] = useState('');
   const [secondaryEmergencyContactPhone, setSecondaryEmergencyContactPhone] = useState('');
   const [moveInDate, setMoveInDate] = useState(todayString());
+  const [profilePhotoDataUrl, setProfilePhotoDataUrl] = useState('');
+  const [profilePhotoMessage, setProfilePhotoMessage] = useState('');
   const [dataProtectionConsent, setDataProtectionConsent] = useState(false);
   const [rentAgreementFileName, setRentAgreementFileName] = useState('');
   const [rentAgreementDataUrl, setRentAgreementDataUrl] = useState('');
@@ -259,7 +274,10 @@ export function SocietyEnrollmentScreen() {
     const normalizedQuery = searchQuery.trim().toLowerCase();
 
     return societyPool.filter((society) => {
-      if (society.country !== selectedCountry || society.city !== selectedCity) {
+      if (
+        normalizeLocationLabel(society.country) !== normalizeLocationLabel(selectedCountry) ||
+        normalizeLocationLabel(society.city) !== normalizeLocationLabel(selectedCity)
+      ) {
         return false;
       }
 
@@ -289,6 +307,10 @@ export function SocietyEnrollmentScreen() {
     () => (selectedSocietyId ? doesSocietyHaveChairman(state.data, selectedSocietyId) : false),
     [selectedSocietyId, state.data],
   );
+  const shouldShowBusinessSection =
+    residentProfile !== 'chairman' &&
+    (selectedUnits.some((unit) => unit.unitType === 'office' || unit.unitType === 'shed')
+      || selectedSociety?.structure === 'commercial');
   const hasMemberships = Boolean(state.onboarding?.membershipsCount);
   const hasIncompleteVehicle = vehicles.some(
     (vehicle) =>
@@ -323,6 +345,27 @@ export function SocietyEnrollmentScreen() {
     setVehicles((currentVehicles) =>
       currentVehicles.filter((vehicle) => vehicle.id !== vehicleId),
     );
+  }
+
+  async function attachProfilePhoto(capture?: 'user' | 'environment') {
+    try {
+      const photo = await pickResidentProfilePhoto(capture);
+
+      if (!photo) {
+        return;
+      }
+
+      setProfilePhotoDataUrl(photo.dataUrl);
+      setProfilePhotoMessage(
+        residentProfile === 'chairman'
+          ? 'Chairman photo attached. This will be sent with the first-chairman claim.'
+          : 'Resident photo attached. This will be saved with the residence profile.',
+      );
+    } catch (error) {
+      setProfilePhotoMessage(
+        error instanceof Error ? error.message : 'Could not attach the resident profile photo.',
+      );
+    }
   }
 
   async function attachVehiclePhoto(vehicleId: string, capture?: 'user' | 'environment') {
@@ -660,6 +703,68 @@ export function SocietyEnrollmentScreen() {
           ) : null}
 
           <View style={styles.inlineSection}>
+            <Text style={styles.formSectionTitle}>
+              {residentProfile === 'chairman' ? 'Chairman photo' : 'Resident photo'}
+            </Text>
+            <Caption>
+              {residentProfile === 'chairman'
+                ? 'Attach a clear face photo for the first-chairman claim. The super user will review this together with your unit claim.'
+                : 'You can add a resident photo now so the workspace profile is ready after approval.'}
+            </Caption>
+            <View style={styles.profilePhotoPanel}>
+              {profilePhotoDataUrl ? (
+                <Image source={{ uri: profilePhotoDataUrl }} style={styles.profilePhotoPreview} />
+              ) : (
+                <View style={styles.profilePhotoPlaceholder}>
+                  <Text style={styles.profilePhotoPlaceholderText}>{currentUser?.avatarInitials ?? 'ME'}</Text>
+                </View>
+              )}
+              <View style={styles.profilePhotoPanelCopy}>
+                <Caption>
+                  {profilePhotoDataUrl
+                    ? residentProfile === 'chairman'
+                      ? 'Chairman photo ready for submission.'
+                      : 'Resident photo ready for submission.'
+                    : residentProfile === 'chairman'
+                      ? 'A photo is required before the first-chairman claim can be submitted.'
+                      : 'Photo is optional, but helpful for the society directory.'}
+                </Caption>
+                <View style={styles.heroActions}>
+                  <ActionButton
+                    label="Take photo"
+                    onPress={() => {
+                      void attachProfilePhoto('user');
+                    }}
+                    variant="secondary"
+                  />
+                  <ActionButton
+                    label={profilePhotoDataUrl ? 'Replace photo' : 'Upload photo'}
+                    onPress={() => {
+                      void attachProfilePhoto();
+                    }}
+                    variant="secondary"
+                  />
+                  {profilePhotoDataUrl ? (
+                    <ActionButton
+                      label="Remove photo"
+                      onPress={() => {
+                        setProfilePhotoDataUrl('');
+                        setProfilePhotoMessage(
+                          residentProfile === 'chairman'
+                            ? 'Chairman photo removed.'
+                            : 'Resident photo removed.',
+                        );
+                      }}
+                      variant="danger"
+                    />
+                  ) : null}
+                </View>
+                {profilePhotoMessage ? <Caption>{profilePhotoMessage}</Caption> : null}
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.inlineSection}>
             <Text style={styles.formSectionTitle}>Minimal resident information</Text>
             <Caption>
               Only basic verification details are collected here for society access, emergency contact, and tenancy review.
@@ -718,6 +823,33 @@ export function SocietyEnrollmentScreen() {
               </Caption>
             </View>
           </View>
+
+          {shouldShowBusinessSection ? (
+            <View style={styles.inlineSection}>
+              <Text style={styles.formSectionTitle}>Business details</Text>
+              <Caption>
+                If this office or shed is used for a business, add the business name and a short description so the approval flow and society directory reflect the commercial occupant correctly.
+              </Caption>
+              <View style={styles.formGrid}>
+                <View style={styles.formField}>
+                  <InputField
+                    label="Business name (optional)"
+                    value={businessName}
+                    onChangeText={setBusinessName}
+                    placeholder="Mindsflux Technologies"
+                    autoCapitalize="words"
+                  />
+                </View>
+              </View>
+              <InputField
+                label="Business details (optional)"
+                value={businessDetails}
+                onChangeText={setBusinessDetails}
+                placeholder="Software development office, consulting studio, warehouse operations, fabrication unit, etc."
+                multiline
+              />
+            </View>
+          ) : null}
 
           <View style={styles.inlineSection}>
             <Text style={styles.formSectionTitle}>Emergency contacts</Text>
@@ -946,7 +1078,10 @@ export function SocietyEnrollmentScreen() {
                 {
                   residentType: residentProfile ?? 'owner',
                   fullName: residentFullName,
+                  photoDataUrl: profilePhotoDataUrl || undefined,
                   email: residentEmail,
+                  businessName: shouldShowBusinessSection ? businessName : undefined,
+                  businessDetails: shouldShowBusinessSection ? businessDetails : undefined,
                   alternatePhone,
                   emergencyContactName,
                   emergencyContactPhone,
@@ -983,6 +1118,7 @@ export function SocietyEnrollmentScreen() {
               !residentFullName.trim() ||
               !moveInDate ||
               hasIncompleteVehicle ||
+              (residentProfile === 'chairman' && !profilePhotoDataUrl) ||
               !dataProtectionConsent
             }
           />
@@ -1160,5 +1296,40 @@ const styles = StyleSheet.create({
     height: 150,
     borderRadius: radius.md,
     backgroundColor: '#F4F1EB',
+  },
+  profilePhotoPanel: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.md,
+    alignItems: 'center',
+    padding: spacing.md,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: palette.border,
+    backgroundColor: palette.surfaceMuted,
+  },
+  profilePhotoPanelCopy: {
+    flex: 1,
+    minWidth: 220,
+    gap: spacing.sm,
+  },
+  profilePhotoPreview: {
+    width: 128,
+    height: 128,
+    borderRadius: radius.lg,
+    backgroundColor: '#F4F1EB',
+  },
+  profilePhotoPlaceholder: {
+    width: 128,
+    height: 128,
+    borderRadius: radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: palette.primarySoft,
+  },
+  profilePhotoPlaceholderText: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: palette.primary,
   },
 });

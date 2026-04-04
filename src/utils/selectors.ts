@@ -14,6 +14,7 @@ import {
   SecurityGuestRequestStatus,
   SeedData,
   SocietyDocument,
+  SocietyDocumentDownloadRequest,
   SocietySetupDraft,
   SocietyStructureOption,
   SocietyWorkspace,
@@ -268,7 +269,7 @@ export function getSocietyStructurePreviewLabel(society: StructureDescriptor) {
       return 'Office and shed registry enabled';
     }
 
-    return enabledCommercialTypes[0] === 'office' ? 'Office floors enabled' : 'Shed registry enabled';
+    return enabledCommercialTypes[0] === 'office' ? 'Office tower registry enabled' : 'Shed registry enabled';
   }
 
   return enabledStructures[0] === 'apartment' ? 'Block and tower hierarchy enabled' : 'Plot hierarchy enabled';
@@ -453,6 +454,9 @@ export function getAdminOverview(data: SeedData, societyId: string) {
     ).length +
     data.securityGuestRequests.filter(
       (request) => request.societyId === societyId && request.status === 'pendingApproval',
+    ).length +
+    data.societyDocumentDownloadRequests.filter(
+      (request) => request.societyId === societyId && request.status === 'pending',
     ).length;
 
   return {
@@ -1260,6 +1264,51 @@ export function getSocietyDocuments(data: SeedData, societyId: string) {
     .sort((left, right) => Date.parse(right.uploadedAt) - Date.parse(left.uploadedAt)) as SocietyDocument[];
 }
 
+export function getSocietyDocumentDownloadRequests(data: SeedData, societyId: string) {
+  return [...(Array.isArray(data.societyDocumentDownloadRequests) ? data.societyDocumentDownloadRequests : [])]
+    .filter((request) => request.societyId === societyId)
+    .sort((left, right) => Date.parse(right.requestedAt) - Date.parse(left.requestedAt)) as SocietyDocumentDownloadRequest[];
+}
+
+export function getLatestSocietyDocumentDownloadRequestForUser(
+  data: SeedData,
+  documentId: string,
+  userId: string,
+) {
+  return [...(Array.isArray(data.societyDocumentDownloadRequests) ? data.societyDocumentDownloadRequests : [])]
+    .filter((request) => request.documentId === documentId && request.requesterUserId === userId)
+    .sort((left, right) => Date.parse(right.requestedAt) - Date.parse(left.requestedAt))[0];
+}
+
+export function isSocietyDocumentDownloadRequestActive(request?: SocietyDocumentDownloadRequest) {
+  return Boolean(
+    request
+      && request.status === 'approved'
+      && request.accessExpiresAt
+      && Date.parse(request.accessExpiresAt) > Date.now(),
+  );
+}
+
+export function getPendingSocietyDocumentDownloadRequests(data: SeedData, societyId: string) {
+  return getSocietyDocumentDownloadRequests(data, societyId)
+    .filter((request) => request.status === 'pending')
+    .map((request) => {
+      const document = data.societyDocuments.find((item) => item.id === request.documentId);
+      const requester = getCurrentUser(data, request.requesterUserId);
+      const membership = getMembershipForSociety(data, request.requesterUserId, societyId);
+      const units = (membership?.unitIds ?? [])
+        .map((unitId) => data.units.find((unit) => unit.id === unitId))
+        .filter((unit): unit is SeedData['units'][number] => Boolean(unit));
+
+      return {
+        request,
+        document,
+        requester,
+        units,
+      };
+    });
+}
+
 export function getGuardRosterForSociety(data: SeedData, societyId: string) {
   return data.securityGuards
     .filter((guard) => guard.societyId === societyId)
@@ -1537,7 +1586,35 @@ export function getAuditEvents(data: SeedData, societyId: string) {
       createdAt: log.createdAt,
     }));
 
-  return [...announcementEvents, ...paymentEvents, ...reminderEvents, ...complaintEvents, ...expenseEvents, ...securityEvents, ...securityGuestEvents].sort(
+  const documentEvents = data.societyDocuments
+    .filter((document) => document.societyId === societyId)
+    .map((document) => ({
+      id: `${document.id}-audit`,
+      title: `Document published: ${document.title}`,
+      subtitle: `Category: ${document.category}`,
+      createdAt: document.uploadedAt,
+    }));
+
+  const documentRequestEvents = data.societyDocumentDownloadRequests
+    .filter((request) => request.societyId === societyId)
+    .map((request) => {
+      const document = data.societyDocuments.find((item) => item.id === request.documentId);
+      const timestamp = request.reviewedAt ?? request.requestedAt;
+
+      return {
+        id: `${request.id}-audit`,
+        title:
+          request.status === 'approved'
+            ? `Document download approved: ${document?.title ?? 'Document'}`
+            : request.status === 'rejected'
+              ? `Document download rejected: ${document?.title ?? 'Document'}`
+              : `Document download requested: ${document?.title ?? 'Document'}`,
+        subtitle: request.reviewNote || request.requestNote || `Status: ${request.status}`,
+        createdAt: timestamp,
+      };
+    });
+
+  return [...announcementEvents, ...paymentEvents, ...reminderEvents, ...complaintEvents, ...expenseEvents, ...securityEvents, ...securityGuestEvents, ...documentEvents, ...documentRequestEvents].sort(
     (left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt),
   );
 }

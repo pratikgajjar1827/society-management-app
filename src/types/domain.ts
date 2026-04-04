@@ -74,6 +74,7 @@ export type SocietyDocumentCategory =
   | 'insurance'
   | 'auditReport'
   | 'other';
+export type SocietyDocumentDownloadRequestStatus = 'pending' | 'approved' | 'rejected';
 
 export type SocietyMeetingType = 'society' | 'committee' | 'emergency';
 export type SocietyMeetingStatus = 'scheduled' | 'completed' | 'cancelled';
@@ -81,6 +82,7 @@ export type AgendaVotingStatus = 'notRequired' | 'pending' | 'open' | 'closed';
 export type AgendaResolution = 'passed' | 'rejected' | 'deferred';
 
 export interface OfficeFloorPlanEntry {
+  blockName?: string;
   floorLabel: string;
   officeNumbers: string;
 }
@@ -90,6 +92,11 @@ export interface ApartmentBlockPlanEntry {
   towerCount: string;
   floorsPerTower: string;
   homesPerFloor: string;
+}
+
+export interface ShedBlockPlanEntry {
+  blockName: string;
+  shedCount: string;
 }
 
 export interface SocietyWorkspace {
@@ -110,6 +117,7 @@ export interface SocietyWorkspace {
   apartmentUnitCount?: number | null;
   bungalowUnitCount?: number | null;
   shedUnitCount?: number | null;
+  shedBlockPlan?: ShedBlockPlanEntry[] | null;
   officeFloorPlan?: OfficeFloorPlanEntry[] | null;
   timezone: string;
   totalUnits: number;
@@ -260,6 +268,20 @@ export interface SocietyDocument {
   uploadedAt: string;
 }
 
+export interface SocietyDocumentDownloadRequest {
+  id: string;
+  societyId: string;
+  documentId: string;
+  requesterUserId: string;
+  status: SocietyDocumentDownloadRequestStatus;
+  requestNote?: string;
+  requestedAt: string;
+  reviewedAt?: string;
+  reviewedByUserId?: string;
+  reviewNote?: string;
+  accessExpiresAt?: string;
+}
+
 export interface Amenity {
   id: string;
   societyId: string;
@@ -309,6 +331,11 @@ export interface MaintenancePlan {
   upiPayeeName?: string | null;
   upiQrCodeDataUrl?: string | null;
   upiQrPayload?: string | null;
+  bankAccountName?: string | null;
+  bankAccountNumber?: string | null;
+  bankIfscCode?: string | null;
+  bankName?: string | null;
+  bankBranchName?: string | null;
 }
 
 export interface ExpenseRecord {
@@ -547,7 +574,10 @@ export interface ResidenceProfile {
   residentType: JoinRequestRole;
   fullName: string;
   phone: string;
+  photoDataUrl?: string;
   email?: string;
+  businessName?: string;
+  businessDetails?: string;
   alternatePhone?: string;
   emergencyContactName?: string;
   emergencyContactPhone?: string;
@@ -578,6 +608,7 @@ export interface SocietySetupDraft {
   apartmentUnitCount: string;
   bungalowUnitCount: string;
   shedUnitCount: string;
+  shedBlockPlan: ShedBlockPlanEntry[];
   officeFloorPlan: OfficeFloorPlanEntry[];
   totalUnits: string;
   maintenanceDay: string;
@@ -647,6 +678,7 @@ export interface SeedData {
   announcements: Announcement[];
   rules: RuleDocument[];
   societyDocuments: SocietyDocument[];
+  societyDocumentDownloadRequests: SocietyDocumentDownloadRequest[];
   amenities: Amenity[];
   amenityScheduleRules: AmenityScheduleRule[];
   bookings: AmenityBooking[];

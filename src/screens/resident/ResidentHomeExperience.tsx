@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Animated, Easing, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { Animated, Easing, Image, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import { ModuleGlyph } from '../../components/ModuleGlyph';
 import { Caption, Pill, SurfaceCard } from '../../components/ui';
@@ -19,6 +19,7 @@ import {
   getEntryLogsForSociety,
   getGuardRosterForSociety,
   getImportantContactsForSociety,
+  getLeadershipProfilesForSociety,
   getMembershipForSociety,
   getPendingSecurityGuestRequestsForResident,
   getPaymentsForUserSociety,
@@ -27,6 +28,7 @@ import {
   getRulesForSociety,
   getSecurityGuestRequestTone,
   getSelectedSociety,
+  getSocietyDocuments,
   getSocietyChatThread,
   getStaffVerificationDirectory,
   getUnitsForSociety,
@@ -35,7 +37,7 @@ import {
   humanizeSecurityGuestRequestStatus,
 } from '../../utils/selectors';
 
-type ResidentTab = 'home' | 'visitors' | 'community' | 'billing' | 'notices' | 'bookings' | 'meetings' | 'helpdesk' | 'profile';
+type ResidentTab = 'home' | 'visitors' | 'community' | 'billing' | 'notices' | 'documents' | 'bookings' | 'meetings' | 'helpdesk' | 'profile';
 type ResidentVisitorsSection = 'create' | 'approvals' | 'history' | 'desk';
 type ResidentBillingSection = 'pay' | 'reminders' | 'outstanding' | 'history';
 type ResidentBookingsSection = 'booking' | 'amenities' | 'history';
@@ -112,8 +114,6 @@ export function ResidentHomeExperience({
   onOpenBillingSection,
   onOpenBookingsSection,
   onOpenProfileSection,
-  onOpenWorkspaces,
-  onSwitchAdmin,
 }: {
   societyId: string;
   userId: string;
@@ -124,8 +124,6 @@ export function ResidentHomeExperience({
   onOpenBillingSection: (section: ResidentBillingSection) => void;
   onOpenBookingsSection: (section: ResidentBookingsSection) => void;
   onOpenProfileSection: (section: ResidentProfileSection) => void;
-  onOpenWorkspaces: () => void;
-  onSwitchAdmin: () => void;
 }) {
   const { state } = useApp();
   const [activeHub, setActiveHub] = useState<HomeHubSectionKey>('community');
@@ -148,7 +146,9 @@ export function ResidentHomeExperience({
   const firstName = user.name.split(' ')[0] ?? user.name;
   const announcements = getAnnouncementsForSociety(state.data, societyId, membership.roles);
   const rules = getRulesForSociety(state.data, societyId);
+  const societyDocuments = getSocietyDocuments(state.data, societyId);
   const communityMembers = getCommunityMembersForSociety(state.data, societyId);
+  const leadershipDirectory = getLeadershipProfilesForSociety(state.data, societyId);
   const amenities = getAmenitiesForSociety(state.data, societyId);
   const payments = getPaymentsForUserSociety(state.data, userId, societyId);
   const residenceProfile = getResidenceProfileForUserSociety(state.data, userId, societyId);
@@ -181,7 +181,7 @@ export function ResidentHomeExperience({
   const outstandingAmountLabel = overview.totalDue > 0 ? formatCurrency(overview.totalDue) : 'All clear';
   const latestNotice = announcements[0];
   const latestRule = rules[0];
-  const serviceCount = amenities.length + staffRecords.length + contacts.length;
+  const serviceCount = amenities.length + staffRecords.length + contacts.length + societyDocuments.length;
   const societyChatMessages = societyChatThread ? getChatMessagesForThread(state.data, societyChatThread.id) : [];
   const directChatSummaries = directChatThreads.map((threadEntry) => {
     const member = threadEntry.peer
@@ -211,6 +211,13 @@ export function ResidentHomeExperience({
   const completedVisitorCount = visitorPasses.filter(({ visitorPass }) => visitorPass.status === 'completed').length;
   const latestPayment = payments[0];
   const reminderCount = overview.myPaymentReminders.length;
+  const chairmanMember = leadershipDirectory.find(({ membership: leadershipMembership }) =>
+    leadershipMembership.roles.includes('chairman'),
+  );
+  const committeeCount = leadershipDirectory.filter(
+    ({ membership: leadershipMembership }) =>
+      leadershipMembership.roles.includes('committee') && !leadershipMembership.roles.includes('chairman'),
+  ).length;
   const recentHomeConversations: HomeConversationPreview[] = [
     {
       key: 'society-group',
@@ -288,6 +295,21 @@ export function ResidentHomeExperience({
       statusLabel: String(communityMembers.length),
     },
     {
+      label: 'Leadership',
+      subtitle: chairmanMember
+        ? committeeCount > 0
+          ? `${committeeCount} committee + chairman`
+          : 'Chairman details'
+        : leadershipDirectory.length > 0
+          ? `${leadershipDirectory.length} committee profile(s)`
+          : 'Chairman and committee',
+      badge: 'LD',
+      tab: 'community' as const,
+      tone: 'accent' as const,
+      onPress: () => onOpenCommunitySection('members'),
+      statusLabel: String(leadershipDirectory.length),
+    },
+    {
       label: 'Chat',
       subtitle:
         totalIncomingChatCount > 0
@@ -329,12 +351,12 @@ export function ResidentHomeExperience({
       statusLabel: String(communityStaffCount),
     },
     {
-      label: 'Notices',
-      subtitle: latestNotice ? formatShortDate(latestNotice.createdAt) : 'Latest update',
-      badge: 'NT',
-      tab: 'notices' as const,
+      label: 'Documents',
+      subtitle: societyDocuments.length > 0 ? `${societyDocuments.length} shared` : 'Office records',
+      badge: 'DC',
+      tab: 'documents' as const,
       tone: 'gold' as const,
-      statusLabel: String(unreadNoticeCount),
+      statusLabel: String(societyDocuments.length),
     },
     {
       label: 'Gate',
@@ -444,12 +466,12 @@ export function ResidentHomeExperience({
       statusLabel: String(payments.length),
     },
     {
-      label: 'Notices',
-      subtitle: latestRule ? formatShortDate(latestRule.publishedAt) : 'Policy updates',
-      badge: 'NT',
-      tab: 'notices',
+      label: 'Documents',
+      subtitle: societyDocuments.length > 0 ? `${societyDocuments.length} ready` : 'Shared records',
+      badge: 'DC',
+      tab: 'documents',
       tone: 'gold',
-      statusLabel: String(unreadNoticeCount),
+      statusLabel: String(societyDocuments.length),
     },
   ];
 
@@ -515,9 +537,22 @@ export function ResidentHomeExperience({
       onPress: () => onOpenVisitorsSection('desk'),
       statusLabel: String(visitorPasses.length),
     },
+    {
+      label: 'Documents',
+      subtitle: societyDocuments.length > 0 ? `${societyDocuments.length} published` : 'Shared records',
+      badge: 'DC',
+      tab: 'documents',
+      tone: 'gold',
+      statusLabel: String(societyDocuments.length),
+    },
   ];
 
   const communityShortcuts: HubShortcut[] = [
+    {
+      label: 'Leadership',
+      value: chairmanMember ? `${committeeCount} + chairman` : `${leadershipDirectory.length} listed`,
+      onPress: () => onOpenCommunitySection('members'),
+    },
     {
       label: 'Members',
       value: `${communityMembers.length}`,
@@ -653,8 +688,9 @@ export function ResidentHomeExperience({
       spotlightPill: 'My Society',
       spotlightPillTone: 'accent',
       spotlightTitle: 'Everything in your society, in one place',
-      spotlightDescription: 'Open the resident directory, latest notices, payments, and access essentials from this hub.',
+      spotlightDescription: 'Open the chairman and committee directory, resident contacts, latest notices, and access essentials from this hub.',
       facts: [
+        { label: 'leadership', value: String(leadershipDirectory.length) },
         { label: 'members', value: String(communityMembers.length) },
         { label: 'chat rooms', value: String(chatRoomCount) },
         { label: 'vehicles', value: String(vehicles.length) },
@@ -689,7 +725,7 @@ export function ResidentHomeExperience({
   };
 
   const activeHubConfig = hubConfigs[activeHub];
-  const useDensePhoneTiles = isPhone && activeHubConfig.tiles.length >= 6;
+  const useDensePhoneTiles = isPhone && activeHubConfig.tiles.length >= 5;
 
   const quickActionSets: Record<HomeHubSectionKey, { pending: QuickAction[]; fallback: QuickAction[] }> = {
     community: {
@@ -912,38 +948,6 @@ export function ResidentHomeExperience({
   return (
     <>
       <AnnouncementTicker announcements={announcements} isCompact={isCompact} isPhone={isPhone} />
-
-      {!isCompact ? (
-      <View style={styles.utilityBar}>
-        <Pressable onPress={() => onOpenTab('profile')} style={({ pressed }) => [styles.unitPill, pressed ? styles.pressed : null]}>
-          <View style={styles.unitAvatar}>
-            <Text style={styles.unitAvatarText}>{user.avatarInitials}</Text>
-          </View>
-          <View style={styles.unitMeta}>
-            <Text style={styles.unitCode}>{primaryUnitLabel}</Text>
-            <Caption style={styles.unitMetaText}>{firstName}</Caption>
-          </View>
-        </Pressable>
-
-        <Pressable onPress={onOpenWorkspaces} style={({ pressed }) => [styles.workspacePill, pressed ? styles.pressed : null]}>
-          <View style={styles.workspaceBadge}>
-            <Text style={styles.workspaceBadgeText}>SO</Text>
-          </View>
-          <View style={styles.workspaceCopy}>
-            <Text style={styles.workspaceTitle}>{society.name}</Text>
-            <Caption>{society.area}, {society.city}</Caption>
-          </View>
-        </Pressable>
-
-        <View style={styles.utilityIcons}>
-          <RoundUtilityButton label="WK" onPress={onOpenWorkspaces} />
-          {canUseAdmin ? <RoundUtilityButton label="AD" onPress={onSwitchAdmin} /> : null}
-          <View style={styles.profileRing}>
-            <Text style={styles.profileRingText}>{user.avatarInitials}</Text>
-          </View>
-        </View>
-      </View>
-      ) : null}
 
       <View style={[styles.categoryStrip, isCompact ? styles.categoryStripCompact : null, isPhone ? styles.categoryStripPhone : null]}>
         {topCategories.map((category) => (
@@ -1409,14 +1413,6 @@ function AnnouncementTicker({ announcements, isCompact, isPhone }: { announcemen
   );
 }
 
-function RoundUtilityButton({ label, onPress }: { label: string; onPress: () => void }) {
-  return (
-    <Pressable onPress={onPress} style={({ pressed }) => [styles.roundUtility, pressed ? styles.pressed : null]}>
-      <Text style={styles.roundUtilityText}>{label}</Text>
-    </Pressable>
-  );
-}
-
 function TopCategoryCard({
   label,
   subtitle,
@@ -1792,6 +1788,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E7D8C5',
   },
+  unitAvatarImage: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.pill,
+    backgroundColor: '#F4F1EB',
+    borderWidth: 1,
+    borderColor: '#E7D8C5',
+  },
   unitAvatarText: {
     color: palette.mutedInk,
     fontSize: 13,
@@ -1871,6 +1875,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: '#FFF6F4',
+    borderWidth: 2,
+    borderColor: palette.accent,
+  },
+  profileRingImage: {
+    width: 42,
+    height: 42,
+    borderRadius: radius.pill,
+    backgroundColor: '#F4F1EB',
     borderWidth: 2,
     borderColor: palette.accent,
   },

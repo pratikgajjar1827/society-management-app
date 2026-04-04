@@ -1,4 +1,5 @@
-﻿import { ReactNode, createContext, useContext, useEffect, useState } from 'react';
+﻿import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ReactNode, createContext, useContext, useEffect, useState } from 'react';
 
 import {
   clearPersistedApiBaseUrl,
@@ -8,6 +9,7 @@ import {
   createAmenityBooking as createAmenityBookingRequest,
   createComplaintTicket as createComplaintTicketRequest,
   createSocietyDocument as createSocietyDocumentRequest,
+  requestSocietyDocumentDownload as requestSocietyDocumentDownloadMutation,
   createEntryLogRecord as createEntryLogRecordRequest,
   createExpenseRecord as createExpenseRecordRequest,
   createSecurityGuard as createSecurityGuardRequest,
@@ -28,6 +30,7 @@ import {
   requestOtp as requestOtpRequest,
   recordManualPayment as recordManualPaymentRequest,
   reviewAmenityBooking as reviewAmenityBookingRequest,
+  reviewSocietyDocumentDownloadRequest as reviewSocietyDocumentDownloadRequestMutation,
   reviewResidentPayment as reviewResidentPaymentRequest,
   reviewSecurityGuestRequest as reviewSecurityGuestRequestRequest,
   reviewStaffVerification as reviewStaffVerificationRequest,
@@ -52,6 +55,8 @@ import {
   type LeadershipProfileInput,
   type ResidenceProfileInput,
   type SocietyDocumentCreateInput,
+  type SocietyDocumentDownloadRequestInput,
+  type SocietyDocumentDownloadReviewInput,
   type SecurityGuestRequestCreateInput,
   type VisitorPassCreateInput,
 } from '../api/client';
@@ -139,6 +144,11 @@ interface MaintenanceBillingConfigInput {
   upiPayeeName?: string;
   upiQrCodeDataUrl?: string;
   upiQrPayload?: string;
+  bankAccountName?: string;
+  bankAccountNumber?: string;
+  bankIfscCode?: string;
+  bankName?: string;
+  bankBranchName?: string;
 }
 
 interface MaintenancePlanSettingsInput {
@@ -267,6 +277,11 @@ interface SessionState {
   selectedProfile?: RoleProfile;
 }
 
+type PersistedSessionState = Pick<
+  SessionState,
+  'userId' | 'sessionToken' | 'authChannel' | 'verifiedDestination' | 'accountRole' | 'selectedSocietyId' | 'selectedProfile'
+>;
+
 interface AppState {
   screen: Screen;
   session: SessionState;
@@ -352,6 +367,16 @@ interface AppContextValue {
     updateResidenceProfile: (societyId: string, input: ResidenceProfileInput) => Promise<boolean>;
     updateLeadershipProfile: (societyId: string, input: LeadershipProfileInput) => Promise<boolean>;
     createSocietyDocument: (societyId: string, input: SocietyDocumentCreateInput) => Promise<boolean>;
+    requestSocietyDocumentDownload: (
+      societyId: string,
+      documentId: string,
+      input?: SocietyDocumentDownloadRequestInput,
+    ) => Promise<boolean>;
+    reviewSocietyDocumentDownloadRequest: (
+      societyId: string,
+      requestId: string,
+      input: SocietyDocumentDownloadReviewInput,
+    ) => Promise<boolean>;
     updateMaintenanceBillingConfig: (
       societyId: string,
       planId: string,
@@ -443,6 +468,8 @@ const initialState: AppState = {
   dataSource: 'fallback',
 };
 
+const SESSION_STORAGE_KEY = 'societyos.session';
+
 const AppContext = createContext<AppContextValue | undefined>(undefined);
 
 function getAuthChallengeNoticeMessage(challenge?: AuthChallenge) {
@@ -455,6 +482,135 @@ function getAuthChallengeNoticeMessage(challenge?: AuthChallenge) {
   }
 
   return 'SMS is not configured on this backend yet. Use the local OTP shown on the login screen.';
+}
+
+function isAuthenticationErrorMessage(message: string | undefined) {
+  if (!message) {
+    return false;
+  }
+
+  return /unauthorized|forbidden|session expired|invalid token|invalid session|authentication|sign in again/i.test(message);
+}
+
+function normalizePersistedSession(value: unknown): PersistedSessionState | undefined {
+  if (!value || typeof value !== 'object') {
+    return undefined;
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const sessionToken = typeof candidate.sessionToken === 'string' ? candidate.sessionToken : '';
+  const userId = typeof candidate.userId === 'string' ? candidate.userId : '';
+
+  if (!sessionToken || !userId) {
+    return undefined;
+  }
+
+  return {
+    userId,
+    sessionToken,
+    authChannel:
+      candidate.authChannel === 'sms' || candidate.authChannel === 'email'
+        ? candidate.authChannel
+        : undefined,
+    verifiedDestination:
+      typeof candidate.verifiedDestination === 'string' ? candidate.verifiedDestination : undefined,
+    accountRole:
+      candidate.accountRole === 'superUser' ||
+      candidate.accountRole === 'chairman' ||
+      candidate.accountRole === 'owner' ||
+      candidate.accountRole === 'tenant'
+        ? candidate.accountRole
+        : undefined,
+    selectedSocietyId:
+      typeof candidate.selectedSocietyId === 'string' ? candidate.selectedSocietyId : undefined,
+    selectedProfile:
+      candidate.selectedProfile === 'resident' ||
+      candidate.selectedProfile === 'admin' ||
+      candidate.selectedProfile === 'security'
+        ? candidate.selectedProfile
+        : undefined,
+  };
+}
+
+async function loadPersistedSession() {
+  const rawValue = await AsyncStorage.getItem(SESSION_STORAGE_KEY);
+
+  if (!rawValue) {
+    return undefined;
+  }
+
+  try {
+    return normalizePersistedSession(JSON.parse(rawValue));
+  } catch {
+    await AsyncStorage.removeItem(SESSION_STORAGE_KEY);
+    return undefined;
+  }
+}
+
+async function persistSession(session: SessionState) {
+  if (!session.sessionToken || !session.userId) {
+    await AsyncStorage.removeItem(SESSION_STORAGE_KEY);
+    return;
+  }
+
+  const payload: PersistedSessionState = {
+    userId: session.userId,
+    sessionToken: session.sessionToken,
+    authChannel: session.authChannel,
+    verifiedDestination: session.verifiedDestination,
+    accountRole: session.accountRole,
+    selectedSocietyId: session.selectedSocietyId,
+    selectedProfile: session.selectedProfile,
+  };
+
+  await AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(payload));
+}
+
+async function clearPersistedSession() {
+  await AsyncStorage.removeItem(SESSION_STORAGE_KEY);
+}
+
+function normalizeSessionSelection(session: SessionState, data: SeedData) {
+  const hasSelectedSociety = Boolean(
+    session.selectedSocietyId && data.societies.some((society) => society.id === session.selectedSocietyId),
+  );
+
+  if (!hasSelectedSociety) {
+    return {
+      ...session,
+      selectedSocietyId: undefined,
+      selectedProfile: undefined,
+    };
+  }
+
+  if (session.accountRole === 'superUser' && !session.selectedProfile) {
+    return {
+      ...session,
+      selectedProfile: 'admin',
+    };
+  }
+
+  return session;
+}
+
+function resolveAuthenticatedScreen(session: SessionState, onboarding: OnboardingState | undefined, data: SeedData): Screen {
+  if (!session.sessionToken || !session.userId) {
+    return 'auth';
+  }
+
+  if (session.selectedSocietyId && session.selectedProfile) {
+    const hasSociety = data.societies.some((society) => society.id === session.selectedSocietyId);
+
+    if (hasSociety) {
+      return 'dashboard';
+    }
+  }
+
+  if (session.selectedSocietyId) {
+    return session.accountRole === 'superUser' ? 'dashboard' : 'role';
+  }
+
+  return resolveScreen(onboarding);
 }
 
 function shouldForceDevelopmentOtp(apiBaseUrl: string) {
@@ -516,14 +672,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     loadingMode = 'sync',
     apiBaseUrl = getApiBaseUrl(),
     hasCustomApiBaseUrl = state.hasCustomApiBaseUrl,
+    persistedSession,
     successMessage,
   }: {
     loadingMode?: 'hydrate' | 'sync';
     apiBaseUrl?: string;
     hasCustomApiBaseUrl?: boolean;
+    persistedSession?: PersistedSessionState;
     successMessage?: string;
   } = {}) {
-    const sessionToken = state.session.sessionToken;
+    const baseSession = persistedSession ?? state.session;
+    const sessionToken = baseSession.sessionToken;
 
     setState((currentState) => ({
       ...currentState,
@@ -550,30 +709,53 @@ export function AppProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      setState((currentState) => ({
-        ...currentState,
-        data: mergeServerData(sessionResponse?.data ?? bootstrapResponse.data, currentState.data),
-        chairmanAssigned: sessionResponse?.chairmanAssigned ?? bootstrapResponse.chairmanAssigned,
-        amenityLibrary: sessionResponse?.amenityLibrary ?? bootstrapResponse.amenityLibrary,
-        defaultSetupDraft: sessionResponse?.defaultSetupDraft ?? bootstrapResponse.defaultSetupDraft,
-        onboarding: sessionResponse?.onboarding ?? currentState.onboarding,
-        isHydrating: false,
-        isSyncing: false,
-        apiBaseUrl,
-        hasCustomApiBaseUrl,
-        apiError: sessionError,
-        noticeMessage: sessionError ? undefined : successMessage,
-        dataSource: 'remote',
-        session: sessionResponse
-          ? {
-              ...currentState.session,
-              userId: sessionResponse.currentUserId,
-              sessionToken: sessionResponse.sessionToken,
-            }
-          : currentState.session,
-      }));
+      const nextRemoteData = sessionResponse?.data ?? bootstrapResponse.data;
 
-      return !sessionError;
+      setState((currentState) => {
+        const nextSession = normalizeSessionSelection(
+          sessionResponse
+            ? {
+                ...currentState.session,
+                ...baseSession,
+                userId: sessionResponse.currentUserId,
+                sessionToken: sessionResponse.sessionToken,
+                accountRole: sessionResponse.onboarding.preferredRole ?? baseSession.accountRole,
+              }
+            : {
+                ...currentState.session,
+                ...baseSession,
+              },
+          nextRemoteData,
+        );
+        const authenticationFailed = Boolean(sessionToken && sessionError && isAuthenticationErrorMessage(sessionError));
+
+        return {
+          ...currentState,
+          screen: authenticationFailed
+            ? 'auth'
+            : resolveAuthenticatedScreen(nextSession, sessionResponse?.onboarding ?? currentState.onboarding, nextRemoteData),
+          data: mergeServerData(nextRemoteData, currentState.data),
+          chairmanAssigned: sessionResponse?.chairmanAssigned ?? bootstrapResponse.chairmanAssigned,
+          amenityLibrary: sessionResponse?.amenityLibrary ?? bootstrapResponse.amenityLibrary,
+          defaultSetupDraft: sessionResponse?.defaultSetupDraft ?? bootstrapResponse.defaultSetupDraft,
+          onboarding: authenticationFailed ? undefined : (sessionResponse?.onboarding ?? currentState.onboarding),
+          isHydrating: false,
+          isSyncing: false,
+          apiBaseUrl,
+          hasCustomApiBaseUrl,
+          apiError: authenticationFailed ? undefined : sessionError,
+          noticeMessage: sessionError ? undefined : successMessage,
+          dataSource: 'remote',
+          pendingChallenge: authenticationFailed ? undefined : currentState.pendingChallenge,
+          session: authenticationFailed ? {} : nextSession,
+        };
+      });
+
+      if (sessionToken && sessionError && isAuthenticationErrorMessage(sessionError)) {
+        await clearPersistedSession();
+      }
+
+      return !(sessionToken && sessionError && isAuthenticationErrorMessage(sessionError));
     } catch (error) {
       setState((currentState) => ({
         ...currentState,
@@ -595,6 +777,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     async function hydrate() {
       const persistedApiBaseUrl = await loadPersistedApiBaseUrl();
+      const persistedSession = await loadPersistedSession();
       const shouldResetPersistedApiBaseUrl = shouldResetPersistedApiBaseUrlForDevelopment(persistedApiBaseUrl);
       const nextApiBaseUrl = shouldResetPersistedApiBaseUrl
         ? await clearPersistedApiBaseUrl()
@@ -608,6 +791,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         loadingMode: 'hydrate',
         apiBaseUrl: nextApiBaseUrl,
         hasCustomApiBaseUrl: shouldResetPersistedApiBaseUrl ? false : Boolean(persistedApiBaseUrl),
+        persistedSession,
       });
     }
 
@@ -617,6 +801,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       active = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (state.isHydrating) {
+      return;
+    }
+
+    void persistSession(state.session);
+  }, [state.isHydrating, state.session]);
 
   useEffect(() => {
     const sessionToken = state.session.sessionToken;
@@ -638,6 +830,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         setState((currentState) => ({
           ...currentState,
+          screen: resolveAuthenticatedScreen(
+            normalizeSessionSelection(
+              {
+                ...currentState.session,
+                userId: response.currentUserId,
+                sessionToken: response.sessionToken,
+              },
+              response.data,
+            ),
+            response.onboarding,
+            response.data,
+          ),
           data: mergeServerData(response.data, currentState.data),
           chairmanAssigned: response.chairmanAssigned,
           amenityLibrary: response.amenityLibrary,
@@ -656,11 +860,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
           return;
         }
 
+        const message = error instanceof Error ? error.message : 'Could not refresh workspace data.';
+
+        if (isAuthenticationErrorMessage(message)) {
+          void clearPersistedSession();
+
+          setState((currentState) => ({
+            ...currentState,
+            screen: 'auth',
+            session: {},
+            onboarding: undefined,
+            pendingChallenge: undefined,
+            apiError: 'Your session expired. Sign in again.',
+          }));
+          return;
+        }
+
         setState((currentState) => ({
           ...currentState,
           apiError:
             currentState.apiError ??
-            (error instanceof Error ? error.message : 'Could not refresh workspace data.'),
+            message,
         }));
       }
     }
@@ -961,6 +1181,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setState((currentState) => ({
           ...currentState,
           apiError: 'Fill the basic residence profile and confirm the privacy notice before sending the request.',
+          noticeMessage: undefined,
+        }));
+        return;
+      }
+
+      if (residentType === 'chairman' && !String(residenceProfile.photoDataUrl ?? '').trim()) {
+        setState((currentState) => ({
+          ...currentState,
+          apiError: 'Upload the chairman photo before sending the first-chairman claim.',
           noticeMessage: undefined,
         }));
         return;
@@ -1490,6 +1719,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
         societyId,
         (sessionToken) => createSocietyDocumentRequest(sessionToken, societyId, input),
         'Society compliance document uploaded.',
+      ),
+    requestSocietyDocumentDownload: async (societyId, documentId, input = {}) =>
+      runSocietyMutation(
+        societyId,
+        (sessionToken) =>
+          requestSocietyDocumentDownloadMutation(sessionToken, societyId, documentId, input),
+        'Document download request sent for admin approval.',
+      ),
+    reviewSocietyDocumentDownloadRequest: async (societyId, requestId, input) =>
+      runSocietyMutation(
+        societyId,
+        (sessionToken) => reviewSocietyDocumentDownloadRequestMutation(sessionToken, requestId, input),
+        input.decision === 'approve'
+          ? 'Resident document download request approved.'
+          : 'Resident document download request rejected.',
       ),
     updateComplaintTicket: async (societyId, complaintId, input) =>
       runSocietyMutation(

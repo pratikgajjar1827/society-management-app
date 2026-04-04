@@ -5,12 +5,27 @@ import {
   Building,
   CommercialSpaceType,
   OfficeFloorPlanEntry,
+  ShedBlockPlanEntry,
   SocietyStructureOption,
   Unit,
 } from '../types/domain';
 
 function slugify(value: string) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
+}
+
+function normalizeOfficeBlockName(value: string | undefined | null) {
+  const normalized = String(value ?? '').trim();
+  return normalized || 'Commercial Tower';
+}
+
+function normalizeShedBlockName(value: string | undefined | null, index: number) {
+  const normalized = String(value ?? '').trim();
+  return normalized || `Block ${String.fromCharCode(65 + index)}`;
+}
+
+function formatOfficeUnitCode(blockName: string, officeCode: string, useBlockPrefix: boolean) {
+  return useBlockPrefix ? `${blockName} / ${officeCode}` : officeCode;
 }
 
 export function expandOfficeNumbersInput(value: string) {
@@ -42,6 +57,7 @@ export function expandOfficeNumbersInput(value: string) {
 
 export function normalizeOfficeFloorPlan(officeFloorPlan: OfficeFloorPlanEntry[]) {
   return officeFloorPlan.map((floor, index) => ({
+    blockName: normalizeOfficeBlockName(floor.blockName),
     floorLabel: floor.floorLabel.trim() || `Floor ${index + 1}`,
     officeCodes: expandOfficeNumbersInput(floor.officeNumbers),
   }));
@@ -55,15 +71,22 @@ export function countOfficeUnits(officeFloorPlan: OfficeFloorPlanEntry[]) {
 }
 
 export function findDuplicateOfficeCodes(officeFloorPlan: OfficeFloorPlanEntry[]) {
+  const normalizedFloors = normalizeOfficeFloorPlan(officeFloorPlan);
+  const uniqueBlockNames = [...new Set(normalizedFloors.map((floor) => floor.blockName.toLowerCase()))];
+  const useBlockPrefix = uniqueBlockNames.length > 1;
   const seen = new Set<string>();
   const duplicates = new Set<string>();
 
-  normalizeOfficeFloorPlan(officeFloorPlan).forEach((floor) => {
+  normalizedFloors.forEach((floor) => {
     floor.officeCodes.forEach((officeCode) => {
-      const normalized = officeCode.toLowerCase();
+      const normalized = formatOfficeUnitCode(
+        floor.blockName,
+        officeCode,
+        useBlockPrefix,
+      ).toLowerCase();
 
       if (seen.has(normalized)) {
-        duplicates.add(officeCode);
+        duplicates.add(formatOfficeUnitCode(floor.blockName, officeCode, useBlockPrefix));
         return;
       }
 
@@ -87,6 +110,24 @@ export function normalizeApartmentBlockPlan(apartmentBlockPlan: ApartmentBlockPl
       homesPerFloor: Number.isFinite(parsedHomesPerFloor) ? parsedHomesPerFloor : 0,
     };
   });
+}
+
+export function normalizeShedBlockPlan(shedBlockPlan: ShedBlockPlanEntry[]) {
+  return shedBlockPlan.map((block, index) => {
+    const parsedShedCount = Number.parseInt(String(block.shedCount ?? '').trim(), 10);
+
+    return {
+      blockName: normalizeShedBlockName(block.blockName, index),
+      shedCount: Number.isFinite(parsedShedCount) ? parsedShedCount : 0,
+    };
+  });
+}
+
+export function countShedUnits(shedBlockPlan: ShedBlockPlanEntry[]) {
+  return normalizeShedBlockPlan(shedBlockPlan).reduce(
+    (total, block) => total + block.shedCount,
+    0,
+  );
 }
 
 export function countApartmentUnits(apartmentBlockPlan: ApartmentBlockPlanEntry[]) {
@@ -116,6 +157,7 @@ export function createUnitStructure(
     apartmentBlockPlan?: ApartmentBlockPlanEntry[];
     apartmentStartingFloorNumber?: string | number;
     commercialSpaceType?: CommercialSpaceType;
+    shedBlockPlan?: ShedBlockPlanEntry[];
     officeFloorPlan?: OfficeFloorPlanEntry[];
   },
 ): { buildings: Building[]; units: Unit[] } {
@@ -140,26 +182,68 @@ export function createUnitStructure(
       const configuredFloors = normalizeOfficeFloorPlan(options.officeFloorPlan).filter(
         (floor) => floor.officeCodes.length > 0,
       );
-      const buildings: Building[] = configuredFloors.map((floor, index) => ({
-        id: `${societyId}-building-office-${slugify(floor.floorLabel) || `floor-${index + 1}`}`,
+      const uniqueBlockNames = [...new Set(configuredFloors.map((floor) => floor.blockName))];
+      const useBlockPrefix = uniqueBlockNames.length > 1;
+      const buildings: Building[] = uniqueBlockNames.map((blockName, index) => ({
+        id: `${societyId}-building-office-${slugify(blockName) || `tower-${index + 1}`}`,
         societyId,
-        name: floor.floorLabel,
+        name: blockName,
         sortOrder: index + 1,
       }));
+      const buildingMap = new Map(buildings.map((building) => [building.name, building]));
       const units: Unit[] = [];
 
-      buildings.forEach((building, floorIndex) => {
-        configuredFloors[floorIndex].officeCodes.forEach((officeCode, officeIndex) => {
+      configuredFloors.forEach((floor, floorIndex) => {
+        const building = buildingMap.get(floor.blockName);
+
+        floor.officeCodes.forEach((officeCode, officeIndex) => {
+          const unitCode = formatOfficeUnitCode(floor.blockName, officeCode, useBlockPrefix);
+
           units.push({
-            id: `${societyId}-unit-office-${slugify(`${building.name}-${officeCode}`) || `${floorIndex + 1}-${officeIndex + 1}`}`,
+            id: `${societyId}-unit-office-${slugify(unitCode) || `${floorIndex + 1}-${officeIndex + 1}`}`,
             societyId,
-            buildingId: building.id,
-            code: officeCode,
+            buildingId: building?.id,
+            code: unitCode,
             areaSqft: 650 + units.length * 18,
             occupancyStatus: 'occupied',
             unitType: 'office',
           });
         });
+      });
+
+      return { buildings, units };
+    }
+
+    if (Array.isArray(options?.shedBlockPlan) && options.shedBlockPlan.length > 0) {
+      const configuredBlocks = normalizeShedBlockPlan(options.shedBlockPlan).filter(
+        (block) => block.shedCount > 0,
+      );
+      const buildings: Building[] = configuredBlocks.map((block, index) => ({
+        id: `${societyId}-building-shed-${slugify(block.blockName) || `block-${index + 1}`}`,
+        societyId,
+        name: block.blockName,
+        sortOrder: index + 1,
+      }));
+      const buildingMap = new Map(buildings.map((building) => [building.name, building]));
+      const units: Unit[] = [];
+
+      configuredBlocks.forEach((block) => {
+        const building = buildingMap.get(block.blockName);
+
+        for (let shedIndex = 0; shedIndex < block.shedCount; shedIndex += 1) {
+          const shedNumber = String(shedIndex + 1).padStart(2, '0');
+          const unitCode = `${block.blockName} / Shed ${shedNumber}`;
+
+          units.push({
+            id: `${societyId}-unit-shed-${slugify(unitCode) || `${units.length + 1}`}`,
+            societyId,
+            buildingId: building?.id,
+            code: unitCode,
+            areaSqft: 900 + units.length * 35,
+            occupancyStatus: 'occupied',
+            unitType: 'shed',
+          });
+        }
       });
 
       return { buildings, units };

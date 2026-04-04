@@ -1,22 +1,39 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { DatabaseSync } = require('node:sqlite');
+const { createPostgresDatabase } = require('./postgres-sync');
+const { normalizeSocietyLocationFields } = require('../utils/location-normalization');
 
 const {
   countApartmentUnits,
   countOfficeUnits,
+  countShedUnits,
   createAmenitiesFromSelection,
   createUnitStructure,
   findDuplicateOfficeCodes,
   normalizeApartmentBlockPlan,
   normalizeApartmentStartingFloorNumber,
   normalizeOfficeFloorPlan,
+  normalizeShedBlockPlan,
 } = require('../seed/factories');
 const { DEMO_USER_ID, SUPER_USER_ID, seedData } = require('../seed/seedData');
 
 const dbDirectory = path.join(process.cwd(), 'backend-data');
-const dbPath = path.join(dbDirectory, 'societyos.db');
+const sqliteDbPath = path.join(dbDirectory, 'societyos.db');
 const schemaPath = path.join(__dirname, 'schema.sql');
+const postgresConnectionString = String(process.env.DATABASE_URL ?? '').trim();
+const requirePostgres = /^(1|true|yes)$/i.test(String(process.env.REQUIRE_POSTGRES ?? '').trim());
+const isProduction = String(process.env.NODE_ENV ?? '').trim().toLowerCase() === 'production';
+
+if (!postgresConnectionString && (requirePostgres || isProduction)) {
+  throw new Error(
+    requirePostgres
+      ? 'REQUIRE_POSTGRES is enabled, but DATABASE_URL is not set.'
+      : 'DATABASE_URL must be set when NODE_ENV=production. Refusing to start with SQLite in production.',
+  );
+}
+
+const dbDialect = postgresConnectionString ? 'postgres' : 'sqlite';
+const dbPath = dbDialect === 'postgres' ? 'postgresql' : sqliteDbPath;
 
 const tableConfigs = [
   ['users'],
@@ -33,6 +50,7 @@ const tableConfigs = [
   ['announcements', ['readByUserIds']],
   ['rules', ['acknowledgedByUserIds']],
   ['societyDocuments'],
+  ['societyDocumentDownloadRequests'],
   ['amenities'],
   ['amenityScheduleRules', ['blackoutDates']],
   ['bookings'],
@@ -144,19 +162,63 @@ function getAvatarInitials(name) {
   return initials || normalized.slice(0, 2).toUpperCase();
 }
 
-fs.mkdirSync(dbDirectory, { recursive: true });
+function createSqliteDatabase(filePath) {
+  const { DatabaseSync } = require('node:sqlite');
+  return new DatabaseSync(filePath);
+}
 
-const db = new DatabaseSync(dbPath);
-db.exec('PRAGMA foreign_keys = ON;');
+if (dbDialect === 'sqlite') {
+  fs.mkdirSync(dbDirectory, { recursive: true });
+}
+
+const db = dbDialect === 'postgres'
+  ? createPostgresDatabase(postgresConnectionString)
+  : createSqliteDatabase(sqliteDbPath);
+
+db.clientType = dbDialect;
+
+if (dbDialect === 'sqlite') {
+  db.exec('PRAGMA foreign_keys = ON;');
+}
+
+function getTableColumns(tableName) {
+  if (dbDialect === 'postgres') {
+    return new Set(
+      db.prepare(
+        `SELECT column_name AS name
+         FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = ?
+         ORDER BY ordinal_position ASC`,
+      ).all(String(tableName).toLowerCase()).map((column) => String(column.name).toLowerCase()),
+    );
+  }
+
+  return new Set(
+    db.prepare(`PRAGMA table_info('${tableName}')`).all().map((column) => column.name),
+  );
+}
+
+function addMissingColumns(tableName, definitions) {
+  const existingColumns = getTableColumns(tableName);
+
+  for (const [columnName, definition] of definitions) {
+    const normalizedColumnName = dbDialect === 'postgres'
+      ? String(columnName).toLowerCase()
+      : columnName;
+
+    if (!existingColumns.has(normalizedColumnName)) {
+      db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
+    }
+  }
+}
 
 function ensureSchema() {
-  const sql = fs.readFileSync(schemaPath, 'utf8');
+  const sql = fs
+    .readFileSync(schemaPath, 'utf8')
+    .replace(/^\s*PRAGMA\s+foreign_keys\s*=\s*(?:ON|OFF)\s*;?\s*/gim, '');
   db.exec(sql);
 
-  const societyColumns = new Set(
-    db.prepare("PRAGMA table_info('societies')").all().map((column) => column.name),
-  );
-  const missingSocietyColumns = [
+  addMissingColumns('societies', [
     ['country', "TEXT NOT NULL DEFAULT 'India'"],
     ['state', "TEXT NOT NULL DEFAULT 'Gujarat'"],
     ['city', "TEXT NOT NULL DEFAULT 'Ahmedabad'"],
@@ -170,125 +232,67 @@ function ensureSchema() {
     ['apartmentUnitCount', 'INTEGER'],
     ['bungalowUnitCount', 'INTEGER'],
     ['shedUnitCount', 'INTEGER'],
+    ['shedBlockPlan', 'TEXT'],
     ['officeFloorPlan', 'TEXT'],
-  ].filter(([columnName]) => !societyColumns.has(columnName));
+  ]);
 
-  for (const [columnName, definition] of missingSocietyColumns) {
-    db.exec(`ALTER TABLE societies ADD COLUMN ${columnName} ${definition}`);
-  }
-
-  const staffColumns = new Set(
-    db.prepare("PRAGMA table_info('staffProfiles')").all().map((column) => column.name),
-  );
-  const missingStaffColumns = [
+  addMissingColumns('staffProfiles', [
     ['requestedByUserId', 'TEXT'],
     ['requestedAt', 'TEXT'],
     ['reviewedByUserId', 'TEXT'],
     ['reviewedAt', 'TEXT'],
-  ].filter(([columnName]) => !staffColumns.has(columnName));
+  ]);
 
-  for (const [columnName, definition] of missingStaffColumns) {
-    db.exec(`ALTER TABLE staffProfiles ADD COLUMN ${columnName} ${definition}`);
-  }
-
-  const residenceProfileColumns = new Set(
-    db.prepare("PRAGMA table_info('residenceProfiles')").all().map((column) => column.name),
-  );
-  const missingResidenceProfileColumns = [
+  addMissingColumns('residenceProfiles', [
     ['secondaryEmergencyContactName', 'TEXT'],
     ['secondaryEmergencyContactPhone', 'TEXT'],
-  ].filter(([columnName]) => !residenceProfileColumns.has(columnName));
+    ['photoDataUrl', 'TEXT'],
+    ['businessName', 'TEXT'],
+    ['businessDetails', 'TEXT'],
+  ]);
 
-  for (const [columnName, definition] of missingResidenceProfileColumns) {
-    db.exec(`ALTER TABLE residenceProfiles ADD COLUMN ${columnName} ${definition}`);
-  }
-
-  const paymentColumns = new Set(
-    db.prepare("PRAGMA table_info('payments')").all().map((column) => column.name),
-  );
-  const missingPaymentColumns = [
+  addMissingColumns('payments', [
     ['submittedByUserId', 'TEXT'],
     ['referenceNote', 'TEXT'],
     ['proofImageDataUrl', 'TEXT'],
     ['reviewedByUserId', 'TEXT'],
     ['reviewedAt', 'TEXT'],
-  ].filter(([columnName]) => !paymentColumns.has(columnName));
+  ]);
 
-  for (const [columnName, definition] of missingPaymentColumns) {
-    db.exec(`ALTER TABLE payments ADD COLUMN ${columnName} ${definition}`);
-  }
-
-  const maintenancePlanColumns = new Set(
-    db.prepare("PRAGMA table_info('maintenancePlans')").all().map((column) => column.name),
-  );
-  const missingMaintenancePlanColumns = [
+  addMissingColumns('maintenancePlans', [
     ['upiId', 'TEXT'],
     ['upiMobileNumber', 'TEXT'],
     ['upiPayeeName', 'TEXT'],
     ['upiQrCodeDataUrl', 'TEXT'],
     ['upiQrPayload', 'TEXT'],
-  ].filter(([columnName]) => !maintenancePlanColumns.has(columnName));
+    ['bankAccountName', 'TEXT'],
+    ['bankAccountNumber', 'TEXT'],
+    ['bankIfscCode', 'TEXT'],
+    ['bankName', 'TEXT'],
+    ['bankBranchName', 'TEXT'],
+  ]);
 
-  for (const [columnName, definition] of missingMaintenancePlanColumns) {
-    db.exec(`ALTER TABLE maintenancePlans ADD COLUMN ${columnName} ${definition}`);
-  }
-
-  const complaintColumns = new Set(
-    db.prepare("PRAGMA table_info('complaints')").all().map((column) => column.name),
-  );
-  const missingComplaintColumns = [
+  addMissingColumns('complaints', [
     ['description', 'TEXT'],
-  ].filter(([columnName]) => !complaintColumns.has(columnName));
+  ]);
 
-  for (const [columnName, definition] of missingComplaintColumns) {
-    db.exec(`ALTER TABLE complaints ADD COLUMN ${columnName} ${definition}`);
-  }
-
-  const announcementColumns = new Set(
-    db.prepare("PRAGMA table_info('announcements')").all().map((column) => column.name),
-  );
-  const missingAnnouncementColumns = [
+  addMissingColumns('announcements', [
     ['photoDataUrl', 'TEXT'],
-  ].filter(([columnName]) => !announcementColumns.has(columnName));
+  ]);
 
-  for (const [columnName, definition] of missingAnnouncementColumns) {
-    db.exec(`ALTER TABLE announcements ADD COLUMN ${columnName} ${definition}`);
-  }
-
-  const amenityColumns = new Set(
-    db.prepare("PRAGMA table_info('amenities')").all().map((column) => column.name),
-  );
-  const missingAmenityColumns = [
+  addMissingColumns('amenities', [
     ['reservationScope', "TEXT NOT NULL DEFAULT 'timeSlot'"],
-  ].filter(([columnName]) => !amenityColumns.has(columnName));
+  ]);
 
-  for (const [columnName, definition] of missingAmenityColumns) {
-    db.exec(`ALTER TABLE amenities ADD COLUMN ${columnName} ${definition}`);
-  }
-
-  const vehicleColumns = new Set(
-    db.prepare("PRAGMA table_info('vehicleRegistrations')").all().map((column) => column.name),
-  );
-  const missingVehicleColumns = [
+  addMissingColumns('vehicleRegistrations', [
     ['photoDataUrl', 'TEXT'],
-  ].filter(([columnName]) => !vehicleColumns.has(columnName));
+  ]);
 
-  for (const [columnName, definition] of missingVehicleColumns) {
-    db.exec(`ALTER TABLE vehicleRegistrations ADD COLUMN ${columnName} ${definition}`);
-  }
-
-  const securityGuestRequestColumns = new Set(
-    db.prepare("PRAGMA table_info('securityGuestRequests')").all().map((column) => column.name),
-  );
-  const missingSecurityGuestRequestColumns = [
+  addMissingColumns('securityGuestRequests', [
     ['guestPhotoCapturedAt', 'TEXT'],
     ['vehiclePhotoDataUrl', 'TEXT'],
     ['vehiclePhotoCapturedAt', 'TEXT'],
-  ].filter(([columnName]) => !securityGuestRequestColumns.has(columnName));
-
-  for (const [columnName, definition] of missingSecurityGuestRequestColumns) {
-    db.exec(`ALTER TABLE securityGuestRequests ADD COLUMN ${columnName} ${definition}`);
-  }
+  ]);
 }
 
 function ensureSuperUserAccount() {
@@ -540,7 +544,52 @@ function ensureResidentialAmenityCatalog() {
 }
 
 function listAll(tableName) {
-  return db.prepare(`SELECT * FROM ${tableName} ORDER BY rowid ASC`).all();
+  if (tableName === 'units') {
+    return db
+      .prepare(`SELECT * FROM ${tableName} ORDER BY COALESCE(buildingId, ''), code ASC, id ASC`)
+      .all();
+  }
+
+  if (tableName === 'buildings') {
+    return db.prepare(`SELECT * FROM ${tableName} ORDER BY sortOrder ASC, id ASC`).all();
+  }
+
+  const columns = getTableColumns(tableName);
+  const preferredColumns = [
+    'sortOrder',
+    'createdAt',
+    'updatedAt',
+    'publishedAt',
+    'uploadedAt',
+    'requestedAt',
+    'issuedAt',
+    'paidAt',
+    'incurredOn',
+    'enteredAt',
+    'startDate',
+    'date',
+    'dueDate',
+    'name',
+    'title',
+    'registrationNumber',
+  ];
+  const orderColumns = preferredColumns.filter((columnName) => columns.has(columnName));
+
+  if (columns.has('id')) {
+    orderColumns.push('id');
+  } else if (columns.has('userId')) {
+    orderColumns.push('userId');
+  } else if (columns.has('token')) {
+    orderColumns.push('token');
+  }
+
+  const orderClause = orderColumns.length > 0
+    ? orderColumns.map((columnName) => `${columnName} ASC`).join(', ')
+    : null;
+
+  return db.prepare(
+    orderClause ? `SELECT * FROM ${tableName} ORDER BY ${orderClause}` : `SELECT * FROM ${tableName}`,
+  ).all();
 }
 
 function hasSeedData() {
@@ -576,6 +625,7 @@ function fromStoredValue(columnName, value) {
       columnName === 'enabledStructures' ||
       columnName === 'enabledCommercialSpaceTypes' ||
       columnName === 'apartmentBlockPlan' ||
+      columnName === 'shedBlockPlan' ||
       columnName === 'officeFloorPlan' ||
       columnName === 'invoiceIds' ||
       columnName === 'unitIds'
@@ -596,6 +646,7 @@ function fromStoredValue(columnName, value) {
     columnName === 'enabledStructures' ||
     columnName === 'enabledCommercialSpaceTypes' ||
     columnName === 'apartmentBlockPlan' ||
+    columnName === 'shedBlockPlan' ||
     columnName === 'officeFloorPlan' ||
     columnName === 'invoiceIds' ||
     columnName === 'unitIds'
@@ -610,6 +661,14 @@ function fromStoredValue(columnName, value) {
   return value;
 }
 
+function normalizeIdentifier(identifier) {
+  return dbDialect === 'postgres' ? String(identifier).toLowerCase() : String(identifier);
+}
+
+function quoteIdentifier(identifier) {
+  return `"${normalizeIdentifier(identifier).replace(/"/g, '""')}"`;
+}
+
 function insertMany(tableName, rows) {
   if (!rows || rows.length === 0) {
     return;
@@ -618,7 +677,7 @@ function insertMany(tableName, rows) {
   const columns = Object.keys(rows[0]);
   const placeholders = columns.map(() => '?').join(', ');
   const statement = db.prepare(
-    `INSERT INTO ${tableName} (${columns.join(', ')}) VALUES (${placeholders})`,
+    `INSERT INTO ${quoteIdentifier(tableName)} (${columns.map(quoteIdentifier).join(', ')}) VALUES (${placeholders})`,
   );
 
   for (const row of rows) {
@@ -792,8 +851,9 @@ function buildStructureTagline(structureSetup) {
   }
 
   if (structureSetup.shedUnitCount) {
+    const shedBlockCount = structureSetup.shedBlockPlan.length;
     segments.push(
-      `${structureSetup.shedUnitCount} shed${structureSetup.shedUnitCount === 1 ? '' : 's'}`,
+      `${structureSetup.shedUnitCount} shed${structureSetup.shedUnitCount === 1 ? '' : 's'}${shedBlockCount > 0 ? ` across ${shedBlockCount} block${shedBlockCount === 1 ? '' : 's'}` : ''}`,
     );
   }
 
@@ -817,14 +877,19 @@ function buildStructureTagline(structureSetup) {
     }
 
     if (structureSetup.enabledCommercialSpaceTypes[0] === 'office') {
-      const configuredFloorCount = normalizeOfficeFloorPlan(structureSetup.officeFloorPlan).filter(
+      const configuredOfficeFloors = normalizeOfficeFloorPlan(structureSetup.officeFloorPlan).filter(
         (floor) => floor.officeCodes.length > 0,
-      ).length;
+      );
+      const configuredFloorCount = configuredOfficeFloors.length;
+      const configuredBlockCount = new Set(
+        configuredOfficeFloors.map((floor) => String(floor.blockName).toLowerCase()),
+      ).size;
 
-      return `Commercial office workspace with ${configuredFloorCount || 1} configured floors and ${structureSetup.officeUnitCount} unique office spaces`;
+      return `Commercial office workspace with ${configuredBlockCount || 1} tower${configuredBlockCount === 1 ? '' : 's'}, ${configuredFloorCount || 1} configured floors, and ${structureSetup.officeUnitCount} unique office spaces`;
     }
 
-    return `Commercial shed workspace with ${structureSetup.shedUnitCount} shed${structureSetup.shedUnitCount === 1 ? '' : 's'}`;
+    const shedBlockCount = structureSetup.shedBlockPlan.length;
+    return `Commercial shed workspace with ${structureSetup.shedUnitCount} shed${structureSetup.shedUnitCount === 1 ? '' : 's'}${shedBlockCount > 0 ? ` across ${shedBlockCount} block${shedBlockCount === 1 ? '' : 's'}` : ''}`;
   }
 
   if (structureSetup.enabledStructures[0] === 'bungalow') {
@@ -867,11 +932,24 @@ function resolveStructureSetup(draft) {
     : 0;
   const shedUnitCount =
     enabledStructures.includes('commercial') && enabledCommercialSpaceTypes.includes('shed')
-      ? getDraftUnitCount(
-        draft.shedUnitCount,
-        enabledStructures.length === 1 && enabledCommercialSpaceTypes.length === 1 ? draft.totalUnits : null,
+      ? (
+        Array.isArray(draft.shedBlockPlan) && draft.shedBlockPlan.length > 0
+          ? countShedUnits(draft.shedBlockPlan)
+          : getDraftUnitCount(
+            draft.shedUnitCount,
+            enabledStructures.length === 1 && enabledCommercialSpaceTypes.length === 1 ? draft.totalUnits : null,
+          )
       )
       : 0;
+  const shedBlockPlan =
+    enabledStructures.includes('commercial') && enabledCommercialSpaceTypes.includes('shed') && Array.isArray(draft.shedBlockPlan)
+      ? normalizeShedBlockPlan(draft.shedBlockPlan)
+        .filter((block) => block.shedCount > 0)
+        .map((block) => ({
+          blockName: block.blockName,
+          shedCount: String(block.shedCount),
+        }))
+      : [];
   const officeFloorPlan =
     enabledStructures.includes('commercial') && enabledCommercialSpaceTypes.includes('office') && Array.isArray(draft.officeFloorPlan)
       ? draft.officeFloorPlan
@@ -912,6 +990,7 @@ function resolveStructureSetup(draft) {
       totalUnits: shedUnitCount,
       unitStructureOptions: {
         commercialSpaceType: 'shed',
+        shedBlockPlan,
       },
     });
   }
@@ -938,6 +1017,7 @@ function resolveStructureSetup(draft) {
     apartmentUnitCount: apartmentUnitCount || null,
     bungalowUnitCount: bungalowUnitCount || null,
     shedUnitCount: shedUnitCount || null,
+    shedBlockPlan,
     officeFloorPlan,
     officeUnitCount,
     totalUnits: Math.max(1, totalUnits),
@@ -999,17 +1079,26 @@ function createSocietyWorkspace(userId, draft) {
   const amenitySetup = createAmenitiesFromSelection(societyId, draft.selectedAmenities);
   const existingUserProfile = db.prepare('SELECT preferredRole FROM userProfiles WHERE userId = ?').get(userId);
   const preferredRoleToPersist = existingUserProfile?.preferredRole ?? null;
+  const locationFields = normalizeSocietyLocationFields({
+    name: draft.societyName,
+    country: draft.country,
+    state: draft.state,
+    city: draft.city,
+    area: draft.area,
+    address: draft.address,
+    tagline: structureSetup.tagline,
+  });
 
   runTransaction(() => {
     insertMany('societies', [
       {
         id: societyId,
-        name: draft.societyName.trim(),
-        country: draft.country.trim(),
-        state: draft.state.trim(),
-        city: draft.city.trim(),
-        area: draft.area.trim(),
-        address: draft.address.trim(),
+        name: locationFields.name,
+        country: locationFields.country,
+        state: locationFields.state,
+        city: locationFields.city,
+        area: locationFields.area,
+        address: locationFields.address,
         structure: structureSetup.structure,
         enabledStructures: structureSetup.enabledStructures,
         commercialSpaceType: structureSetup.commercialSpaceType,
@@ -1020,12 +1109,13 @@ function createSocietyWorkspace(userId, draft) {
         apartmentUnitCount: structureSetup.apartmentUnitCount,
         bungalowUnitCount: structureSetup.bungalowUnitCount,
         shedUnitCount: structureSetup.shedUnitCount,
+        shedBlockPlan: structureSetup.shedBlockPlan,
         officeFloorPlan: structureSetup.officeFloorPlan,
         timezone: 'Asia/Kolkata',
         totalUnits: structureSetup.totalUnits,
         maintenanceDayOfMonth: maintenanceDay,
         maintenanceAmount,
-        tagline: structureSetup.tagline,
+        tagline: locationFields.tagline,
         createdAt: now,
       },
     ]);
@@ -1075,10 +1165,11 @@ function createSocietyWorkspace(userId, draft) {
         amountInr: maintenanceAmount,
         lateFeeInr: 250,
         calculationMethod: 'fixed',
-        receiptPrefix: draft.societyName.trim().slice(0, 3).toUpperCase(),
+        receiptPrefix: locationFields.name.slice(0, 3).toUpperCase(),
         upiId: null,
-        upiPayeeName: draft.societyName.trim(),
+        upiPayeeName: locationFields.name,
         upiQrCodeDataUrl: null,
+        bankAccountName: locationFields.name,
       },
     ]);
   });
@@ -1103,18 +1194,24 @@ function deleteSocietyWorkspace(societyId) {
 }
 
 function resetDatabase() {
-  db.exec('PRAGMA foreign_keys = OFF;');
-  const existingTables = db
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
-    .all()
-    .map((row) => row.name)
-    .reverse();
-
-  for (const tableName of existingTables) {
-    db.exec(`DROP TABLE IF EXISTS ${tableName}`);
+  if (dbDialect === 'sqlite') {
+    db.exec('PRAGMA foreign_keys = OFF;');
   }
 
-  db.exec('PRAGMA foreign_keys = ON;');
+  const managedTables = [...authTableNames, ...tableConfigs.map(([tableName]) => tableName)].reverse();
+
+  for (const tableName of managedTables) {
+    db.exec(
+      dbDialect === 'postgres'
+        ? `DROP TABLE IF EXISTS ${tableName} CASCADE`
+        : `DROP TABLE IF EXISTS ${tableName}`,
+    );
+  }
+
+  if (dbDialect === 'sqlite') {
+    db.exec('PRAGMA foreign_keys = ON;');
+  }
+
   ensureSchema();
   seedDatabase(seedData);
   ensureSecurityGuardAccess();
@@ -1136,8 +1233,10 @@ module.exports = {
   DEMO_USER_ID,
   createSocietyWorkspace,
   db,
+  dbDialect,
   dbPath,
   deleteSocietyWorkspace,
+  ensureSchema,
   getSnapshot,
   initializeDatabase,
   resetDatabase,

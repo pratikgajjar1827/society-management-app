@@ -129,6 +129,74 @@ export async function captureVehiclePhoto() {
   });
 }
 
+export async function pickResidentProfilePhoto(capture?: 'user' | 'environment') {
+  if (Platform.OS === 'web') {
+    const file = await pickWebFileAsDataUrl({
+      accept: 'image/png,image/jpeg,image/webp',
+      capture,
+      maxSizeInBytes: 4 * 1024 * 1024,
+      unsupportedMessage: 'Resident photo upload is available from the web workspace right now.',
+      tooLargeMessage: 'Choose a resident profile photo smaller than 4 MB.',
+      readErrorMessage: 'Could not read the selected resident profile photo.',
+    });
+
+    return file?.dataUrl
+      ? {
+          dataUrl: file.dataUrl,
+          capturedAt: new Date().toISOString(),
+        }
+      : null;
+  }
+
+  if (capture) {
+    const permission = await ImagePicker.requestCameraPermissionsAsync();
+
+    if (!permission.granted) {
+      throw new Error('Camera permission is required to capture the resident profile photo.');
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ['images'],
+      base64: true,
+      allowsEditing: true,
+      quality: 0.6,
+      cameraType:
+        capture === 'user' ? ImagePicker.CameraType.front : ImagePicker.CameraType.back,
+    });
+
+    if (result.canceled || !result.assets?.[0]) {
+      return null;
+    }
+
+    return {
+      dataUrl: assetToDataUrl(result.assets[0]),
+      capturedAt: new Date().toISOString(),
+    };
+  }
+
+  const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+  if (!permission.granted) {
+    throw new Error('Photo library permission is required to upload the resident profile photo.');
+  }
+
+  const result = await ImagePicker.launchImageLibraryAsync({
+    mediaTypes: ['images'],
+    base64: true,
+    allowsEditing: true,
+    quality: 0.6,
+  });
+
+  if (result.canceled || !result.assets?.[0]) {
+    return null;
+  }
+
+  return {
+    dataUrl: assetToDataUrl(result.assets[0]),
+    capturedAt: new Date().toISOString(),
+  };
+}
+
 export async function detectVehicleNumberFromDataUrl(dataUrl: string) {
   if (
     Platform.OS !== 'web' ||

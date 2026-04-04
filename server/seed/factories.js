@@ -2,6 +2,20 @@ function slugify(value) {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
 }
 
+function normalizeOfficeBlockName(value) {
+  const normalized = String(value ?? '').trim();
+  return normalized || 'Commercial Tower';
+}
+
+function normalizeShedBlockName(value, index) {
+  const normalized = String(value ?? '').trim();
+  return normalized || `Block ${String.fromCharCode(65 + index)}`;
+}
+
+function formatOfficeUnitCode(blockName, officeCode, useBlockPrefix) {
+  return useBlockPrefix ? `${blockName} / ${officeCode}` : officeCode;
+}
+
 function expandOfficeNumbersInput(value) {
   return String(value ?? '')
     .split(/[\n,;]+/g)
@@ -31,6 +45,7 @@ function expandOfficeNumbersInput(value) {
 
 function normalizeOfficeFloorPlan(officeFloorPlan = []) {
   return officeFloorPlan.map((floor, index) => ({
+    blockName: normalizeOfficeBlockName(floor.blockName),
     floorLabel: floor.floorLabel.trim() || `Floor ${index + 1}`,
     officeCodes: expandOfficeNumbersInput(floor.officeNumbers),
   }));
@@ -44,15 +59,22 @@ function countOfficeUnits(officeFloorPlan = []) {
 }
 
 function findDuplicateOfficeCodes(officeFloorPlan = []) {
+  const normalizedFloors = normalizeOfficeFloorPlan(officeFloorPlan);
+  const uniqueBlockNames = [...new Set(normalizedFloors.map((floor) => floor.blockName.toLowerCase()))];
+  const useBlockPrefix = uniqueBlockNames.length > 1;
   const seen = new Set();
   const duplicates = new Set();
 
-  normalizeOfficeFloorPlan(officeFloorPlan).forEach((floor) => {
+  normalizedFloors.forEach((floor) => {
     floor.officeCodes.forEach((officeCode) => {
-      const normalized = officeCode.toLowerCase();
+      const normalized = formatOfficeUnitCode(
+        floor.blockName,
+        officeCode,
+        useBlockPrefix,
+      ).toLowerCase();
 
       if (seen.has(normalized)) {
-        duplicates.add(officeCode);
+        duplicates.add(formatOfficeUnitCode(floor.blockName, officeCode, useBlockPrefix));
         return;
       }
 
@@ -76,6 +98,24 @@ function normalizeApartmentBlockPlan(apartmentBlockPlan = []) {
       homesPerFloor: Number.isFinite(parsedHomesPerFloor) ? parsedHomesPerFloor : 0,
     };
   });
+}
+
+function normalizeShedBlockPlan(shedBlockPlan = []) {
+  return shedBlockPlan.map((block, index) => {
+    const parsedShedCount = Number.parseInt(String(block.shedCount ?? '').trim(), 10);
+
+    return {
+      blockName: normalizeShedBlockName(block.blockName, index),
+      shedCount: Number.isFinite(parsedShedCount) ? parsedShedCount : 0,
+    };
+  });
+}
+
+function countShedUnits(shedBlockPlan = []) {
+  return normalizeShedBlockPlan(shedBlockPlan).reduce(
+    (total, block) => total + block.shedCount,
+    0,
+  );
 }
 
 function countApartmentUnits(apartmentBlockPlan = []) {
@@ -116,26 +156,68 @@ function createUnitStructure(societyId, structure, totalUnits, options = {}) {
       const configuredFloors = normalizeOfficeFloorPlan(options.officeFloorPlan).filter(
         (floor) => floor.officeCodes.length > 0,
       );
-      const buildings = configuredFloors.map((floor, index) => ({
-        id: `${societyId}-building-office-${slugify(floor.floorLabel) || `floor-${index + 1}`}`,
+      const uniqueBlockNames = [...new Set(configuredFloors.map((floor) => floor.blockName))];
+      const useBlockPrefix = uniqueBlockNames.length > 1;
+      const buildings = uniqueBlockNames.map((blockName, index) => ({
+        id: `${societyId}-building-office-${slugify(blockName) || `tower-${index + 1}`}`,
         societyId,
-        name: floor.floorLabel,
+        name: blockName,
         sortOrder: index + 1,
       }));
+      const buildingMap = new Map(buildings.map((building) => [building.name, building]));
       const units = [];
 
-      buildings.forEach((building, floorIndex) => {
-        configuredFloors[floorIndex].officeCodes.forEach((officeCode, officeIndex) => {
+      configuredFloors.forEach((floor, floorIndex) => {
+        const building = buildingMap.get(floor.blockName);
+
+        floor.officeCodes.forEach((officeCode, officeIndex) => {
+          const unitCode = formatOfficeUnitCode(floor.blockName, officeCode, useBlockPrefix);
+
           units.push({
-            id: `${societyId}-unit-office-${slugify(`${building.name}-${officeCode}`) || `${floorIndex + 1}-${officeIndex + 1}`}`,
+            id: `${societyId}-unit-office-${slugify(unitCode) || `${floorIndex + 1}-${officeIndex + 1}`}`,
             societyId,
-            buildingId: building.id,
-            code: officeCode,
+            buildingId: building?.id,
+            code: unitCode,
             areaSqft: 650 + units.length * 18,
             occupancyStatus: 'occupied',
             unitType: 'office',
           });
         });
+      });
+
+      return { buildings, units };
+    }
+
+    if (Array.isArray(options.shedBlockPlan) && options.shedBlockPlan.length > 0) {
+      const configuredBlocks = normalizeShedBlockPlan(options.shedBlockPlan).filter(
+        (block) => block.shedCount > 0,
+      );
+      const buildings = configuredBlocks.map((block, index) => ({
+        id: `${societyId}-building-shed-${slugify(block.blockName) || `block-${index + 1}`}`,
+        societyId,
+        name: block.blockName,
+        sortOrder: index + 1,
+      }));
+      const buildingMap = new Map(buildings.map((building) => [building.name, building]));
+      const units = [];
+
+      configuredBlocks.forEach((block) => {
+        const building = buildingMap.get(block.blockName);
+
+        for (let shedIndex = 0; shedIndex < block.shedCount; shedIndex += 1) {
+          const shedNumber = String(shedIndex + 1).padStart(2, '0');
+          const unitCode = `${block.blockName} / Shed ${shedNumber}`;
+
+          units.push({
+            id: `${societyId}-unit-shed-${slugify(unitCode) || `${units.length + 1}`}`,
+            societyId,
+            buildingId: building?.id,
+            code: unitCode,
+            areaSqft: 900 + units.length * 35,
+            occupancyStatus: 'occupied',
+            unitType: 'shed',
+          });
+        }
       });
 
       return { buildings, units };
@@ -351,6 +433,7 @@ function createAmenitiesFromSelection(societyId, selectedAmenities) {
 module.exports = {
   countApartmentUnits,
   countOfficeUnits,
+  countShedUnits,
   createAmenitiesFromSelection,
   createUnitStructure,
   formatApartmentUnitNumber,
@@ -358,4 +441,5 @@ module.exports = {
   normalizeApartmentBlockPlan,
   normalizeApartmentStartingFloorNumber,
   normalizeOfficeFloorPlan,
+  normalizeShedBlockPlan,
 };

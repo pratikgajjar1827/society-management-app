@@ -94,6 +94,34 @@ export async function openUploadedFileDataUrl(dataUrl: string) {
   }
 }
 
+export async function downloadUploadedFileDataUrl(dataUrl: string, fileName: string) {
+  const normalizedDataUrl = String(dataUrl ?? '').trim();
+  const normalizedFileName = String(fileName ?? '').trim() || 'society-document';
+
+  if (!normalizedDataUrl) {
+    return false;
+  }
+
+  try {
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      const downloadLink = document.createElement('a');
+      downloadLink.href = normalizedDataUrl;
+      downloadLink.download = normalizedFileName;
+      downloadLink.rel = 'noopener';
+      downloadLink.style.display = 'none';
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      downloadLink.remove();
+      return true;
+    }
+
+    await Linking.openURL(normalizedDataUrl);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
 function extractVehicleRegistrationCandidate(text: string) {
   const normalized = text.toUpperCase().replace(/[^A-Z0-9]/g, ' ');
   const patterns = [

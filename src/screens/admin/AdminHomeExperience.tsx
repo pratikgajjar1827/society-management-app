@@ -22,8 +22,10 @@ import {
   getJoinRequestsForSociety,
   getMeetingsForSociety,
   getPaymentsForSociety,
+  getPendingSocietyDocumentDownloadRequests,
   getResidentsDirectory,
   getSelectedSociety,
+  getSocietyDocuments,
   getSocietyUnitCollectionLabel,
   getStaffVerificationDirectory,
   getVisitorPassesForSociety,
@@ -39,6 +41,7 @@ type AdminTab =
   | 'helpdesk'
   | 'security'
   | 'announcements'
+  | 'documents'
   | 'meetings'
   | 'audit';
 type AccentTone = 'accent' | 'blue' | 'gold' | 'primary';
@@ -149,6 +152,8 @@ export function AdminHomeExperience({
   const scheduledMeetings = meetings.filter((m) => m.status === 'scheduled').length;
   const payments = getPaymentsForSociety(state.data, societyId);
   const pendingPayments = payments.filter((payment) => payment.status === 'pending').length;
+  const societyDocuments = getSocietyDocuments(state.data, societyId);
+  const pendingDocumentDownloadRequests = getPendingSocietyDocumentDownloadRequests(state.data, societyId);
   const invoiceDirectory = getInvoiceCollectionDirectory(state.data, societyId);
   const overdueCollectionCount = invoiceDirectory.filter(({ invoice }) => invoice.status === 'overdue').length;
   const remindersCount = invoiceDirectory.filter(({ latestReminder }) => Boolean(latestReminder)).length;
@@ -245,8 +250,9 @@ export function AdminHomeExperience({
     { label: 'Helpdesk', subtitle: `${overview.openComplaints} open`, badge: 'HD', tab: 'helpdesk', tone: 'accent', statusLabel: String(overview.openComplaints) },
     { label: 'Amenities', subtitle: `${amenities.length} live`, badge: 'AM', tab: 'amenities', tone: 'gold', statusLabel: String(amenities.length) },
     { label: 'Bookings', subtitle: pendingBookings > 0 ? `${pendingBookings} pending` : `${bookings.length} total`, badge: 'BK', tab: 'amenities', tone: 'blue', statusLabel: String(bookings.length) },
-    { label: 'Meetings', subtitle: scheduledMeetings.length > 0 ? `${scheduledMeetings.length} scheduled` : `${meetings.length} total`, badge: 'MT', tab: 'meetings', tone: 'primary', statusLabel: String(meetings.length) },
+    { label: 'Meetings', subtitle: scheduledMeetings > 0 ? `${scheduledMeetings} scheduled` : `${meetings.length} total`, badge: 'MT', tab: 'meetings', tone: 'primary', statusLabel: String(meetings.length) },
     { label: 'Notices', subtitle: `${announcements.length} published`, badge: 'AN', tab: 'announcements', tone: 'accent', statusLabel: String(announcements.length) },
+    { label: 'Documents', subtitle: pendingDocumentDownloadRequests.length > 0 ? `${pendingDocumentDownloadRequests.length} approvals` : `${societyDocuments.length} published`, badge: 'DC', tab: 'documents', tone: 'blue', statusLabel: String(societyDocuments.length) },
     { label: 'Audit', subtitle: `${auditEvents.length} events`, badge: 'AU', tab: 'audit', tone: 'primary', statusLabel: String(auditEvents.length) },
     { label: 'Collect', subtitle: `${overview.collectionRate}% healthy`, badge: 'CL', tab: 'collections', tone: 'gold', statusLabel: `${overview.collectionRate}%` },
   ];
@@ -331,23 +337,23 @@ export function AdminHomeExperience({
       pillLabel: 'Admin central',
       pillTone: 'warning',
       title: 'Operations, communication, and oversight beautifully connected',
-      description: 'Move between helpdesk, amenities, announcements, collections, and audit from one polished admin hub.',
+      description: 'Move between helpdesk, amenities, announcements, documents, collections, and audit from one polished admin hub.',
       metaValue: String(operationsTiles.length),
       metaLabel: 'core modules',
       tiles: operationsTiles,
       spotlightPill: 'Operations',
       spotlightPillTone: 'accent',
       spotlightTitle: 'Everything your admin team needs, in one control surface',
-      spotlightDescription: 'Jump into daily operational modules, keep communication active, and stay ahead of the next queue.',
+      spotlightDescription: 'Jump into daily operational modules, keep communication active, manage shared documents, and stay ahead of the next queue.',
       facts: [
         { label: 'open complaints', value: String(overview.openComplaints) },
         { label: 'pending approvals', value: String(overview.pendingApprovals) },
-        { label: 'announcements', value: String(announcements.length) },
+        { label: 'documents', value: String(societyDocuments.length) },
       ],
       shortcuts: [
         { label: 'Helpdesk', value: `${overview.openComplaints} open`, onPress: () => onOpenTab('helpdesk') },
         { label: 'Announcements', value: `${announcements.length} live`, onPress: () => onOpenTab('announcements') },
-        { label: 'Audit', value: `${auditEvents.length} logs`, onPress: () => onOpenTab('audit') },
+        { label: 'Documents', value: `${pendingDocumentDownloadRequests.length} pending`, onPress: () => onOpenTab('documents') },
       ],
       ctaLabel: 'Open Operations',
       ctaTab: 'helpdesk',

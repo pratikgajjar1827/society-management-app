@@ -48,7 +48,8 @@ const defaultSetupDraft = {
   apartmentUnitCount: '48',
   bungalowUnitCount: '',
   shedUnitCount: '',
-  officeFloorPlan: [{ floorLabel: 'Ground Floor', officeNumbers: '' }],
+  shedBlockPlan: [{ blockName: 'Block A', shedCount: '' }],
+  officeFloorPlan: [{ blockName: 'Tower A', floorLabel: 'Ground Floor', officeNumbers: '' }],
   totalUnits: '48',
   maintenanceDay: '10',
   maintenanceAmount: '6500',
@@ -497,6 +498,7 @@ const seedData = {
       uploadedAt: '2026-03-19T10:45:00.000Z',
     },
   ],
+  societyDocumentDownloadRequests: [],
   amenities: [...greenAmenitySetup.amenities, ...palmAmenitySetup.amenities],
   amenityScheduleRules: [...greenAmenitySetup.rules, ...palmAmenitySetup.rules],
   bookings: [

@@ -13,7 +13,7 @@ That model scales much better than separate chairman, tenant, and owner login sy
 ## What is implemented
 
 - OTP-first signup screen with mobile OTP or email OTP
-- Local Node + SQLite backend with REST endpoints
+- Local Node backend with SQLite-by-default and PostgreSQL-ready support
 - Session-backed authentication flow with role onboarding
 - Database schema for societies, memberships, units, billing, amenities, rules, staff, security, and complaints
 - Multi-society workspace selection
@@ -46,7 +46,7 @@ Type-checking:
 npm run typecheck
 ```
 
-Reset the local database back to the demo snapshot:
+Reset the active database backend back to the demo snapshot:
 
 ```bash
 npm run db:reset
@@ -54,9 +54,13 @@ npm run db:reset
 
 ## Local backend
 
-The app now reads its working data from a local SQLite database stored at:
+By default the app reads its working data from a local SQLite database stored at:
 
 - `backend-data/societyos.db`
+
+If `DATABASE_URL` is set, the backend uses PostgreSQL instead. SQLite remains untouched until you explicitly migrate and switch the environment variable.
+
+For production launches, set both `DATABASE_URL` and `REQUIRE_POSTGRES=true` in `.env` so the server refuses to fall back to SQLite if the database configuration is missing.
 
 The backend starts on:
 
@@ -87,6 +91,37 @@ Available local endpoints:
 - `POST /api/auth/select-society`
 - `POST /api/societies`
 - `POST /api/dev/reset`
+
+## PostgreSQL migration
+
+1. Create an empty PostgreSQL database.
+2. Set `DATABASE_URL` in your shell or `.env`.
+3. For production or staging, also set `REQUIRE_POSTGRES=true`.
+4. Run the one-time migration command:
+
+```bash
+npm run db:migrate:postgres
+```
+
+5. Start the backend normally with `npm run server`.
+
+PowerShell example:
+
+```powershell
+$env:DATABASE_URL="postgresql://postgres:postgres@localhost:5432/societyos"
+$env:REQUIRE_POSTGRES="true"
+npm run db:migrate:postgres
+npm run server
+```
+
+Optional variables for hosted PostgreSQL:
+
+```bash
+set DATABASE_SSL=true
+set DATABASE_SSL_REJECT_UNAUTHORIZED=false
+```
+
+If you need to migrate from a SQLite file in a different location, set `SQLITE_SOURCE_PATH` before running the migration script.
 
 ## OTP configuration
 

@@ -61,6 +61,7 @@ import {
   getUnitsForSociety,
   getSocietyUnitCollectionLabel,
   getRulesForSociety,
+  getPendingSocietyDocumentDownloadRequests,
   getSelectedSociety,
   getSocietyDocuments,
   getStaffVerificationDirectory,
@@ -74,7 +75,7 @@ import {
 } from '../../utils/selectors';
 import { AnnouncementAudience, AnnouncementPriority, PaymentMethod, SocietyDocumentCategory } from '../../types/domain';
 
-type AdminTab = 'home' | AdminRecommendationTab | 'ledger' | 'meetings';
+type AdminTab = 'home' | AdminRecommendationTab | 'ledger' | 'meetings' | 'documents';
 type OfficeMaintenanceState = 'paid' | 'pending' | 'overdue' | 'unbilled';
 
 const adminTabs: Array<{ key: AdminTab; label: string }> = [
@@ -87,6 +88,7 @@ const adminTabs: Array<{ key: AdminTab; label: string }> = [
   { key: 'helpdesk', label: 'Helpdesk' },
   { key: 'security', label: 'Security' },
   { key: 'announcements', label: 'Announcements' },
+  { key: 'documents', label: 'Documents' },
   { key: 'meetings', label: 'Meetings' },
   { key: 'audit', label: 'Audit' },
 ];
@@ -111,6 +113,8 @@ function getAdminTabDescription(activeTab: AdminTab) {
       return 'Coordinate guards, staff verification, visitor access, and entry records from one security workspace.';
     case 'announcements':
       return 'Publish notices, resident communication, and policy updates in the new premium admin flow.';
+    case 'documents':
+      return 'Upload society records, review resident download approvals, and manage compliance files from a dedicated document workspace.';
     case 'meetings':
       return 'Create society meetings, manage agenda items, enable resident voting, and collect digital signatures.';
     case 'audit':
@@ -417,6 +421,7 @@ export function AdminShell() {
       {activeTab === 'helpdesk' ? <AdminHelpdesk societyId={society.id} /> : null}
       {activeTab === 'security' ? <AdminSecurity societyId={society.id} /> : null}
       {activeTab === 'announcements' ? <AdminAnnouncements societyId={society.id} /> : null}
+      {activeTab === 'documents' ? <AdminDocuments societyId={society.id} /> : null}
       {activeTab === 'meetings' ? <AdminMeetings societyId={society.id} userId={user.id} /> : null}
       {activeTab === 'audit' ? <AdminAudit societyId={society.id} /> : null}
     </PageFrame>
@@ -503,6 +508,12 @@ function PendingAccessApprovalsPanel({ societyId }: { societyId: string }) {
                   <Caption>Mobile: {mobileNumber}</Caption>
                   <Caption>Selected unit or space: {unitSummary}</Caption>
                   {request.residenceProfile?.email ? <Caption>Email: {request.residenceProfile.email}</Caption> : null}
+                  {request.residenceProfile?.businessName ? (
+                    <Caption>Business name: {request.residenceProfile.businessName}</Caption>
+                  ) : null}
+                  {request.residenceProfile?.businessDetails ? (
+                    <Caption>Business details: {request.residenceProfile.businessDetails}</Caption>
+                  ) : null}
                   {request.residenceProfile?.alternatePhone ? (
                     <Caption>Alternate mobile: {request.residenceProfile.alternatePhone}</Caption>
                   ) : null}
@@ -704,6 +715,12 @@ function AdminHome({ societyId, onOpenTab }: { societyId: string; onOpenTab: (ta
               <Caption>Units: {request.units.map((unit) => unit?.code).filter(Boolean).join(', ')}</Caption>
               {request.joinRequest.residentType === 'chairman' ? (
                 <Caption>This request must be reviewed by the super user because the society does not have a chairman yet.</Caption>
+              ) : null}
+              {request.residenceProfile?.businessName ? (
+                <Caption>Business name: {request.residenceProfile.businessName}</Caption>
+              ) : null}
+              {request.residenceProfile?.businessDetails ? (
+                <Caption>Business details: {request.residenceProfile.businessDetails}</Caption>
               ) : null}
               {request.residenceProfile ? (
                 <Caption>
@@ -936,6 +953,9 @@ function AdminHome({ societyId, onOpenTab }: { societyId: string; onOpenTab: (ta
 
 function AdminResidents({ societyId }: { societyId: string }) {
   const { state, actions } = useApp();
+  const { width } = useWindowDimensions();
+  const isCompact = width < 768;
+  const useWideDetailGrid = width >= 1120;
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null);
   const [chairmanResidentType, setChairmanResidentType] = useState<'owner' | 'tenant'>('owner');
   const currentUserId = state.session.userId;
@@ -961,7 +981,10 @@ function AdminResidents({ societyId }: { societyId: string }) {
   const [selectedLeadershipUserId, setSelectedLeadershipUserId] = useState<string>(
     leadershipCandidates[0]?.user.id ?? '',
   );
-  const activeUnitId = residents.some((entry) => entry.unit.id === selectedUnitId) ? selectedUnitId : residents[0]?.unit.id ?? null;
+  const activeUnitId = residents.some((entry) => entry.unit.id === selectedUnitId) ? selectedUnitId : null;
+  const activeResidentEntry = activeUnitId
+    ? residents.find((entry) => entry.unit.id === activeUnitId) ?? null
+    : null;
   const currentChairmanUnitIds = new Set(chairmanMembership?.unitIds ?? []);
   const currentLeadershipProfile = leadershipDirectory.find(({ user }) => user.id === currentUserId)?.leadershipProfile;
   const canEditLeadershipProfile = Boolean(
@@ -1432,92 +1455,116 @@ function AdminResidents({ societyId }: { societyId: string }) {
           ) : null}
         </SurfaceCard>
       ) : null}
-      {residents.map((entry) => {
-        const isSelected = entry.unit.id === activeUnitId;
+      <View style={styles.residentUnitGrid}>
+        {residents.map((entry) => {
+          const isSelected = entry.unit.id === activeUnitId;
+          const residentSummary = entry.residents.length > 0
+            ? entry.residents.map((resident) => resident.user.name).join(', ')
+            : 'No resident linked';
 
-        return (
-          <Pressable
-            key={entry.unit.id}
-            onPress={() => setSelectedUnitId(isSelected ? null : entry.unit.id)}
-            style={({ pressed }) => [
-              styles.interactiveCard,
-              isSelected ? styles.interactiveCardActive : null,
-              pressed ? styles.interactiveCardPressed : null,
-            ]}
-          >
-            <View style={styles.rowBetween}>
-              <Text style={styles.cardTitle}>{entry.unit.code}</Text>
-              <Pill label={entry.residents.length > 0 ? `${entry.residents.length} linked` : 'Vacant'} tone={entry.residents.length > 0 ? 'primary' : 'warning'} />
-            </View>
-            <Caption>
-              {entry.residents.length > 0
-                ? entry.residents.map((resident) => `${resident.user.name} (${resident.category})`).join(', ')
-                : 'No resident is linked yet.'}
-            </Caption>
-
-            {isSelected ? (
-              <View style={styles.detailStack}>
-                <View style={styles.detailPanel}>
-                  <Text style={styles.detailTitle}>Unit snapshot</Text>
-                  <DetailRow label="Unit type" value={entry.unit.unitType} />
-                  <DetailRow label="Building / block" value={entry.building?.name ?? 'Direct unit mapping'} />
-                  <DetailRow label="Outstanding dues" value={entry.outstandingAmount > 0 ? formatCurrency(entry.outstandingAmount) : 'None'} />
-                  <DetailRow label="Last payment" value={entry.latestPayment ? formatLongDate(entry.latestPayment.paidAt) : 'No payment recorded'} />
-                </View>
-
-                <View style={styles.detailPanel}>
-                  <Text style={styles.detailTitle}>Resident detail</Text>
-                  {entry.residents.length > 0 ? (
-                    entry.residents.map((resident) => (
-                      <View key={`${entry.unit.id}-${resident.user.id}`} style={styles.inlineSection}>
-                        <Text style={styles.inlineTitle}>{resident.user.name}</Text>
-                        <Caption>{resident.category}{resident.roles.length > 0 ? ` - ${resident.roles.map(humanizeRole).join(', ')}` : ''}</Caption>
-                        <Caption>{resident.user.phone}</Caption>
-                        <Caption>{resident.user.email}</Caption>
-                        <Caption>Started on {formatLongDate(resident.startDate)}</Caption>
-                      </View>
-                    ))
-                  ) : (
-                    <Caption>No resident detail is linked yet.</Caption>
-                  )}
-                </View>
-
-                <View style={styles.detailPanel}>
-                  <Text style={styles.detailTitle}>Domestic staff linked to this unit</Text>
-                  {entry.unitStaffRecords.length > 0 ? (
-                    entry.unitStaffRecords.map(({ staff, assignments, requestedBy, reviewedBy }) => (
-                      <View key={`${entry.unit.id}-${staff.id}`} style={styles.inlineSection}>
-                        <View style={styles.rowBetween}>
-                          <Text style={styles.inlineTitle}>{staff.name}</Text>
-                          <Pill
-                            label={humanizeVerificationState(staff.verificationState)}
-                            tone={getVerificationTone(staff.verificationState)}
-                          />
-                        </View>
-                        <Caption>{humanizeStaffCategory(staff.category)} - {staff.phone}</Caption>
-                        <Caption>
-                          Submitted by {requestedBy?.name ?? 'Unknown resident'} on{' '}
-                          {staff.requestedAt ? formatLongDate(staff.requestedAt) : 'date not recorded'}
-                        </Caption>
-                        <Caption>
-                          {reviewedBy && staff.reviewedAt
-                            ? `Reviewed by ${reviewedBy.name} on ${formatLongDate(staff.reviewedAt)}`
-                            : 'Awaiting chairman review'}
-                        </Caption>
-                        {getAssignmentSummaries(assignments).map((summary) => (
-                          <Caption key={`${staff.id}-${summary}`}>{summary}</Caption>
-                        ))}
-                      </View>
-                    ))
-                  ) : (
-                    <Caption>No domestic staff is linked to this unit.</Caption>
-                  )}
-                </View>
+          return (
+            <Pressable
+              key={entry.unit.id}
+              onPress={() => setSelectedUnitId(isSelected ? null : entry.unit.id)}
+              style={({ pressed }) => [
+                styles.residentUnitTile,
+                isSelected ? styles.residentUnitTileActive : null,
+                pressed ? styles.residentUnitTilePressed : null,
+              ]}
+            >
+              <View style={styles.residentUnitTileHeader}>
+                <Text style={styles.residentUnitCode}>{entry.unit.code}</Text>
+                <Pill
+                  label={entry.residents.length > 0 ? `${entry.residents.length}` : '0'}
+                  tone={entry.residents.length > 0 ? 'primary' : 'warning'}
+                />
               </View>
-            ) : null}
-          </Pressable>
-        );
-      })}
+              {!isCompact && entry.building?.name ? (
+                <Caption style={styles.residentUnitBuilding}>{entry.building.name}</Caption>
+              ) : null}
+              <Text style={styles.residentUnitResidents} numberOfLines={2}>
+                {residentSummary}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+      {activeResidentEntry ? (
+        <SurfaceCard style={styles.residentExpandedCard}>
+          <SectionHeader
+            title={`${activeResidentEntry.unit.code} details`}
+            description="Selected unit details are shown here so the grid above stays compact."
+          />
+          <View style={[styles.residentDetailGrid, useWideDetailGrid ? styles.residentDetailGridWide : null]}>
+            <View style={[styles.residentDetailPanel, useWideDetailGrid ? styles.residentDetailPanelWide : null]}>
+              <Text style={styles.detailTitle}>Unit snapshot</Text>
+              <DetailRow label="Unit type" value={activeResidentEntry.unit.unitType} />
+              <DetailRow label="Building / block" value={activeResidentEntry.building?.name ?? 'Direct unit mapping'} />
+              <DetailRow label="Outstanding dues" value={activeResidentEntry.outstandingAmount > 0 ? formatCurrency(activeResidentEntry.outstandingAmount) : 'None'} />
+              <DetailRow label="Last payment" value={activeResidentEntry.latestPayment ? formatLongDate(activeResidentEntry.latestPayment.paidAt) : 'No payment recorded'} />
+            </View>
+
+            <View style={[styles.residentDetailPanel, useWideDetailGrid ? styles.residentDetailPanelWide : null]}>
+              <Text style={styles.detailTitle}>Resident detail</Text>
+              {activeResidentEntry.residents.length > 0 ? (
+                <View style={styles.residentDetailList}>
+                  {activeResidentEntry.residents.map((resident) => (
+                    <View key={`${activeResidentEntry.unit.id}-${resident.user.id}`} style={styles.residentDetailItem}>
+                      <Text style={styles.inlineTitle}>{resident.user.name}</Text>
+                      <Caption>{resident.category}{resident.roles.length > 0 ? ` - ${resident.roles.map(humanizeRole).join(', ')}` : ''}</Caption>
+                      {resident.residenceProfile?.businessName ? (
+                        <Caption>Business: {resident.residenceProfile.businessName}</Caption>
+                      ) : null}
+                      {resident.residenceProfile?.businessDetails ? (
+                        <Caption>{resident.residenceProfile.businessDetails}</Caption>
+                      ) : null}
+                      <Caption>{resident.user.phone}</Caption>
+                      <Caption>{resident.user.email}</Caption>
+                      <Caption>Started on {formatLongDate(resident.startDate)}</Caption>
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Caption>No resident detail is linked yet.</Caption>
+              )}
+            </View>
+
+            <View style={[styles.residentDetailPanel, useWideDetailGrid ? styles.residentDetailPanelWide : null]}>
+              <Text style={styles.detailTitle}>Domestic staff linked to this unit</Text>
+              {activeResidentEntry.unitStaffRecords.length > 0 ? (
+                <View style={styles.residentDetailList}>
+                  {activeResidentEntry.unitStaffRecords.map(({ staff, assignments, requestedBy, reviewedBy }) => (
+                    <View key={`${activeResidentEntry.unit.id}-${staff.id}`} style={styles.residentDetailItem}>
+                      <View style={styles.rowBetween}>
+                        <Text style={styles.inlineTitle}>{staff.name}</Text>
+                        <Pill
+                          label={humanizeVerificationState(staff.verificationState)}
+                          tone={getVerificationTone(staff.verificationState)}
+                        />
+                      </View>
+                      <Caption>{humanizeStaffCategory(staff.category)} - {staff.phone}</Caption>
+                      <Caption>
+                        Submitted by {requestedBy?.name ?? 'Unknown resident'} on{' '}
+                        {staff.requestedAt ? formatLongDate(staff.requestedAt) : 'date not recorded'}
+                      </Caption>
+                      <Caption>
+                        {reviewedBy && staff.reviewedAt
+                          ? `Reviewed by ${reviewedBy.name} on ${formatLongDate(staff.reviewedAt)}`
+                          : 'Awaiting chairman review'}
+                      </Caption>
+                      {getAssignmentSummaries(assignments).map((summary) => (
+                        <Caption key={`${staff.id}-${summary}`}>{summary}</Caption>
+                      ))}
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Caption>No domestic staff is linked to this unit.</Caption>
+              )}
+            </View>
+          </View>
+        </SurfaceCard>
+      ) : null}
     </>
   );
 }
@@ -1539,6 +1586,11 @@ function AdminBilling({ societyId }: { societyId: string }) {
   const [upiId, setUpiId] = useState('');
   const [upiMobileNumber, setUpiMobileNumber] = useState('');
   const [upiPayeeName, setUpiPayeeName] = useState('');
+  const [bankAccountName, setBankAccountName] = useState('');
+  const [bankAccountNumber, setBankAccountNumber] = useState('');
+  const [bankIfscCode, setBankIfscCode] = useState('');
+  const [bankName, setBankName] = useState('');
+  const [bankBranchName, setBankBranchName] = useState('');
   const [upiQrCodeDataUrl, setUpiQrCodeDataUrl] = useState('');
   const [upiQrPayload, setUpiQrPayload] = useState('');
   const [qrUploadMessage, setQrUploadMessage] = useState('');
@@ -1568,6 +1620,11 @@ function AdminBilling({ societyId }: { societyId: string }) {
     setUpiId(plan?.upiId?.trim() ?? '');
     setUpiMobileNumber(plan?.upiMobileNumber?.trim() ?? '');
     setUpiPayeeName(plan?.upiPayeeName?.trim() || society?.name || '');
+    setBankAccountName(plan?.bankAccountName?.trim() || society?.name || '');
+    setBankAccountNumber(plan?.bankAccountNumber?.trim() ?? '');
+    setBankIfscCode(plan?.bankIfscCode?.trim() ?? '');
+    setBankName(plan?.bankName?.trim() ?? '');
+    setBankBranchName(plan?.bankBranchName?.trim() ?? '');
     setUpiQrCodeDataUrl(plan?.upiQrCodeDataUrl?.trim() ?? '');
     setUpiQrPayload(plan?.upiQrPayload?.trim() ?? '');
     setQrUploadMessage('');
@@ -1580,6 +1637,11 @@ function AdminBilling({ societyId }: { societyId: string }) {
     plan?.upiId,
     plan?.upiMobileNumber,
     plan?.upiPayeeName,
+    plan?.bankAccountName,
+    plan?.bankAccountNumber,
+    plan?.bankIfscCode,
+    plan?.bankName,
+    plan?.bankBranchName,
     plan?.upiQrCodeDataUrl,
     plan?.upiQrPayload,
     society?.name,
@@ -1625,6 +1687,11 @@ function AdminBilling({ societyId }: { societyId: string }) {
       upiPayeeName,
       upiQrCodeDataUrl,
       upiQrPayload,
+      bankAccountName,
+      bankAccountNumber,
+      bankIfscCode,
+      bankName,
+      bankBranchName,
     });
   }
 
@@ -1718,8 +1785,8 @@ function AdminBilling({ societyId }: { societyId: string }) {
             onPress={() => setBillingFocus((current) => (current === 'expenses' ? 'all' : 'expenses'))}
           />
           <MetricCard
-            label={billingFocus === 'plan' ? 'UPI configured - selected' : 'UPI configured'}
-            value={plan?.upiId || plan?.upiMobileNumber || plan?.upiQrCodeDataUrl ? 'Yes' : 'No'}
+            label={billingFocus === 'plan' ? 'Receivers configured - selected' : 'Receivers configured'}
+            value={plan?.upiId || plan?.upiMobileNumber || plan?.upiQrCodeDataUrl || plan?.bankAccountNumber ? 'Yes' : 'No'}
             tone="primary"
             onPress={() => setBillingFocus((current) => (current === 'plan' ? 'all' : 'plan'))}
           />
@@ -1814,6 +1881,54 @@ function AdminBilling({ societyId }: { societyId: string }) {
               </View>
             </View>
             <View style={styles.inlineSection}>
+              <Text style={styles.inlineTitle}>Bank transfer details</Text>
+              <Caption>Add the receiver bank details residents can use for NEFT, RTGS, or IMPS transfers.</Caption>
+              <View style={styles.formGrid}>
+                <View style={styles.formField}>
+                  <InputField
+                    label="Account holder name"
+                    value={bankAccountName}
+                    onChangeText={setBankAccountName}
+                    placeholder="Society billing account"
+                  />
+                </View>
+                <View style={styles.formField}>
+                  <InputField
+                    label="Account number"
+                    value={bankAccountNumber}
+                    onChangeText={setBankAccountNumber}
+                    keyboardType="numeric"
+                    placeholder="123456789012"
+                  />
+                </View>
+                <View style={styles.formField}>
+                  <InputField
+                    label="IFSC code"
+                    value={bankIfscCode}
+                    onChangeText={(value) => setBankIfscCode(value.toUpperCase())}
+                    autoCapitalize="characters"
+                    placeholder="HDFC0001234"
+                  />
+                </View>
+                <View style={styles.formField}>
+                  <InputField
+                    label="Bank name"
+                    value={bankName}
+                    onChangeText={setBankName}
+                    placeholder="HDFC Bank"
+                  />
+                </View>
+                <View style={styles.formField}>
+                  <InputField
+                    label="Branch name (optional)"
+                    value={bankBranchName}
+                    onChangeText={setBankBranchName}
+                    placeholder="Odhav Branch"
+                  />
+                </View>
+              </View>
+            </View>
+            <View style={styles.inlineSection}>
               <Text style={styles.inlineTitle}>UPI QR code</Text>
               <Caption>Upload a QR image so residents can scan it directly from their billing screen.</Caption>
               <View style={styles.heroActions}>
@@ -1848,7 +1963,7 @@ function AdminBilling({ societyId }: { societyId: string }) {
               {upiQrPayload ? <Caption>Decoded QR payload is ready and will be used for direct app-open payments.</Caption> : null}
             </View>
             <ActionButton
-              label={state.isSyncing ? 'Saving...' : 'Save UPI billing setup'}
+              label={state.isSyncing ? 'Saving...' : 'Save payment receiver setup'}
               onPress={handleSaveBillingConfig}
               disabled={state.isSyncing}
             />
@@ -3357,7 +3472,7 @@ function AdminSecurity({ societyId }: { societyId: string }) {
   );
 }
 
-type AdminCommunicationsFocus = 'all' | 'announcements' | 'highPriority' | 'rules' | 'documents';
+type AdminCommunicationsFocus = 'all' | 'announcements' | 'highPriority' | 'rules';
 
 function AdminAnnouncements({ societyId }: { societyId: string }) {
   const { state, actions } = useApp();
@@ -3365,7 +3480,6 @@ function AdminAnnouncements({ societyId }: { societyId: string }) {
   const society = getSelectedSociety(state.data, societyId);
   const announcements = getAnnouncementsForSociety(state.data, societyId);
   const rules = getRulesForSociety(state.data, societyId);
-  const societyDocuments = getSocietyDocuments(state.data, societyId);
   const [selectedTemplateKey, setSelectedTemplateKey] = useState('custom');
   const [announcementTitle, setAnnouncementTitle] = useState('');
   const [announcementBody, setAnnouncementBody] = useState('');
@@ -3373,21 +3487,12 @@ function AdminAnnouncements({ societyId }: { societyId: string }) {
   const [announcementPhotoMessage, setAnnouncementPhotoMessage] = useState('');
   const [announcementAudience, setAnnouncementAudience] = useState<AnnouncementAudience>('all');
   const [announcementPriority, setAnnouncementPriority] = useState<AnnouncementPriority>('normal');
-  const [documentCategory, setDocumentCategory] = useState<SocietyDocumentCategory>('liftLicense');
-  const [documentTitle, setDocumentTitle] = useState('');
-  const [documentSummary, setDocumentSummary] = useState('');
-  const [documentIssuedOn, setDocumentIssuedOn] = useState('');
-  const [documentValidUntil, setDocumentValidUntil] = useState('');
-  const [documentFileName, setDocumentFileName] = useState('');
-  const [documentFileDataUrl, setDocumentFileDataUrl] = useState('');
-  const [documentUploadMessage, setDocumentUploadMessage] = useState('');
   const highPriorityAnnouncements = announcements.filter((announcement) => announcement.priority === 'high').length;
   const visibleAnnouncements = communicationsFocus === 'highPriority'
     ? announcements.filter((announcement) => announcement.priority === 'high')
     : announcements;
   const showAnnouncementSection = communicationsFocus === 'all' || communicationsFocus === 'announcements' || communicationsFocus === 'highPriority';
   const showRulesSection = communicationsFocus === 'all' || communicationsFocus === 'rules';
-  const showDocumentsSection = communicationsFocus === 'all' || communicationsFocus === 'documents';
 
   async function handleSendAnnouncement() {
     const saved = await actions.createAnnouncement(societyId, {
@@ -3437,51 +3542,6 @@ function AdminAnnouncements({ societyId }: { societyId: string }) {
     }
   }
 
-  async function handleSocietyDocumentSelection() {
-    try {
-      const selectedFile = await pickWebFileAsDataUrl({
-        accept: 'application/pdf,image/png,image/jpeg,image/webp',
-        maxSizeInBytes: 5 * 1024 * 1024,
-        unsupportedMessage: 'Society document upload is currently available from the web workspace.',
-        tooLargeMessage: 'Choose a document smaller than 5 MB.',
-        readErrorMessage: 'Could not read the selected document.',
-      });
-
-      if (!selectedFile) {
-        return;
-      }
-
-      setDocumentFileName(selectedFile.fileName);
-      setDocumentFileDataUrl(selectedFile.dataUrl);
-      setDocumentUploadMessage(`${selectedFile.fileName} is ready to publish for residents.`);
-    } catch (error) {
-      setDocumentUploadMessage(error instanceof Error ? error.message : 'Could not attach the document.');
-    }
-  }
-
-  async function handleCreateSocietyDocument() {
-    const saved = await actions.createSocietyDocument(societyId, {
-      category: documentCategory,
-      title: documentTitle,
-      fileName: documentFileName,
-      fileDataUrl: documentFileDataUrl,
-      summary: documentSummary || undefined,
-      issuedOn: documentIssuedOn || undefined,
-      validUntil: documentValidUntil || undefined,
-    });
-
-    if (saved) {
-      setDocumentCategory('liftLicense');
-      setDocumentTitle('');
-      setDocumentSummary('');
-      setDocumentIssuedOn('');
-      setDocumentValidUntil('');
-      setDocumentFileName('');
-      setDocumentFileDataUrl('');
-      setDocumentUploadMessage('');
-    }
-  }
-
   function applyAnnouncementTemplate(templateKey: string) {
     if (templateKey === 'custom') {
       setSelectedTemplateKey('custom');
@@ -3510,18 +3570,17 @@ function AdminAnnouncements({ societyId }: { societyId: string }) {
     <>
       <SectionHeader
         title="Announcements hub"
-        description="Publish targeted resident communication, manage priority notices, and keep policy documents visible from one unified communications module."
+        description="Publish targeted resident communication, manage priority notices, and keep policy updates visible from one clean communications module."
       />
       <SurfaceCard>
         <View style={styles.metricGrid}>
           <MetricCard label={communicationsFocus === 'announcements' || communicationsFocus === 'all' ? 'Announcements - selected' : 'Announcements'} value={String(announcements.length)} tone="primary" onPress={() => setCommunicationsFocus((current) => (current === 'announcements' ? 'all' : 'announcements'))} />
           <MetricCard label={communicationsFocus === 'highPriority' ? 'High priority - selected' : 'High priority'} value={String(highPriorityAnnouncements)} tone="accent" onPress={() => setCommunicationsFocus((current) => (current === 'highPriority' ? 'all' : 'highPriority'))} />
           <MetricCard label={communicationsFocus === 'rules' ? 'Rules - selected' : 'Rules'} value={String(rules.length)} tone="blue" onPress={() => setCommunicationsFocus((current) => (current === 'rules' ? 'all' : 'rules'))} />
-          <MetricCard label={communicationsFocus === 'documents' ? 'Compliance docs - selected' : 'Compliance docs'} value={String(societyDocuments.length)} tone="primary" onPress={() => setCommunicationsFocus((current) => (current === 'documents' ? 'all' : 'documents'))} />
         </View>
         <View style={styles.inlineSection}>
           <Caption>
-            Start with the summary above, then publish a new announcement or review the current notice feed and rule documents below.
+            Start with the summary above, then publish a new announcement or review the current notice feed and rule updates below.
           </Caption>
         </View>
       </SurfaceCard>
@@ -3704,11 +3763,90 @@ function AdminAnnouncements({ societyId }: { societyId: string }) {
           {rule.summary ? <Caption>{rule.summary}</Caption> : null}
         </SurfaceCard>
       )) : null}
-      {showDocumentsSection ? (
+    </>
+  );
+}
+
+function AdminDocuments({ societyId }: { societyId: string }) {
+  const { state, actions } = useApp();
+  const societyDocuments = getSocietyDocuments(state.data, societyId);
+  const pendingDocumentDownloadRequests = getPendingSocietyDocumentDownloadRequests(state.data, societyId);
+  const [documentCategory, setDocumentCategory] = useState<SocietyDocumentCategory>('liftLicense');
+  const [documentTitle, setDocumentTitle] = useState('');
+  const [documentSummary, setDocumentSummary] = useState('');
+  const [documentIssuedOn, setDocumentIssuedOn] = useState('');
+  const [documentValidUntil, setDocumentValidUntil] = useState('');
+  const [documentFileName, setDocumentFileName] = useState('');
+  const [documentFileDataUrl, setDocumentFileDataUrl] = useState('');
+  const [documentUploadMessage, setDocumentUploadMessage] = useState('');
+
+  async function handleSocietyDocumentSelection() {
+    try {
+      const selectedFile = await pickWebFileAsDataUrl({
+        accept: 'application/pdf,image/png,image/jpeg,image/webp',
+        maxSizeInBytes: 5 * 1024 * 1024,
+        unsupportedMessage: 'Society document upload is currently available from the web workspace.',
+        tooLargeMessage: 'Choose a document smaller than 5 MB.',
+        readErrorMessage: 'Could not read the selected document.',
+      });
+
+      if (!selectedFile) {
+        return;
+      }
+
+      setDocumentFileName(selectedFile.fileName);
+      setDocumentFileDataUrl(selectedFile.dataUrl);
+      setDocumentUploadMessage(`${selectedFile.fileName} is ready to publish for residents.`);
+    } catch (error) {
+      setDocumentUploadMessage(error instanceof Error ? error.message : 'Could not attach the document.');
+    }
+  }
+
+  async function handleCreateSocietyDocument() {
+    const saved = await actions.createSocietyDocument(societyId, {
+      category: documentCategory,
+      title: documentTitle,
+      fileName: documentFileName,
+      fileDataUrl: documentFileDataUrl,
+      summary: documentSummary || undefined,
+      issuedOn: documentIssuedOn || undefined,
+      validUntil: documentValidUntil || undefined,
+    });
+
+    if (saved) {
+      setDocumentCategory('liftLicense');
+      setDocumentTitle('');
+      setDocumentSummary('');
+      setDocumentIssuedOn('');
+      setDocumentValidUntil('');
+      setDocumentFileName('');
+      setDocumentFileDataUrl('');
+      setDocumentUploadMessage('');
+    }
+  }
+
+  return (
+    <>
+      <SectionHeader
+        title="Documents workspace"
+        description="Upload society office records, keep resident-facing compliance files organized, and review download approvals from one dedicated module."
+      />
+      <SurfaceCard>
+        <View style={styles.metricGrid}>
+          <MetricCard label="Published docs" value={String(societyDocuments.length)} tone="primary" />
+          <MetricCard label="Pending approvals" value={String(pendingDocumentDownloadRequests.length)} tone="accent" />
+        </View>
+        <View style={styles.inlineSection}>
+          <Caption>
+            Use this workspace for shared records like common-light bills, legal documents, certificates, and other office files that residents may view or request to download.
+          </Caption>
+        </View>
+      </SurfaceCard>
+
       <SurfaceCard>
         <SectionHeader
-          title="Compliance and utility records"
-          description="Upload resident-visible shared records like lift licenses, common-light bills, fire safety certificates, and other office documents."
+          title="Upload document"
+          description="Publish resident-visible shared records like lift licenses, common-light bills, fire safety certificates, and other society office documents."
         />
         <View style={styles.inlineSection}>
           <Text style={styles.inlineTitle}>Document type</Text>
@@ -3759,9 +3897,13 @@ function AdminAnnouncements({ societyId }: { societyId: string }) {
         <View style={styles.inlineSection}>
           <Text style={styles.inlineTitle}>Attachment</Text>
           <View style={styles.choiceRow}>
-            <ActionButton label={documentFileDataUrl ? 'Replace file' : 'Upload file'} variant="secondary" onPress={() => {
-              void handleSocietyDocumentSelection();
-            }} />
+            <ActionButton
+              label={documentFileDataUrl ? 'Replace file' : 'Upload file'}
+              variant="secondary"
+              onPress={() => {
+                void handleSocietyDocumentSelection();
+              }}
+            />
             {documentFileDataUrl ? (
               <ActionButton
                 label="Open file"
@@ -3792,8 +3934,55 @@ function AdminAnnouncements({ societyId }: { societyId: string }) {
           disabled={state.isSyncing || !documentTitle.trim() || !documentFileName || !documentFileDataUrl}
         />
       </SurfaceCard>
-      ) : null}
-      {showDocumentsSection && societyDocuments.length > 0 ? societyDocuments.map((document) => (
+
+      <SurfaceCard>
+        <SectionHeader
+          title="Resident download approval queue"
+          description="Residents can view published records anytime, but downloadable copies need approval from this queue."
+        />
+        {pendingDocumentDownloadRequests.length > 0 ? pendingDocumentDownloadRequests.map((entry) => (
+          <View key={entry.request.id} style={styles.requestCard}>
+            <View style={styles.rowBetween}>
+              <Text style={styles.cardTitle}>{entry.document?.title ?? 'Document request'}</Text>
+              <Pill label="Pending approval" tone="warning" />
+            </View>
+            <Caption>
+              Requested by {entry.requester?.name ?? 'Resident'}
+              {entry.units.length > 0 ? ` | ${entry.units.map((unit) => unit.code).join(', ')}` : ''}
+            </Caption>
+            <Caption>
+              Requested on {formatLongDate(entry.request.requestedAt)}
+              {entry.document ? ` | File: ${entry.document.fileName}` : ''}
+            </Caption>
+            {entry.request.requestNote ? <Caption>Resident note: {entry.request.requestNote}</Caption> : null}
+            <View style={styles.heroActions}>
+              <ActionButton
+                label={state.isSyncing ? 'Approving...' : 'Approve download'}
+                onPress={() => {
+                  void actions.reviewSocietyDocumentDownloadRequest(societyId, entry.request.id, {
+                    decision: 'approve',
+                  });
+                }}
+                disabled={state.isSyncing}
+              />
+              <ActionButton
+                label="Reject"
+                variant="secondary"
+                onPress={() => {
+                  void actions.reviewSocietyDocumentDownloadRequest(societyId, entry.request.id, {
+                    decision: 'reject',
+                  });
+                }}
+                disabled={state.isSyncing}
+              />
+            </View>
+          </View>
+        )) : (
+          <Caption>No resident download approvals are waiting right now.</Caption>
+        )}
+      </SurfaceCard>
+
+      {societyDocuments.length > 0 ? societyDocuments.map((document) => (
         <SurfaceCard key={document.id}>
           <View style={styles.rowBetween}>
             <Text style={styles.cardTitle}>{document.title}</Text>
@@ -3817,9 +4006,9 @@ function AdminAnnouncements({ societyId }: { societyId: string }) {
           </View>
         </SurfaceCard>
       )) : (
-        showDocumentsSection ? <SurfaceCard>
+        <SurfaceCard>
           <Caption>No compliance or utility records uploaded yet.</Caption>
-        </SurfaceCard> : null
+        </SurfaceCard>
       )}
     </>
   );
@@ -4479,6 +4668,39 @@ const styles = StyleSheet.create({
     ...shadow.card,
   },
   recommendationTitle: { fontSize: 16, fontWeight: '800', color: palette.ink },
+  residentUnitGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  residentUnitTile: {
+    flexGrow: 1,
+    flexBasis: 220,
+    minWidth: 180,
+    maxWidth: 260,
+    backgroundColor: '#FFFBF7',
+    borderRadius: 18,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    gap: 4,
+    borderWidth: 1,
+    borderColor: '#E8DDCF',
+    ...shadow.card,
+  },
+  residentUnitTileActive: { borderColor: '#F0C07C', backgroundColor: '#FFF5E8' },
+  residentUnitTilePressed: { opacity: 0.9 },
+  residentUnitTileHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: spacing.xs,
+  },
+  residentUnitHeadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    flexWrap: 'wrap',
+  },
+  residentUnitCode: { fontSize: 17, fontWeight: '800', color: palette.ink },
+  residentUnitBuilding: { fontSize: 12, fontWeight: '700', color: palette.mutedInk },
+  residentUnitResidents: { fontSize: 13, lineHeight: 18, color: palette.mutedInk },
+  residentExpandedCard: { gap: spacing.md },
   interactiveCard: {
     backgroundColor: '#FFFBF7',
     borderRadius: 24,
@@ -4503,6 +4725,28 @@ const styles = StyleSheet.create({
   officeStatusChipPressed: { opacity: 0.88 },
   officeStatusChipLabel: { fontSize: 13, fontWeight: '700' },
   detailStack: { gap: spacing.md, paddingTop: spacing.sm },
+  residentDetailGrid: { gap: spacing.sm, paddingTop: spacing.xs },
+  residentDetailGridWide: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start' },
+  residentDetailPanel: {
+    gap: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: 18,
+    backgroundColor: '#FFF9F2',
+    borderWidth: 1,
+    borderColor: '#E7DDD0',
+  },
+  residentDetailPanelWide: {
+    flexGrow: 1,
+    flexBasis: 280,
+    minWidth: 260,
+  },
+  residentDetailList: { gap: spacing.sm },
+  residentDetailItem: {
+    gap: 4,
+    paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: '#F0E5D8',
+  },
   detailPanel: {
     gap: spacing.sm,
     padding: spacing.md,

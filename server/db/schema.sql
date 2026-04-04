@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS societies (
   apartmentUnitCount INTEGER,
   bungalowUnitCount INTEGER,
   shedUnitCount INTEGER,
+  shedBlockPlan TEXT,
   officeFloorPlan TEXT,
   timezone TEXT NOT NULL,
   totalUnits INTEGER NOT NULL,
@@ -89,7 +90,10 @@ CREATE TABLE IF NOT EXISTS residenceProfiles (
   residentType TEXT NOT NULL,
   fullName TEXT NOT NULL,
   phone TEXT NOT NULL,
+  photoDataUrl TEXT,
   email TEXT,
+  businessName TEXT,
+  businessDetails TEXT,
   alternatePhone TEXT,
   emergencyContactName TEXT,
   emergencyContactPhone TEXT,
@@ -204,6 +208,24 @@ CREATE TABLE IF NOT EXISTS societyDocuments (
   FOREIGN KEY (uploadedByUserId) REFERENCES users(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS societyDocumentDownloadRequests (
+  id TEXT PRIMARY KEY,
+  societyId TEXT NOT NULL,
+  documentId TEXT NOT NULL,
+  requesterUserId TEXT NOT NULL,
+  status TEXT NOT NULL,
+  requestNote TEXT,
+  requestedAt TEXT NOT NULL,
+  reviewedAt TEXT,
+  reviewedByUserId TEXT,
+  reviewNote TEXT,
+  accessExpiresAt TEXT,
+  FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE,
+  FOREIGN KEY (documentId) REFERENCES societyDocuments(id) ON DELETE CASCADE,
+  FOREIGN KEY (requesterUserId) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (reviewedByUserId) REFERENCES users(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS amenities (
   id TEXT PRIMARY KEY,
   societyId TEXT NOT NULL,
@@ -259,6 +281,11 @@ CREATE TABLE IF NOT EXISTS maintenancePlans (
   upiPayeeName TEXT,
   upiQrCodeDataUrl TEXT,
   upiQrPayload TEXT,
+  bankAccountName TEXT,
+  bankAccountNumber TEXT,
+  bankIfscCode TEXT,
+  bankName TEXT,
+  bankBranchName TEXT,
   FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE
 );
 
@@ -406,8 +433,8 @@ CREATE TABLE IF NOT EXISTS securityShifts (
   id TEXT PRIMARY KEY,
   guardId TEXT NOT NULL,
   societyId TEXT NOT NULL,
-  start TEXT NOT NULL,
-  end TEXT NOT NULL,
+  "start" TEXT NOT NULL,
+  "end" TEXT NOT NULL,
   gate TEXT NOT NULL,
   FOREIGN KEY (guardId) REFERENCES securityGuards(id) ON DELETE CASCADE,
   FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE

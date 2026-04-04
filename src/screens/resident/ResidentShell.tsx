@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import * as Clipboard from 'expo-clipboard';
 import { Image, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type ImageSourcePropType } from 'react-native';
 
 import {
@@ -21,6 +22,7 @@ import { useApp } from '../../state/AppContext';
 import { palette, radius, shadow, spacing } from '../../theme/tokens';
 import { openPhoneDialer, openWhatsAppConversation, startRingAlert, stopRingAlert } from '../../utils/communication';
 import {
+  downloadUploadedFileDataUrl,
   openUploadedFileDataUrl,
   openWebDataUrlInNewTab,
   pickWebFileAsDataUrl,
@@ -46,6 +48,7 @@ import {
   getGuardRosterForSociety,
   getLeadershipProfilesForSociety,
   getImportantContactsForSociety,
+  getJoinRequestsForSociety,
   getMeetingAgendaItems,
   getMeetingSignatures,
   getMeetingsForSociety,
@@ -57,6 +60,7 @@ import {
   getResidenceProfileForUserSociety,
   getResidentOverview,
   getRulesForSociety,
+  getLatestSocietyDocumentDownloadRequestForUser,
   getSocietyDocuments,
   getSocietyChatThread,
   getSecurityGuestConversationForRequest,
@@ -67,6 +71,7 @@ import {
   getUnitsForSociety,
   getVehicleDirectoryForSociety,
   getVisitorPassesForUserSociety,
+  isSocietyDocumentDownloadRequestActive,
   humanizeMeetingStatus,
   humanizeMeetingType,
   getMeetingStatusTone,
@@ -83,11 +88,11 @@ import {
   VisitorCategory,
 } from '../../types/domain';
 
-type ResidentTab = 'home' | 'visitors' | 'community' | 'billing' | 'notices' | 'bookings' | 'meetings' | 'helpdesk' | 'profile';
+type ResidentTab = 'home' | 'visitors' | 'community' | 'billing' | 'notices' | 'documents' | 'bookings' | 'meetings' | 'helpdesk' | 'profile';
 type ResidentCommunitySection = 'members' | 'vehicles' | 'contacts' | 'staff' | 'chat';
 type ResidentVisitorsSection = 'create' | 'approvals' | 'history' | 'desk';
 type ResidentBillingSection = 'pay' | 'reminders' | 'outstanding' | 'history';
-type ResidentNoticeSection = 'announcements' | 'unread' | 'priority' | 'rules' | 'documents';
+type ResidentNoticeSection = 'announcements' | 'unread' | 'priority' | 'rules';
 type ResidentBookingsSection = 'booking' | 'amenities' | 'history';
 type ResidentProfileSection = 'household' | 'contacts' | 'vehicles';
 type AmenityRecord = SeedData['amenities'][number];
@@ -108,6 +113,7 @@ const residentTabs: Array<{ key: ResidentTab; label: string }> = [
   { key: 'community', label: 'Community' },
   { key: 'billing', label: 'Billing' },
   { key: 'notices', label: 'Notices' },
+  { key: 'documents', label: 'Documents' },
   { key: 'bookings', label: 'Bookings' },
   { key: 'meetings', label: 'Meetings' },
   { key: 'helpdesk', label: 'Helpdesk' },
@@ -289,6 +295,7 @@ function getResidentBottomTabKey(
     case 'helpdesk':
       return 'bookings';
     case 'notices':
+    case 'documents':
       return 'home';
     default:
       return activeTab as 'home' | 'community' | 'bookings' | 'billing' | 'profile';
@@ -305,6 +312,8 @@ function getResidentTabDescription(activeTab: ResidentTab) {
       return 'Stay on top of maintenance dues, receipts, reminders, and payment history.';
     case 'notices':
       return 'Read society announcements, updates, and resident-facing policy information.';
+    case 'documents':
+      return 'Browse society records, open shared files, and request downloadable copies that require admin approval.';
     case 'bookings':
       return 'Manage amenity requests, schedules, and service-oriented daily actions.';
     case 'meetings':
@@ -316,6 +325,33 @@ function getResidentTabDescription(activeTab: ResidentTab) {
     case 'home':
     default:
       return 'A cleaner society home experience built around the tasks residents use every day.';
+  }
+}
+
+function getResidentTabBadge(activeTab: ResidentTab) {
+  switch (activeTab) {
+    case 'home':
+      return 'HM';
+    case 'visitors':
+      return 'VS';
+    case 'community':
+      return 'CM';
+    case 'billing':
+      return 'BL';
+    case 'notices':
+      return 'NT';
+    case 'documents':
+      return 'DC';
+    case 'bookings':
+      return 'BK';
+    case 'meetings':
+      return 'MT';
+    case 'helpdesk':
+      return 'HD';
+    case 'profile':
+      return 'PF';
+    default:
+      return 'RS';
   }
 }
 
@@ -563,6 +599,7 @@ export function ResidentShell() {
   const { width } = useWindowDimensions();
   const isCompact = width < 768;
   const isPhone = width < 420;
+  const phoneDrawerWidth = Math.min(width - 28, 320);
 
   if (!state.session.userId || !state.session.selectedSocietyId) {
     return null;
@@ -581,8 +618,18 @@ export function ResidentShell() {
   }
 
   const overview = getResidentOverview(state.data, user.id, society.id);
+  const unitIds = new Set(membership.unitIds);
+  const units = getUnitsForSociety(state.data, society.id).filter((unit) => unitIds.has(unit.id));
+  const primaryUnitLabel = units[0]?.code ?? 'Resident';
+  const residenceProfile = getResidenceProfileForUserSociety(state.data, user.id, society.id);
+  const residentPhotoDataUrl = residenceProfile?.photoDataUrl ?? '';
   const profiles = deriveProfiles(membership.roles);
   const canUseAdmin = profiles.includes('admin');
+  const pendingAccessApprovals = canUseAdmin
+    ? getJoinRequestsForSociety(state.data, society.id, 'pending').filter(
+        (request) => request.joinRequest.residentType !== 'chairman',
+      )
+    : [];
   const activeBottomTab = getResidentBottomTabKey(activeTab);
 
   return (
@@ -642,22 +689,49 @@ export function ResidentShell() {
       {isCompact ? (
         <SurfaceCard style={[styles.compactWorkspaceCard, isPhone ? styles.compactWorkspaceCardPhone : null]}>
           <View style={[styles.compactWorkspaceTopRow, isPhone ? styles.compactWorkspaceTopRowPhone : null]}>
+            {isPhone ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setIsDrawerOpen(true)}
+                style={({ pressed }) => [styles.phoneMenuButton, pressed ? styles.leftDrawerHandlePressed : null]}
+              >
+                {residentPhotoDataUrl ? (
+                  <Image source={{ uri: residentPhotoDataUrl }} style={styles.phoneMenuAvatarImage} />
+                ) : (
+                  <View style={styles.phoneMenuAvatarFallback}>
+                    <Text style={styles.phoneMenuAvatarFallbackText}>{user.avatarInitials}</Text>
+                  </View>
+                )}
+              </Pressable>
+            ) : null}
             <View style={styles.compactWorkspaceTitleWrap}>
               <Pill label="Resident" tone="accent" />
               <Text style={[styles.compactWorkspaceTitle, isPhone ? styles.compactWorkspaceTitlePhone : null]}>{society.name}</Text>
               <Caption>{user.name.split(' ')[0]} | {residentTabs.find((item) => item.key === activeTab)?.label ?? 'Home'}</Caption>
             </View>
             <View style={styles.compactWorkspaceStatsRow}>
-              <View style={[styles.compactWorkspaceStat, isPhone ? styles.compactWorkspaceStatPhone : null]}>
-                <Text style={[styles.compactWorkspaceStatValue, isPhone ? styles.compactWorkspaceStatValuePhone : null]}>{overview.unreadAnnouncements.length}</Text>
-                <Caption>Unread</Caption>
-              </View>
-              <View style={[styles.compactWorkspaceStat, isPhone ? styles.compactWorkspaceStatPhone : null]}>
-                <Text style={[styles.compactWorkspaceStatValue, isPhone ? styles.compactWorkspaceStatValuePhone : null]}>
-                  {overview.myComplaints.filter((item) => item.status !== 'resolved').length}
-                </Text>
-                <Caption>Open</Caption>
-              </View>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setActiveTab('notices')}
+                style={({ pressed }) => [styles.compactWorkspaceStatPressable, pressed ? styles.interactiveCardPressed : null]}
+              >
+                <View style={[styles.compactWorkspaceStat, isPhone ? styles.compactWorkspaceStatPhone : null]}>
+                  <Text style={[styles.compactWorkspaceStatValue, isPhone ? styles.compactWorkspaceStatValuePhone : null]}>{overview.unreadAnnouncements.length}</Text>
+                  <Text style={styles.compactWorkspaceStatLabel}>Unread</Text>
+                </View>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setActiveTab('helpdesk')}
+                style={({ pressed }) => [styles.compactWorkspaceStatPressable, pressed ? styles.interactiveCardPressed : null]}
+              >
+                <View style={[styles.compactWorkspaceStat, isPhone ? styles.compactWorkspaceStatPhone : null]}>
+                  <Text style={[styles.compactWorkspaceStatValue, isPhone ? styles.compactWorkspaceStatValuePhone : null]}>
+                    {overview.myComplaints.filter((item) => item.status !== 'resolved').length}
+                  </Text>
+                  <Text style={styles.compactWorkspaceStatLabel}>Open</Text>
+                </View>
+              </Pressable>
             </View>
           </View>
           <View style={[styles.compactWorkspaceActionRow, isPhone ? styles.compactWorkspaceActionRowPhone : null]}>
@@ -673,35 +747,64 @@ export function ResidentShell() {
         </SurfaceCard>
       ) : null}
 
-      {activeTab === 'home' ? (
-        <ResidentHomeExperience
-          societyId={society.id}
-          userId={user.id}
+      {!isCompact ? (
+        <ResidentWorkspaceRibbon
+          societyName={society.name}
+          societyArea={society.area}
+          societyCity={society.city}
+          primaryUnitLabel={primaryUnitLabel}
+          userInitials={user.avatarInitials}
+          userFirstName={user.name.split(' ')[0] ?? user.name}
+          photoDataUrl={residentPhotoDataUrl}
           canUseAdmin={canUseAdmin}
-          onOpenTab={setActiveTab}
-          onOpenCommunitySection={(section) => {
-            setPreferredCommunitySection(section);
-            setActiveTab('community');
-          }}
-          onOpenVisitorsSection={(section) => {
-            setPreferredVisitorsSection(section);
-            setActiveTab('visitors');
-          }}
-          onOpenBillingSection={(section) => {
-            setPreferredBillingSection(section);
-            setActiveTab('billing');
-          }}
-          onOpenBookingsSection={(section) => {
-            setPreferredBookingsSection(section);
-            setActiveTab('bookings');
-          }}
-          onOpenProfileSection={(section) => {
-            setPreferredProfileSection(section);
-            setActiveTab('profile');
-          }}
+          onOpenProfile={() => setActiveTab('profile')}
           onOpenWorkspaces={actions.goToWorkspaces}
           onSwitchAdmin={actions.goToRoleSelection}
         />
+      ) : null}
+
+      {activeTab === 'home' ? (
+        <>
+          {pendingAccessApprovals.length > 0 ? (
+            <SurfaceCard style={styles.pendingApprovalBanner}>
+              <Text style={styles.cardTitle}>Pending access approvals need admin review</Text>
+              <Caption>
+                {pendingAccessApprovals.length === 1
+                  ? '1 owner or tenant request is waiting. Open the admin workspace to approve or reject it.'
+                  : `${pendingAccessApprovals.length} owner or tenant requests are waiting. Open the admin workspace to approve or reject them.`}
+              </Caption>
+              <View style={styles.heroActions}>
+                <ActionButton label="Switch to Admin" onPress={actions.goToRoleSelection} />
+              </View>
+            </SurfaceCard>
+          ) : null}
+          <ResidentHomeExperience
+            societyId={society.id}
+            userId={user.id}
+            canUseAdmin={canUseAdmin}
+            onOpenTab={setActiveTab}
+            onOpenCommunitySection={(section) => {
+              setPreferredCommunitySection(section);
+              setActiveTab('community');
+            }}
+            onOpenVisitorsSection={(section) => {
+              setPreferredVisitorsSection(section);
+              setActiveTab('visitors');
+            }}
+            onOpenBillingSection={(section) => {
+              setPreferredBillingSection(section);
+              setActiveTab('billing');
+            }}
+            onOpenBookingsSection={(section) => {
+              setPreferredBookingsSection(section);
+              setActiveTab('bookings');
+            }}
+            onOpenProfileSection={(section) => {
+              setPreferredProfileSection(section);
+              setActiveTab('profile');
+            }}
+          />
+        </>
       ) : null}
 
       {!isCompact && activeTab !== 'home' ? (
@@ -789,6 +892,7 @@ export function ResidentShell() {
         />
       ) : null}
       {activeTab === 'notices' ? <ResidentNotices societyId={society.id} userId={user.id} /> : null}
+      {activeTab === 'documents' ? <ResidentDocuments societyId={society.id} userId={user.id} /> : null}
       {activeTab === 'bookings' ? (
         <ResidentBookings
           societyId={society.id}
@@ -809,31 +913,43 @@ export function ResidentShell() {
 
     {isPhone ? (
       <>
-        {!isDrawerOpen ? (
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => setIsDrawerOpen(true)}
-            style={({ pressed }) => [styles.leftDrawerHandle, pressed ? styles.leftDrawerHandlePressed : null]}
-          >
-            <Text style={styles.leftDrawerHandleText}>Menu</Text>
-          </Pressable>
-        ) : null}
-
         {isDrawerOpen ? (
           <Pressable style={styles.drawerBackdrop} onPress={() => setIsDrawerOpen(false)} />
         ) : null}
 
-        <View style={[styles.sideDrawer, isDrawerOpen ? styles.sideDrawerOpen : null]}>
+        <View style={[styles.sideDrawer, { width: phoneDrawerWidth, left: isDrawerOpen ? 0 : -phoneDrawerWidth }]}>
           <View style={styles.sideDrawerHeader}>
             <View style={styles.sideDrawerTitleWrap}>
               <Pill label="Resident" tone="accent" />
               <Text style={styles.sideDrawerTitle}>Resident Menu</Text>
             </View>
-            <Pressable onPress={() => setIsDrawerOpen(false)} style={({ pressed }) => [styles.sideDrawerClose, pressed ? styles.pressed : null]}>
+            <Pressable onPress={() => setIsDrawerOpen(false)} style={({ pressed }) => [styles.sideDrawerClose, pressed ? styles.interactiveCardPressed : null]}>
               <Text style={styles.sideDrawerCloseText}>Close</Text>
             </Pressable>
           </View>
-          <Caption style={styles.sideDrawerCaption}>Choose a module and jump directly into the workspace.</Caption>
+
+          <View style={styles.sideDrawerProfileCard}>
+            <View style={styles.sideDrawerProfileTopRow}>
+              <View style={styles.sideDrawerIdentityRow}>
+                {residentPhotoDataUrl ? (
+                  <Image source={{ uri: residentPhotoDataUrl }} style={styles.sideDrawerAvatarImage} />
+                ) : (
+                  <View style={styles.sideDrawerAvatarFallback}>
+                    <Text style={styles.sideDrawerAvatarFallbackText}>{user.avatarInitials}</Text>
+                  </View>
+                )}
+                <View style={styles.sideDrawerIdentityCopy}>
+                  <Text style={styles.sideDrawerResidentName}>{user.name}</Text>
+                  <Text style={styles.sideDrawerResidentMeta}>{primaryUnitLabel} · {society.name}</Text>
+                </View>
+              </View>
+              <View style={styles.sideDrawerActiveBadge}>
+                <Text style={styles.sideDrawerActiveBadgeText}>{getResidentTabBadge(activeTab)}</Text>
+              </View>
+            </View>
+          </View>
+
+          <Caption style={styles.sideDrawerCaption}>Modules</Caption>
           <ScrollView style={styles.sideDrawerScroller} contentContainerStyle={styles.sideDrawerList} showsVerticalScrollIndicator={false}>
             {residentTabs.map((item) => {
               const isActive = activeTab === item.key;
@@ -848,12 +964,21 @@ export function ResidentShell() {
                   style={({ pressed }) => [
                     styles.sideDrawerItem,
                     isActive ? styles.sideDrawerItemActive : null,
-                    pressed ? styles.pressed : null,
+                    pressed ? styles.interactiveCardPressed : null,
                   ]}
                 >
-                  <Text style={[styles.sideDrawerItemText, isActive ? styles.sideDrawerItemTextActive : null]}>
-                    {item.label}
-                  </Text>
+                  <View style={[styles.sideDrawerItemBadge, isActive ? styles.sideDrawerItemBadgeActive : null]}>
+                    <ModuleGlyph
+                      module={getResidentTabBadge(item.key)}
+                      color={isActive ? palette.primary : palette.ink}
+                      size="sm"
+                    />
+                  </View>
+                  <View style={styles.sideDrawerItemCopy}>
+                    <Text style={[styles.sideDrawerItemText, isActive ? styles.sideDrawerItemTextActive : null]}>
+                      {item.label}
+                    </Text>
+                  </View>
                 </Pressable>
               );
             })}
@@ -862,6 +987,80 @@ export function ResidentShell() {
       </>
     ) : null}
     </View>
+  );
+}
+
+function ResidentWorkspaceRibbon({
+  societyName,
+  societyArea,
+  societyCity,
+  primaryUnitLabel,
+  userInitials,
+  userFirstName,
+  photoDataUrl,
+  canUseAdmin,
+  onOpenProfile,
+  onOpenWorkspaces,
+  onSwitchAdmin,
+}: {
+  societyName: string;
+  societyArea: string;
+  societyCity: string;
+  primaryUnitLabel: string;
+  userInitials: string;
+  userFirstName: string;
+  photoDataUrl: string;
+  canUseAdmin: boolean;
+  onOpenProfile: () => void;
+  onOpenWorkspaces: () => void;
+  onSwitchAdmin: () => void;
+}) {
+  return (
+    <View style={styles.utilityBar}>
+      <Pressable onPress={onOpenProfile} style={({ pressed }) => [styles.unitPill, pressed ? styles.pressed : null]}>
+        {photoDataUrl ? (
+          <Image source={{ uri: photoDataUrl }} style={styles.unitAvatarImage} />
+        ) : (
+          <View style={styles.unitAvatar}>
+            <Text style={styles.unitAvatarText}>{userInitials}</Text>
+          </View>
+        )}
+        <View style={styles.unitMeta}>
+          <Text style={styles.unitCode}>{primaryUnitLabel}</Text>
+          <Caption style={styles.unitMetaText}>{userFirstName}</Caption>
+        </View>
+      </Pressable>
+
+      <Pressable onPress={onOpenWorkspaces} style={({ pressed }) => [styles.workspacePill, pressed ? styles.pressed : null]}>
+        <View style={styles.workspaceBadge}>
+          <Text style={styles.workspaceBadgeText}>SO</Text>
+        </View>
+        <View style={styles.workspaceCopy}>
+          <Text style={styles.workspaceTitle}>{societyName}</Text>
+          <Caption>{societyArea}, {societyCity}</Caption>
+        </View>
+      </Pressable>
+
+      <View style={styles.utilityIcons}>
+        <RoundUtilityButton label="WK" onPress={onOpenWorkspaces} />
+        {canUseAdmin ? <RoundUtilityButton label="AD" onPress={onSwitchAdmin} /> : null}
+        {photoDataUrl ? (
+          <Image source={{ uri: photoDataUrl }} style={styles.profileRingImage} />
+        ) : (
+          <View style={styles.profileRing}>
+            <Text style={styles.profileRingText}>{userInitials}</Text>
+          </View>
+        )}
+      </View>
+    </View>
+  );
+}
+
+function RoundUtilityButton({ label, onPress }: { label: string; onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.roundUtility, pressed ? styles.pressed : null]}>
+      <Text style={styles.roundUtilityText}>{label}</Text>
+    </Pressable>
   );
 }
 
@@ -1642,6 +1841,51 @@ function ResidentCommunity({
     setSelectedDirectChatUserId(memberUserId);
   }
 
+  const communityOverviewCards = [
+    {
+      key: 'leadership',
+      label: isPhone ? 'Leaders' : 'Leadership',
+      value: String(leadershipDirectory.length),
+      tone: 'accent' as const,
+      onPress: () => setActiveSection('members'),
+    },
+    {
+      key: 'members',
+      label: 'Members',
+      value: String(residentDirectoryMembers.length),
+      tone: 'primary' as const,
+      onPress: () => setActiveSection('members'),
+    },
+    {
+      key: 'chat',
+      label: isPhone ? 'Chats' : 'Chat rooms',
+      value: String((groupThread ? 1 : 0) + directThreads.length),
+      tone: 'blue' as const,
+      onPress: () => setActiveSection('chat'),
+    },
+    {
+      key: 'vehicles',
+      label: 'Vehicles',
+      value: String(vehicles.length),
+      tone: 'accent' as const,
+      onPress: () => setActiveSection('vehicles'),
+    },
+    {
+      key: 'contacts',
+      label: isPhone ? 'Contacts' : 'Important contacts',
+      value: String(contacts.length),
+      tone: 'blue' as const,
+      onPress: () => setActiveSection('contacts'),
+    },
+    {
+      key: 'staff',
+      label: isPhone ? 'Staff' : 'Staff and guards',
+      value: String(staffDirectory.length + guards.length),
+      tone: 'primary' as const,
+      onPress: () => setActiveSection('staff'),
+    },
+  ];
+
   return (
     <>
       <SectionHeader
@@ -1649,49 +1893,38 @@ function ResidentCommunity({
         description="Browse the chairman and committee directory, resident contacts, vehicles, important society numbers, staff coverage, and community chats from one place."
       />
       <SurfaceCard>
-        <View style={[styles.metricGrid, isPhone ? styles.metricGridPhone : null]}>
-          <MetricCard
-            label="Leadership"
-            value={String(leadershipDirectory.length)}
-            tone="accent"
-            onPress={() => setActiveSection('members')}
-          />
-          <MetricCard
-            label="Members"
-            value={String(residentDirectoryMembers.length)}
-            onPress={() => setActiveSection('members')}
-          />
-          <MetricCard
-            label="Chat rooms"
-            value={String((groupThread ? 1 : 0) + directThreads.length)}
-            tone="blue"
-            onPress={() => setActiveSection('chat')}
-          />
-          <MetricCard
-            label="Vehicles"
-            value={String(vehicles.length)}
-            tone="accent"
-            onPress={() => setActiveSection('vehicles')}
-          />
-          <MetricCard
-            label="Important contacts"
-            value={String(contacts.length)}
-            tone="blue"
-            onPress={() => setActiveSection('contacts')}
-          />
-          <MetricCard
-            label="Staff and guards"
-            value={String(staffDirectory.length + guards.length)}
-            onPress={() => setActiveSection('staff')}
-          />
-        </View>
-        <View style={[styles.inlineSection, isPhone ? styles.inlineSectionPhone : null]}>
-          <Caption style={isPhone ? styles.communityHintPhone : undefined}>
-            Tap a card above to browse {residentCommunitySections.map((s, i) => (
-              <Text key={s.key}>{i > 0 ? ', ' : ''}{s.label.toLowerCase()}</Text>
-            ))}. Your access is based on the current society membership for {myMembership?.unitIds.length ? 'linked units, society leadership cards, and shared records.' : 'shared society records.'}
-          </Caption>
-        </View>
+        {isPhone ? (
+          <View style={styles.communityHubGridPhone}>
+            {communityOverviewCards.map((card) => (
+              <Pressable
+                key={card.key}
+                accessibilityRole="button"
+                onPress={card.onPress}
+                style={({ pressed }) => [
+                  styles.communityHubTile,
+                  card.tone === 'accent' ? styles.communityHubTileAccent : null,
+                  card.tone === 'blue' ? styles.communityHubTileBlue : null,
+                  pressed ? styles.interactiveCardPressed : null,
+                ]}
+              >
+                <Text style={styles.communityHubTileLabel} numberOfLines={2}>{card.label}</Text>
+                <Text style={styles.communityHubTileValue}>{card.value}</Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : (
+          <View style={styles.metricGrid}>
+            {communityOverviewCards.map((card) => (
+              <MetricCard
+                key={card.key}
+                label={card.label}
+                value={card.value}
+                tone={card.tone}
+                onPress={card.onPress}
+              />
+            ))}
+          </View>
+        )}
       </SurfaceCard>
 
       {activeSection === 'members' ? (
@@ -1730,14 +1963,15 @@ function ResidentCommunity({
                       ?? (entry.membership.roles.includes('chairman') ? 'Chairman' : 'Committee member');
                     const publicPhone = entry.leadershipProfile?.phone ?? entry.user.phone;
                     const publicEmail = entry.leadershipProfile?.email;
+                    const publicPhotoDataUrl = entry.leadershipProfile?.photoDataUrl ?? entry.residenceProfile?.photoDataUrl;
                     const unitLabel = entry.units.map((unit) => unit.code).join(', ') || 'Unit pending';
                     const canOpenChat = entry.user.id !== userId;
 
                     return (
                       <View key={`leadership-${entry.user.id}`} style={styles.leadershipFeatureCard}>
                         <View style={styles.leadershipFeatureHeader}>
-                          {entry.leadershipProfile?.photoDataUrl ? (
-                            <Image source={{ uri: entry.leadershipProfile.photoDataUrl }} style={styles.leadershipFeatureImage} />
+                          {publicPhotoDataUrl ? (
+                            <Image source={{ uri: publicPhotoDataUrl }} style={styles.leadershipFeatureImage} />
                           ) : (
                             <View style={styles.leadershipFeatureAvatar}>
                               <Text style={styles.leadershipFeatureAvatarText}>{entry.user.avatarInitials}</Text>
@@ -1878,20 +2112,18 @@ function ResidentCommunity({
                           >
                             <Text style={styles.memberQuickActionText}>Call</Text>
                           </Pressable>
-                          {canOpenChat ? (
-                            <Pressable
-                              accessibilityRole="button"
-                              onPress={() => {
-                                void openWhatsAppConversation(
-                                  member.user.phone,
-                                  `Hi ${member.user.name.split(' ')[0]}, messaging from the society app.`,
-                                );
-                              }}
-                              style={({ pressed }) => [styles.memberQuickAction, pressed ? styles.interactiveCardPressed : null]}
-                            >
-                              <Text style={styles.memberQuickActionText}>WhatsApp</Text>
-                            </Pressable>
-                          ) : null}
+                          <Pressable
+                            accessibilityRole="button"
+                            onPress={() => {
+                              void openWhatsAppConversation(
+                                member.user.phone,
+                                `Hi ${member.user.name.split(' ')[0]}, messaging from the society app.`,
+                              );
+                            }}
+                            style={({ pressed }) => [styles.memberQuickAction, pressed ? styles.interactiveCardPressed : null]}
+                          >
+                            <Text style={styles.memberQuickActionText}>WhatsApp</Text>
+                          </Pressable>
                         </View>
                       </SurfaceCard>
                     );
@@ -2207,6 +2439,7 @@ function ResidentBilling({
   const [upiReferenceNote, setUpiReferenceNote] = useState('');
   const [upiProofImageDataUrl, setUpiProofImageDataUrl] = useState('');
   const [upiHelperText, setUpiHelperText] = useState('');
+  const [billingCopyMessage, setBillingCopyMessage] = useState('');
   const [receiptActionMessage, setReceiptActionMessage] = useState('');
   const [activeSection, setActiveSection] = useState<ResidentBillingSection>(preferredSection ?? 'pay');
   const hasUpiSetup = Boolean(plan?.upiId || plan?.upiMobileNumber || plan?.upiQrCodeDataUrl);
@@ -2227,6 +2460,15 @@ function ResidentBilling({
     ?? overview.outstandingInvoices[0]
     ?? null;
   const upiPayeeName = plan?.upiPayeeName?.trim() || society?.name || 'Society billing';
+  const bankDetailItems = [
+    { label: 'Account holder', value: plan?.bankAccountName?.trim() || '' },
+    { label: 'Account number', value: plan?.bankAccountNumber?.trim() || '' },
+    { label: 'IFSC code', value: plan?.bankIfscCode?.trim() || '' },
+    { label: 'Bank name', value: plan?.bankName?.trim() || '' },
+    { label: 'Branch', value: plan?.bankBranchName?.trim() || '' },
+  ].filter((entry) => entry.value);
+  const hasBankSetup = bankDetailItems.length > 0;
+  const shouldShowBankSection = Boolean(plan);
   const selectedInvoiceUnit = selectedInvoice
     ? state.data.units.find((unit) => unit.id === selectedInvoice.unitId)
     : undefined;
@@ -2237,6 +2479,33 @@ function ResidentBilling({
   const invoiceNote = [society?.name || 'Society', 'maintenance', residentNumber || null, selectedInvoice?.periodLabel || null]
     .filter(Boolean)
     .join(' - ');
+
+  async function handleCopyPaymentField(value: string, label: string) {
+    const trimmedValue = value.trim();
+
+    if (!trimmedValue) {
+      return;
+    }
+
+    await Clipboard.setStringAsync(trimmedValue);
+    setBillingCopyMessage(`${label} copied.`);
+  }
+
+  function renderPaymentCopyButton(value: string, label: string) {
+    return (
+      <Pressable
+        onPress={() => {
+          void handleCopyPaymentField(value, label);
+        }}
+        style={({ pressed }) => [styles.paymentFieldCopyButton, pressed ? styles.paymentFieldCopyButtonPressed : null]}
+      >
+        <View style={styles.paymentFieldCopyIcon}>
+          <View style={styles.paymentFieldCopyIconBack} />
+          <View style={styles.paymentFieldCopyIconFront} />
+        </View>
+      </Pressable>
+    );
+  }
 
   async function handleSubmitPayment() {
     if (!selectedInvoice) {
@@ -2369,16 +2638,86 @@ function ResidentBilling({
       <SurfaceCard>
         <SectionHeader
           title="Society payment details"
-          description="Use these society payment details in GPay, PhonePe, Paytm, or any other UPI app. After you pay, share the UTR and screenshot below so the admin desk can verify it."
+          description="Use these society payment details in UPI apps or direct bank transfers like NEFT, RTGS, and IMPS. After you pay, share the UTR and screenshot below so the admin desk can verify it."
         />
-        {hasUpiSetup ? (
+        {hasUpiSetup || hasBankSetup ? (
           <View style={styles.inlineSection}>
             <Text style={styles.compactTitle}>Pay to the society account</Text>
-            <Caption>Receiver name: {upiPayeeName}</Caption>
-            {plan?.upiId ? <Caption>UPI ID: {plan.upiId}</Caption> : null}
-            {plan?.upiMobileNumber ? <Caption>Payment mobile number: {plan.upiMobileNumber}</Caption> : null}
-            {residentNumber ? <Caption>Your resident / unit number: {residentNumber}</Caption> : null}
-            <Caption>Suggested payment note: {receiverNote}</Caption>
+            {hasUpiSetup ? (
+              <View style={styles.inlineSection}>
+                <Text style={styles.inlineTitle}>UPI payment details</Text>
+                <View style={styles.formGrid}>
+                  <View style={styles.profileInfoCard}>
+                    <View style={styles.paymentFieldHeader}>
+                      <Text style={styles.profileInfoLabel}>Receiver name</Text>
+                    </View>
+                    <Text style={styles.profileInfoValue}>{upiPayeeName}</Text>
+                  </View>
+                  {plan?.upiId ? (
+                    <View style={styles.profileInfoCard}>
+                      <View style={styles.paymentFieldHeader}>
+                        <Text style={styles.profileInfoLabel}>UPI ID</Text>
+                        {renderPaymentCopyButton(plan.upiId, 'UPI ID')}
+                      </View>
+                      <Text style={styles.profileInfoValue}>{plan.upiId}</Text>
+                    </View>
+                  ) : null}
+                  {plan?.upiMobileNumber ? (
+                    <View style={styles.profileInfoCard}>
+                      <View style={styles.paymentFieldHeader}>
+                        <Text style={styles.profileInfoLabel}>UPI mobile number</Text>
+                        {renderPaymentCopyButton(plan.upiMobileNumber, 'UPI mobile number')}
+                      </View>
+                      <Text style={styles.profileInfoValue}>{plan.upiMobileNumber}</Text>
+                    </View>
+                  ) : null}
+                </View>
+              </View>
+            ) : null}
+
+            {shouldShowBankSection ? (
+              <View style={styles.inlineSection}>
+                <Text style={styles.inlineTitle}>Bank transfer details</Text>
+                {hasBankSetup ? (
+                  <View style={styles.formGrid}>
+                    {bankDetailItems.map((entry) => (
+                      <View key={entry.label} style={styles.profileInfoCard}>
+                        <View style={styles.paymentFieldHeader}>
+                          <Text style={styles.profileInfoLabel}>{entry.label}</Text>
+                          {renderPaymentCopyButton(entry.value, entry.label)}
+                        </View>
+                        <Text style={styles.profileInfoValue}>{entry.value}</Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : (
+                  <Caption>The admin has not completed the bank transfer setup yet. UPI details are available above.</Caption>
+                )}
+              </View>
+            ) : null}
+
+            <View style={styles.inlineSection}>
+              <Text style={styles.inlineTitle}>Payment reference</Text>
+              <View style={styles.formGrid}>
+                {residentNumber ? (
+                  <View style={styles.profileInfoCard}>
+                    <View style={styles.paymentFieldHeader}>
+                      <Text style={styles.profileInfoLabel}>Resident / unit number</Text>
+                    </View>
+                    <Text style={styles.profileInfoValue}>{residentNumber}</Text>
+                  </View>
+                ) : null}
+                <View style={styles.profileInfoCard}>
+                  <View style={styles.paymentFieldHeader}>
+                    <Text style={styles.profileInfoLabel}>Suggested payment note</Text>
+                    {renderPaymentCopyButton(receiverNote, 'Payment note')}
+                  </View>
+                  <Text style={styles.profileInfoValue}>{receiverNote}</Text>
+                </View>
+              </View>
+            </View>
+
+            {billingCopyMessage ? <Caption>{billingCopyMessage}</Caption> : null}
             {plan?.upiQrCodeDataUrl ? (
               <View style={styles.qrSection}>
                 <Text style={styles.compactTitle}>Scan QR to pay</Text>
@@ -2387,9 +2726,9 @@ function ResidentBilling({
                   <Image source={{ uri: plan?.upiQrCodeDataUrl }} style={styles.qrImage} />
                 </View>
               </View>
-            ) : (
+            ) : hasUpiSetup ? (
               <Caption>The admin has not uploaded a QR image yet, so please use the UPI ID or mobile number above in your UPI app.</Caption>
-            )}
+            ) : null}
 
             {overview.outstandingInvoices.length > 0 ? (
               <>
@@ -2569,7 +2908,7 @@ function ResidentBilling({
           </SurfaceCard>
         );
       }) : (
-        <SurfaceCard><Caption>No outstanding maintenance invoices.</Caption></SurfaceCard>
+        <Caption>No unpaid maintenance invoices are linked to your units right now.</Caption>
       )}
       </>
       ) : null}
@@ -2628,7 +2967,6 @@ function ResidentNotices({ societyId, userId }: { societyId: string; userId: str
   const membership = getMembershipForSociety(state.data, userId, societyId);
   const announcements = getAnnouncementsForSociety(state.data, societyId, membership?.roles);
   const rules = getRulesForSociety(state.data, societyId);
-  const societyDocuments = getSocietyDocuments(state.data, societyId);
   const unreadAnnouncements = announcements.filter((announcement) => !announcement.readByUserIds.includes(userId));
   const highPriorityAnnouncementList = announcements.filter((announcement) => announcement.priority === 'high');
   const visibleAnnouncements =
@@ -2654,7 +2992,7 @@ function ResidentNotices({ societyId, userId }: { societyId: string; userId: str
     <>
       <SectionHeader
         title="Notice board"
-        description="Stay on top of announcements, unread communication, rules, and resident-facing office documents from one notice hub."
+        description="Stay on top of announcements, unread communication, and society rules from one notice hub."
       />
       <SurfaceCard>
         <View style={styles.metricGrid}>
@@ -2662,11 +3000,10 @@ function ResidentNotices({ societyId, userId }: { societyId: string; userId: str
           <MetricCard label="Unread" value={String(unreadAnnouncements.length)} tone="accent" onPress={() => setActiveSection('unread')} />
           <MetricCard label="High priority" value={String(highPriorityAnnouncementList.length)} tone="blue" onPress={() => setActiveSection('priority')} />
           <MetricCard label="Rules" value={String(rules.length)} tone="primary" onPress={() => setActiveSection('rules')} />
-          <MetricCard label="Shared docs" value={String(societyDocuments.length)} tone="accent" onPress={() => setActiveSection('documents')} />
         </View>
         <View style={styles.inlineSection}>
           <Caption>
-            Tap a card above to open announcements, unread notices, high-priority updates, rules, or shared documents.
+            Tap a card above to open announcements, unread notices, high-priority updates, or current rules.
           </Caption>
         </View>
       </SurfaceCard>
@@ -2726,8 +3063,8 @@ function ResidentNotices({ societyId, userId }: { societyId: string; userId: str
         <>
       <SurfaceCard>
         <SectionHeader
-          title="Rules and documents"
-          description="Resident-facing policies, acknowledgements, and current rule versions live together in this document section."
+          title="Society rules"
+          description="Resident-facing policies, acknowledgements, and current rule versions are managed here."
         />
       </SurfaceCard>
       {rules.length > 0 ? rules.map((rule) => (
@@ -2750,44 +3087,104 @@ function ResidentNotices({ societyId, userId }: { societyId: string; userId: str
       )}
         </>
       ) : null}
-      {activeSection === 'documents' ? (
-        <>
+    </>
+  );
+}
+
+function ResidentDocuments({ societyId, userId }: { societyId: string; userId: string }) {
+  const { state, actions } = useApp();
+  const societyDocuments = getSocietyDocuments(state.data, societyId);
+  const approvedDocumentAccessCount = societyDocuments.filter((document) =>
+    isSocietyDocumentDownloadRequestActive(
+      getLatestSocietyDocumentDownloadRequestForUser(state.data, document.id, userId),
+    ),
+  ).length;
+  const pendingDocumentAccessCount = societyDocuments.filter((document) => {
+    const latestRequest = getLatestSocietyDocumentDownloadRequestForUser(state.data, document.id, userId);
+    return latestRequest?.status === 'pending';
+  }).length;
+
+  return (
+    <>
+      <SectionHeader
+        title="Documents desk"
+        description="Open society office records here and request downloadable copies through the admin approval workflow."
+      />
       <SurfaceCard>
-        <SectionHeader
-          title="Society office and compliance records"
-          description="Lift licenses, common-light bills, water bills, and other shared documents published by the admin team stay here for every residence."
-        />
-      </SurfaceCard>
-      {societyDocuments.length > 0 ? societyDocuments.map((document) => (
-        <SurfaceCard key={document.id}>
-          <View style={styles.rowBetween}>
-            <Text style={styles.cardTitle}>{document.title}</Text>
-            <Pill label={humanizeSocietyDocumentCategory(document.category)} tone="warning" />
-          </View>
-          <Caption>{document.fileName}</Caption>
-          {document.summary ? <Caption>{document.summary}</Caption> : null}
+        <View style={styles.metricGrid}>
+          <MetricCard label="Published docs" value={String(societyDocuments.length)} tone="primary" />
+          <MetricCard label="Approved access" value={String(approvedDocumentAccessCount)} tone="blue" />
+          <MetricCard label="Pending requests" value={String(pendingDocumentAccessCount)} tone="accent" />
+        </View>
+        <View style={styles.inlineSection}>
           <Caption>
-            Uploaded {formatLongDate(document.uploadedAt)}
-            {document.issuedOn ? ` | Issued ${document.issuedOn}` : ''}
-            {document.validUntil ? ` | Valid until ${document.validUntil}` : ''}
+            You can view every shared record here. Downloading creates a request that the admin team approves or rejects.
           </Caption>
-          <View style={styles.heroActions}>
-            <ActionButton
-              label="Open document"
-              variant="secondary"
-              onPress={() => {
-                void openUploadedFileDataUrl(document.fileDataUrl);
-              }}
-            />
-          </View>
-        </SurfaceCard>
-      )) : (
+        </View>
+      </SurfaceCard>
+      {societyDocuments.length > 0 ? societyDocuments.map((document) => {
+        const latestRequest = getLatestSocietyDocumentDownloadRequestForUser(state.data, document.id, userId);
+        const hasActiveDownloadAccess = isSocietyDocumentDownloadRequestActive(latestRequest);
+        const documentRequestStatusMessage =
+          latestRequest?.status === 'pending'
+            ? `Download requested on ${formatLongDate(latestRequest.requestedAt)}. Waiting for admin approval.`
+            : latestRequest?.status === 'approved' && latestRequest.accessExpiresAt
+              ? hasActiveDownloadAccess
+                ? `Download approved until ${formatLongDate(latestRequest.accessExpiresAt)}.`
+                : `Previous approval expired on ${formatLongDate(latestRequest.accessExpiresAt)}. Request access again to download.`
+              : latestRequest?.status === 'rejected' && latestRequest.reviewedAt
+                ? `Last request was declined on ${formatLongDate(latestRequest.reviewedAt)}.`
+                : 'View the document now, or request a downloadable copy for admin approval.';
+
+        return (
+          <SurfaceCard key={document.id}>
+            <View style={styles.rowBetween}>
+              <Text style={styles.cardTitle}>{document.title}</Text>
+              <Pill label={humanizeSocietyDocumentCategory(document.category)} tone="warning" />
+            </View>
+            <Caption>{document.fileName}</Caption>
+            {document.summary ? <Caption>{document.summary}</Caption> : null}
+            <Caption>
+              Uploaded {formatLongDate(document.uploadedAt)}
+              {document.issuedOn ? ` | Issued ${document.issuedOn}` : ''}
+              {document.validUntil ? ` | Valid until ${document.validUntil}` : ''}
+            </Caption>
+            <Caption>{documentRequestStatusMessage}</Caption>
+            {latestRequest?.reviewNote ? <Caption>Admin note: {latestRequest.reviewNote}</Caption> : null}
+            <View style={styles.heroActions}>
+              <ActionButton
+                label="View document"
+                variant="secondary"
+                onPress={() => {
+                  void openUploadedFileDataUrl(document.fileDataUrl);
+                }}
+              />
+              <ActionButton
+                label={
+                  hasActiveDownloadAccess
+                    ? 'Download file'
+                    : latestRequest?.status === 'pending'
+                      ? 'Request pending'
+                      : 'Request download'
+                }
+                disabled={state.isSyncing || latestRequest?.status === 'pending'}
+                onPress={() => {
+                  if (hasActiveDownloadAccess) {
+                    void downloadUploadedFileDataUrl(document.fileDataUrl, document.fileName);
+                    return;
+                  }
+
+                  void actions.requestSocietyDocumentDownload(societyId, document.id, {});
+                }}
+              />
+            </View>
+          </SurfaceCard>
+        );
+      }) : (
         <SurfaceCard>
           <Caption>No office or compliance records have been published yet.</Caption>
         </SurfaceCard>
       )}
-        </>
-      ) : null}
     </>
   );
 }
@@ -3715,7 +4112,10 @@ function ResidentProfile({
         : 'owner');
   const [activeSection, setActiveSection] = useState<ResidentProfileSection>(preferredSection ?? 'household');
   const [profileFullName, setProfileFullName] = useState(residenceProfile?.fullName ?? currentUser?.name ?? '');
+  const [profilePhotoDataUrl, setProfilePhotoDataUrl] = useState(residenceProfile?.photoDataUrl ?? '');
   const [profileEmail, setProfileEmail] = useState(residenceProfile?.email ?? currentUser?.email ?? '');
+  const [profileBusinessName, setProfileBusinessName] = useState(residenceProfile?.businessName ?? '');
+  const [profileBusinessDetails, setProfileBusinessDetails] = useState(residenceProfile?.businessDetails ?? '');
   const [profileAlternatePhone, setProfileAlternatePhone] = useState(residenceProfile?.alternatePhone ?? '');
   const [profileEmergencyContactName, setProfileEmergencyContactName] = useState(
     residenceProfile?.emergencyContactName ?? '',
@@ -3763,6 +4163,7 @@ function ResidentProfile({
       (!vehicle.registrationNumber.trim() || !vehicle.unitId),
   );
   const unitCodesLabel = units.map((unit) => unit.code).join(', ') || 'Not assigned yet';
+  const showBusinessProfileFields = units.some((unit) => unit.unitType === 'office' || unit.unitType === 'shed');
   const residenceStatusLabel =
     residentType === 'committee'
       ? 'Committee resident'
@@ -3782,7 +4183,10 @@ function ResidentProfile({
 
   useEffect(() => {
     setProfileFullName(residenceProfile?.fullName ?? currentUser?.name ?? '');
+    setProfilePhotoDataUrl(residenceProfile?.photoDataUrl ?? '');
     setProfileEmail(residenceProfile?.email ?? currentUser?.email ?? '');
+    setProfileBusinessName(residenceProfile?.businessName ?? '');
+    setProfileBusinessDetails(residenceProfile?.businessDetails ?? '');
     setProfileAlternatePhone(residenceProfile?.alternatePhone ?? '');
     setProfileEmergencyContactName(residenceProfile?.emergencyContactName ?? '');
     setProfileEmergencyContactPhone(residenceProfile?.emergencyContactPhone ?? '');
@@ -3810,12 +4214,15 @@ function ResidentProfile({
     currentUser?.email,
     currentUser?.name,
     residenceProfile?.alternatePhone,
+    residenceProfile?.businessDetails,
+    residenceProfile?.businessName,
     residenceProfile?.dataProtectionConsentAt,
     residenceProfile?.email,
     residenceProfile?.emergencyContactName,
     residenceProfile?.emergencyContactPhone,
     residenceProfile?.fullName,
     residenceProfile?.moveInDate,
+    residenceProfile?.photoDataUrl,
     residenceProfile?.rentAgreementDataUrl,
     residenceProfile?.rentAgreementFileName,
     residenceProfile?.secondaryEmergencyContactName,
@@ -3911,11 +4318,38 @@ function ResidentProfile({
     }
   }
 
+  async function handleUploadProfilePhoto(capture?: 'user' | 'environment') {
+    try {
+      const file = await pickWebFileAsDataUrl({
+        accept: 'image/png,image/jpeg,image/webp',
+        capture,
+        maxSizeInBytes: 4 * 1024 * 1024,
+        unsupportedMessage: 'Resident photo upload is available from the web workspace right now.',
+        tooLargeMessage: 'Choose a resident profile photo smaller than 4 MB.',
+        readErrorMessage: 'Could not read the selected resident profile photo.',
+      });
+
+      if (!file) {
+        return;
+      }
+
+      setProfilePhotoDataUrl(file.dataUrl);
+      setProfileActionMessage('Resident photo is ready to save.');
+    } catch (error) {
+      setProfileActionMessage(
+        error instanceof Error ? error.message : 'Could not attach the resident profile photo.',
+      );
+    }
+  }
+
   async function handleSaveResidenceProfile() {
     const saved = await actions.updateResidenceProfile(societyId, {
       residentType,
       fullName: profileFullName,
+      photoDataUrl: profilePhotoDataUrl || undefined,
       email: profileEmail,
+      businessName: showBusinessProfileFields ? profileBusinessName : undefined,
+      businessDetails: showBusinessProfileFields ? profileBusinessDetails : undefined,
       alternatePhone: profileAlternatePhone,
       emergencyContactName: profileEmergencyContactName,
       emergencyContactPhone: profileEmergencyContactPhone,
@@ -3956,11 +4390,26 @@ function ResidentProfile({
       />
       <SurfaceCard style={isCompact ? styles.profileOverviewCardCompact : null}>
         <View style={styles.profileOverviewHeader}>
-          <View style={styles.profileOverviewCopy}>
-            <Text style={styles.cardTitle}>Your home in this society</Text>
-            <Caption>
-              Keep this page limited to the details that prove where you stay, how the society can reach you, and which vehicles belong to your household.
-            </Caption>
+          <View style={styles.profileOverviewTopRow}>
+            <View style={styles.profileOverviewCopy}>
+              <Text style={styles.cardTitle}>Your home in this society</Text>
+              <Caption>
+                Keep this page limited to the details that prove where you stay, how the society can reach you, and which vehicles belong to your household.
+              </Caption>
+            </View>
+            <View style={styles.profileIdentityCard}>
+              {profilePhotoDataUrl ? (
+                <Image source={{ uri: profilePhotoDataUrl }} style={styles.profileIdentityImage} />
+              ) : (
+                <View style={styles.profileIdentityAvatar}>
+                  <Text style={styles.profileIdentityAvatarText}>{currentUser?.avatarInitials ?? 'ME'}</Text>
+                </View>
+              )}
+              <View style={styles.profileIdentityCopy}>
+                <Text style={styles.profileIdentityName}>{profileFullName || currentUser?.name || 'Resident'}</Text>
+                <Caption>{profilePhotoDataUrl ? 'Workspace photo ready' : 'Add a workspace photo'}</Caption>
+              </View>
+            </View>
           </View>
           <View style={styles.pillRow}>
             <Pill label={residenceStatusLabel} tone={residentType === 'tenant' ? 'accent' : 'primary'} />
@@ -4008,6 +4457,47 @@ function ResidentProfile({
             This section is limited to identity, unit occupancy, and the minimum residence verification details used by your society.
           </Caption>
           <View style={styles.inlineSection}>
+            <View style={styles.profilePhotoPanel}>
+              {profilePhotoDataUrl ? (
+                <Image source={{ uri: profilePhotoDataUrl }} style={styles.profilePhotoPreview} />
+              ) : (
+                <View style={styles.profilePhotoPlaceholder}>
+                  <Text style={styles.profilePhotoPlaceholderText}>{currentUser?.avatarInitials ?? 'ME'}</Text>
+                </View>
+              )}
+              <View style={styles.profilePhotoPanelCopy}>
+                <Text style={styles.compactTitle}>Resident profile photo</Text>
+                <Caption>
+                  This photo is shown on your resident workspace when you sign in, so the profile area displays your saved picture instead of only initials.
+                </Caption>
+                <View style={styles.heroActions}>
+                  <ActionButton
+                    label="Take photo"
+                    onPress={() => {
+                      void handleUploadProfilePhoto('user');
+                    }}
+                    variant="secondary"
+                  />
+                  <ActionButton
+                    label={profilePhotoDataUrl ? 'Replace photo' : 'Upload photo'}
+                    onPress={() => {
+                      void handleUploadProfilePhoto();
+                    }}
+                    variant="secondary"
+                  />
+                  {profilePhotoDataUrl ? (
+                    <ActionButton
+                      label="Remove photo"
+                      onPress={() => {
+                        setProfilePhotoDataUrl('');
+                        setProfileActionMessage('Resident photo removed. Save the profile to update the workspace.');
+                      }}
+                      variant="danger"
+                    />
+                  ) : null}
+                </View>
+              </View>
+            </View>
             <View style={styles.profileInfoGrid}>
               <View style={styles.profileInfoCard}>
                 <Text style={styles.profileInfoLabel}>Linked unit access</Text>
@@ -4083,6 +4573,32 @@ function ResidentProfile({
                 />
               </View>
             </View>
+            {showBusinessProfileFields ? (
+              <View style={styles.inlineSection}>
+                <Text style={styles.compactTitle}>Business identity</Text>
+                <Caption>
+                  Add the business or trade name linked to this office or shed so society records reflect the commercial occupant, not just the verified mobile user.
+                </Caption>
+                <View style={styles.formGrid}>
+                  <View style={styles.formField}>
+                    <InputField
+                      label="Business name (optional)"
+                      value={profileBusinessName}
+                      onChangeText={setProfileBusinessName}
+                      placeholder="Mindsflux Technologies"
+                      autoCapitalize="words"
+                    />
+                  </View>
+                </View>
+                <InputField
+                  label="Business details (optional)"
+                  value={profileBusinessDetails}
+                  onChangeText={setProfileBusinessDetails}
+                  placeholder="Software development office, warehouse operations, fabrication unit, consulting desk, etc."
+                  multiline
+                />
+              </View>
+            ) : null}
             {residentType === 'tenant' ? (
               <View style={styles.inlineSection}>
                 <Text style={styles.compactTitle}>Tenant rent agreement</Text>
@@ -4318,6 +4834,137 @@ const styles = StyleSheet.create({
     gap: spacing.xs,
     backgroundColor: '#FFF8F0',
   },
+  utilityBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  unitPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    minHeight: 62,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.pill,
+    backgroundColor: '#FFFDFC',
+    borderWidth: 1,
+    borderColor: '#E8DDCF',
+    ...shadow.card,
+  },
+  unitAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F4EADF',
+    borderWidth: 1,
+    borderColor: '#E7D8C5',
+  },
+  unitAvatarImage: {
+    width: 44,
+    height: 44,
+    borderRadius: radius.pill,
+    backgroundColor: '#F4F1EB',
+    borderWidth: 1,
+    borderColor: '#E7D8C5',
+  },
+  unitAvatarText: {
+    color: palette.mutedInk,
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  unitMeta: {
+    gap: 1,
+  },
+  unitCode: {
+    color: palette.ink,
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  unitMetaText: {
+    color: palette.mutedInk,
+  },
+  workspacePill: {
+    flex: 1,
+    minHeight: 62,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.pill,
+    backgroundColor: '#FFFDFC',
+    borderWidth: 1,
+    borderColor: '#E8DDCF',
+    ...shadow.card,
+  },
+  workspaceBadge: {
+    width: 38,
+    height: 38,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#E94743',
+  },
+  workspaceBadgeText: {
+    color: palette.white,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  workspaceCopy: {
+    flex: 1,
+    gap: 1,
+  },
+  workspaceTitle: {
+    color: palette.ink,
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  utilityIcons: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+  },
+  roundUtility: {
+    width: 42,
+    height: 42,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFF7F0',
+    borderWidth: 1,
+    borderColor: '#EEDBC7',
+  },
+  roundUtilityText: {
+    color: palette.ink,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  profileRing: {
+    width: 42,
+    height: 42,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#FFF6F4',
+    borderWidth: 2,
+    borderColor: palette.accent,
+  },
+  profileRingImage: {
+    width: 42,
+    height: 42,
+    borderRadius: radius.pill,
+    backgroundColor: '#F4F1EB',
+    borderWidth: 2,
+    borderColor: palette.accent,
+  },
+  profileRingText: {
+    color: palette.accent,
+    fontSize: 11,
+    fontWeight: '800',
+  },
   compactWorkspaceCardPhone: {
     gap: 6,
     paddingTop: spacing.xs,
@@ -4352,6 +4999,9 @@ const styles = StyleSheet.create({
     gap: 4,
     width: '100%',
   },
+  compactWorkspaceStatPressable: {
+    flex: 1,
+  },
   compactWorkspaceStat: {
     flex: 1,
     minWidth: 0,
@@ -4377,6 +5027,11 @@ const styles = StyleSheet.create({
   compactWorkspaceStatValuePhone: {
     fontSize: 14,
   },
+  compactWorkspaceStatLabel: {
+    color: palette.mutedInk,
+    fontSize: 12,
+    fontWeight: '700',
+  },
   compactWorkspaceActionRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -4388,6 +5043,10 @@ const styles = StyleSheet.create({
   residentNavigationCard: {
     gap: spacing.md,
     backgroundColor: '#FFFAF4',
+  },
+  pendingApprovalBanner: {
+    gap: spacing.sm,
+    backgroundColor: '#FFF8F0',
   },
   moduleHeroCard: {
     gap: spacing.md,
@@ -4563,6 +5222,36 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '800',
   },
+  phoneMenuButton: {
+    alignSelf: 'flex-start',
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: '#EEF3F8',
+    borderWidth: 1,
+    borderColor: '#D7E2EE',
+    alignItems: 'center',
+    justifyContent: 'center',
+    ...shadow.card,
+  },
+  phoneMenuAvatarImage: {
+    width: 34,
+    height: 34,
+    borderRadius: 11,
+  },
+  phoneMenuAvatarFallback: {
+    width: 34,
+    height: 34,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: palette.primary,
+  },
+  phoneMenuAvatarFallbackText: {
+    color: palette.white,
+    fontSize: 13,
+    fontWeight: '900',
+  },
   drawerBackdrop: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(8, 17, 28, 0.24)',
@@ -4571,16 +5260,21 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 0,
     bottom: 0,
-    left: -260,
-    width: 248,
-    paddingTop: 74,
+    left: -286,
+    paddingTop: 52,
     paddingHorizontal: spacing.sm,
     paddingBottom: spacing.sm,
-    backgroundColor: '#FFF8F0',
+    backgroundColor: '#FFF9F1',
     borderRightWidth: 1,
     borderRightColor: '#E8DCCB',
-    gap: spacing.md,
-    ...shadow.card,
+    borderTopRightRadius: 22,
+    borderBottomRightRadius: 22,
+    gap: spacing.sm,
+    shadowColor: '#291D13',
+    shadowOpacity: 0.22,
+    shadowRadius: 24,
+    shadowOffset: { width: 6, height: 0 },
+    elevation: 12,
   },
   sideDrawerOpen: {
     left: 0,
@@ -4597,8 +5291,83 @@ const styles = StyleSheet.create({
   },
   sideDrawerTitle: {
     color: palette.ink,
-    fontSize: 18,
+    fontSize: 15,
     fontWeight: '800',
+  },
+  sideDrawerProfileCard: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 10,
+    borderRadius: 18,
+    backgroundColor: palette.primary,
+    borderWidth: 1,
+    borderColor: '#314B63',
+    gap: 0,
+  },
+  sideDrawerProfileTopRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  sideDrawerIdentityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    flex: 1,
+    minWidth: 0,
+  },
+  sideDrawerAvatarImage: {
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.45)',
+  },
+  sideDrawerAvatarFallback: {
+    width: 46,
+    height: 46,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F1E0C8',
+    borderWidth: 2,
+    borderColor: 'rgba(255,255,255,0.4)',
+  },
+  sideDrawerAvatarFallbackText: {
+    color: palette.primary,
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  sideDrawerIdentityCopy: {
+    flex: 1,
+    minWidth: 0,
+    gap: 3,
+  },
+  sideDrawerResidentName: {
+    color: palette.white,
+    fontSize: 15,
+    lineHeight: 18,
+    fontWeight: '900',
+  },
+  sideDrawerResidentMeta: {
+    color: '#D5E1EE',
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: '700',
+  },
+  sideDrawerActiveBadge: {
+    minWidth: 32,
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 4,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#E9F2FC',
+  },
+  sideDrawerActiveBadgeText: {
+    color: palette.primary,
+    fontSize: 10,
+    fontWeight: '900',
   },
   sideDrawerClose: {
     paddingHorizontal: spacing.sm,
@@ -4614,35 +5383,63 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   sideDrawerCaption: {
-    fontSize: 12,
-    lineHeight: 18,
+    fontSize: 10,
+    lineHeight: 14,
+    fontWeight: '700',
+    color: palette.mutedInk,
   },
   sideDrawerScroller: {
     flex: 1,
   },
   sideDrawerList: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: spacing.xs,
-    paddingBottom: 72,
+    paddingBottom: 36,
   },
   sideDrawerItem: {
-    paddingHorizontal: spacing.sm,
+    width: '31.5%',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: 6,
+    paddingHorizontal: spacing.xs,
     paddingVertical: spacing.sm,
     borderRadius: 16,
     borderWidth: 1,
     borderColor: '#E8DDCF',
     backgroundColor: '#FFFCF8',
+    minHeight: 78,
   },
   sideDrawerItemActive: {
-    backgroundColor: palette.primary,
-    borderColor: palette.primary,
+    backgroundColor: '#F1F6FC',
+    borderColor: '#C8D9ED',
+  },
+  sideDrawerItemBadge: {
+    width: 30,
+    height: 30,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F3E9DB',
+    borderWidth: 1,
+    borderColor: '#E7D7C1',
+  },
+  sideDrawerItemBadgeActive: {
+    backgroundColor: '#E3EEF9',
+    borderColor: '#C8D9ED',
+  },
+  sideDrawerItemCopy: {
+    minWidth: 0,
+    gap: 0,
   },
   sideDrawerItemText: {
     color: palette.ink,
-    fontSize: 14,
-    fontWeight: '700',
+    fontSize: 13,
+    lineHeight: 16,
+    fontWeight: '800',
   },
   sideDrawerItemTextActive: {
-    color: palette.white,
+    color: palette.primary,
   },
   heroActions: {
     flexDirection: 'row',
@@ -4658,14 +5455,102 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     gap: 6,
   },
+  communityHubGridPhone: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.xs,
+  },
+  communityHubTile: {
+    width: '48.5%',
+    minHeight: 94,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#D6E0EB',
+    backgroundColor: '#EAF1FA',
+    justifyContent: 'space-between',
+    gap: spacing.xs,
+  },
+  communityHubTileAccent: {
+    backgroundColor: '#FBE7E0',
+    borderColor: '#F0D0C6',
+  },
+  communityHubTileBlue: {
+    backgroundColor: '#E7F0FB',
+    borderColor: '#C9DCF0',
+  },
+  communityHubTileLabel: {
+    color: palette.mutedInk,
+    fontSize: 13,
+    lineHeight: 17,
+    fontWeight: '700',
+  },
+  communityHubTileValue: {
+    color: palette.ink,
+    fontSize: 30,
+    lineHeight: 32,
+    fontWeight: '900',
+  },
   profileOverviewCardCompact: {
     gap: spacing.sm,
   },
   profileOverviewHeader: {
     gap: spacing.sm,
   },
+  profileOverviewTopRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    gap: spacing.md,
+    alignItems: 'center',
+  },
   profileOverviewCopy: {
+    flex: 1,
+    minWidth: 220,
     gap: spacing.xs,
+  },
+  profileIdentityCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    minWidth: 220,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#E7D9C8',
+    backgroundColor: '#FFF8F0',
+  },
+  profileIdentityAvatar: {
+    width: 56,
+    height: 56,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F4EADF',
+    borderWidth: 1,
+    borderColor: '#E7D8C5',
+  },
+  profileIdentityAvatarText: {
+    color: palette.mutedInk,
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  profileIdentityImage: {
+    width: 56,
+    height: 56,
+    borderRadius: 18,
+    backgroundColor: '#F4F1EB',
+  },
+  profileIdentityCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  profileIdentityName: {
+    color: palette.ink,
+    fontSize: 15,
+    fontWeight: '800',
   },
   profileSummaryGrid: {
     flexDirection: 'row',
@@ -4702,6 +5587,43 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: spacing.sm,
   },
+  profilePhotoPanel: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: spacing.md,
+    padding: spacing.md,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#E7D9C8',
+    backgroundColor: '#FFF8F0',
+  },
+  profilePhotoPanelCopy: {
+    flex: 1,
+    minWidth: 220,
+    gap: spacing.xs,
+  },
+  profilePhotoPreview: {
+    width: 96,
+    height: 96,
+    borderRadius: 28,
+    backgroundColor: '#F4F1EB',
+  },
+  profilePhotoPlaceholder: {
+    width: 96,
+    height: 96,
+    borderRadius: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F4EADF',
+    borderWidth: 1,
+    borderColor: '#E7D8C5',
+  },
+  profilePhotoPlaceholderText: {
+    color: palette.mutedInk,
+    fontSize: 24,
+    fontWeight: '800',
+  },
   profileInfoCard: {
     flexGrow: 1,
     flexBasis: 220,
@@ -4724,6 +5646,49 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     fontWeight: '900',
     color: palette.ink,
+  },
+  paymentFieldHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+  },
+  paymentFieldCopyButton: {
+    width: 24,
+    height: 24,
+    borderRadius: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2A2A2A',
+  },
+  paymentFieldCopyButtonPressed: {
+    opacity: 0.82,
+  },
+  paymentFieldCopyIcon: {
+    width: 12,
+    height: 12,
+    position: 'relative',
+  },
+  paymentFieldCopyIconBack: {
+    position: 'absolute',
+    top: 0,
+    right: 0,
+    width: 8,
+    height: 8,
+    borderRadius: 2,
+    borderWidth: 1,
+    borderColor: '#D8D8D8',
+  },
+  paymentFieldCopyIconFront: {
+    position: 'absolute',
+    left: 0,
+    bottom: 0,
+    width: 8,
+    height: 8,
+    borderRadius: 2,
+    borderWidth: 1,
+    borderColor: '#FFFFFF',
+    backgroundColor: 'transparent',
   },
   directoryGrid: {
     flexDirection: 'row',
