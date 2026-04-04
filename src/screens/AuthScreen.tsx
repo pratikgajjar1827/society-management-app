@@ -30,20 +30,12 @@ export function AuthScreen() {
   const isCompact = width < 768;
 
   const challenge = state.pendingChallenge;
-  const developmentOtp = challenge?.provider === 'development' ? challenge.developmentCode ?? '' : '';
-  const isDevelopmentFallback = developmentOtp.length > 0;
   const challengeDestination = challenge?.destination || destination.trim();
   const expiryLabel = formatChallengeExpiry(challenge?.expiresAt);
 
   useEffect(() => {
     setCode('');
   }, [challenge?.challengeId]);
-
-  useEffect(() => {
-    if (developmentOtp) {
-      setCode(developmentOtp);
-    }
-  }, [challenge?.challengeId, developmentOtp]);
 
   useEffect(() => {
     if (challenge?.destination) {
@@ -99,25 +91,9 @@ export function AuthScreen() {
           {challenge ? (
             <View style={styles.statusCard}>
               <Text style={styles.statusTitle}>
-                {isDevelopmentFallback
-                  ? `Local OTP ready for ${challengeDestination || 'your mobile number'}`
-                  : `OTP sent to ${challengeDestination || 'your mobile number'}`}
+                {`OTP sent to ${challengeDestination || 'your mobile number'}`}
               </Text>
-              <Caption>
-                {isDevelopmentFallback
-                  ? 'Use the OTP shown below, then tap Verify OTP.'
-                  : expiryLabel}
-              </Caption>
-            </View>
-          ) : null}
-
-          {isDevelopmentFallback ? (
-            <View style={styles.devOtpCard}>
-              <Text style={styles.devOtpTitle}>Local OTP</Text>
-              <View style={styles.devOtpRow}>
-                <Text style={styles.devOtpValue}>{developmentOtp}</Text>
-                <ActionButton label="Use OTP" onPress={() => setCode(developmentOtp)} variant="secondary" />
-              </View>
+              <Caption>{expiryLabel}</Caption>
             </View>
           ) : null}
 
@@ -219,39 +195,5 @@ const styles = StyleSheet.create({
     color: palette.ink,
     fontSize: 14,
     fontWeight: '800',
-  },
-  devOtpCard: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: '#F1D6B7',
-    backgroundColor: '#FFF4E4',
-    gap: spacing.xs,
-  },
-  devOtpTitle: {
-    color: '#7B4C06',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  devOtpActionStack: {
-    gap: spacing.sm,
-  },
-  devOtpRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  devOtpValue: {
-    minWidth: 120,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: 16,
-    backgroundColor: '#FFFDF9',
-    color: palette.ink,
-    fontSize: 22,
-    fontWeight: '900',
-    letterSpacing: 2,
   },
 });

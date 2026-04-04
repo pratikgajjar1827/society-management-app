@@ -22,11 +22,8 @@ import {
   fetchBootstrapData,
   fetchSessionSnapshot as fetchSessionSnapshotRequest,
   getApiBaseUrl,
-  getDefaultApiBaseUrl,
   localFallbackSnapshot,
-  loadPersistedApiBaseUrl,
   markAnnouncementRead as markAnnouncementReadRequest,
-  persistApiBaseUrl,
   requestOtp as requestOtpRequest,
   recordManualPayment as recordManualPaymentRequest,
   reviewAmenityBooking as reviewAmenityBookingRequest,
@@ -306,8 +303,6 @@ interface AppContextValue {
     requestOtp: (destination: string) => Promise<void>;
     verifyOtp: (code: string) => Promise<void>;
     retryBackendConnection: () => Promise<boolean>;
-    saveApiBaseUrl: (value: string) => Promise<boolean>;
-    resetApiBaseUrl: () => Promise<boolean>;
     resetAuthFlow: () => void;
     logout: () => void;
     goToPortalSelection: () => void;
@@ -477,11 +472,7 @@ function getAuthChallengeNoticeMessage(challenge?: AuthChallenge) {
     return undefined;
   }
 
-  if (challenge.developmentCode) {
-    return `Local OTP ready: ${challenge.developmentCode}. SMS is not configured on this backend.`;
-  }
-
-  return 'SMS is not configured on this backend yet. Use the local OTP shown on the login screen.';
+  return 'SMS delivery is unavailable on this backend. Configure Twilio Verify and request the OTP again.';
 }
 
 function isAuthenticationErrorMessage(message: string | undefined) {
@@ -614,19 +605,11 @@ function resolveAuthenticatedScreen(session: SessionState, onboarding: Onboardin
 }
 
 function shouldForceDevelopmentOtp(apiBaseUrl: string) {
-  if (typeof __DEV__ !== 'undefined' && __DEV__) {
-    return true;
-  }
-
-  return /localhost|127\.0\.0\.1|10\.0\.2\.2/i.test(apiBaseUrl);
-}
-
-function shouldResetPersistedApiBaseUrlForDevelopment(persistedApiBaseUrl: string | null) {
-  if (typeof __DEV__ === 'undefined' || !__DEV__ || !persistedApiBaseUrl) {
-    return false;
-  }
-
-  return persistedApiBaseUrl !== getDefaultApiBaseUrl();
+  return Boolean(
+    typeof __DEV__ !== 'undefined' &&
+      __DEV__ &&
+      /localhost|127\.0\.0\.1|10\.0\.2\.2/i.test(apiBaseUrl),
+  );
 }
 
 function getErrorMessage(error: unknown) {
@@ -638,7 +621,7 @@ function getErrorMessage(error: unknown) {
 }
 
 function getBackendUnavailableMessage(apiBaseUrl: string) {
-  return `Backend not reachable at ${apiBaseUrl}. Start \`npm run server\` to use SQLite-backed data and OTP authentication.`;
+  return `Backend not reachable at ${apiBaseUrl}. Check the deployed API and try again.`;
 }
 
 function resolveScreen(onboarding?: OnboardingState): Screen {
@@ -776,12 +759,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     let active = true;
 
     async function hydrate() {
-      const persistedApiBaseUrl = await loadPersistedApiBaseUrl();
       const persistedSession = await loadPersistedSession();
-      const shouldResetPersistedApiBaseUrl = shouldResetPersistedApiBaseUrlForDevelopment(persistedApiBaseUrl);
-      const nextApiBaseUrl = shouldResetPersistedApiBaseUrl
-        ? await clearPersistedApiBaseUrl()
-        : persistedApiBaseUrl ?? getDefaultApiBaseUrl();
+      await clearPersistedApiBaseUrl();
+      const nextApiBaseUrl = getApiBaseUrl();
 
       if (!active) {
         return;
@@ -790,7 +770,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       await refreshBackendConnection({
         loadingMode: 'hydrate',
         apiBaseUrl: nextApiBaseUrl,
-        hasCustomApiBaseUrl: shouldResetPersistedApiBaseUrl ? false : Boolean(persistedApiBaseUrl),
+        hasCustomApiBaseUrl: false,
         persistedSession,
       });
     }
@@ -981,40 +961,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       refreshBackendConnection({
         loadingMode: 'sync',
         apiBaseUrl: state.apiBaseUrl,
-        hasCustomApiBaseUrl: state.hasCustomApiBaseUrl,
+        hasCustomApiBaseUrl: false,
         successMessage: 'Backend connection refreshed.',
       }),
-    saveApiBaseUrl: async (value) => {
-      const normalizedValue = value.trim();
-
-      if (!normalizedValue) {
-        setState((currentState) => ({
-          ...currentState,
-          apiError: 'Enter the backend URL in the format http://YOUR-LAN-IP:4000.',
-          noticeMessage: undefined,
-        }));
-        return false;
-      }
-
-      const nextApiBaseUrl = await persistApiBaseUrl(normalizedValue);
-
-      return refreshBackendConnection({
-        loadingMode: 'sync',
-        apiBaseUrl: nextApiBaseUrl,
-        hasCustomApiBaseUrl: true,
-        successMessage: 'Backend URL saved.',
-      });
-    },
-    resetApiBaseUrl: async () => {
-      const nextApiBaseUrl = await clearPersistedApiBaseUrl();
-
-      return refreshBackendConnection({
-        loadingMode: 'sync',
-        apiBaseUrl: nextApiBaseUrl,
-        hasCustomApiBaseUrl: false,
-        successMessage: 'Backend URL reset to this device default.',
-      });
-    },
     requestOtp: async (destination) => {
       setState((currentState) => ({
         ...currentState,
@@ -1031,6 +980,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
           destination,
           shouldForceDevelopmentOtp(state.apiBaseUrl),
         );
+
+        if (challenge.provider === 'development' && !(typeof __DEV__ !== 'undefined' && __DEV__)) {
+          setState((currentState) => ({
+            ...currentState,
+            isSyncing: false,
+            pendingChallenge: undefined,
+            apiError: 'SMS delivery is unavailable on this backend. Configure Twilio Verify and try again.',
+            noticeMessage: undefined,
+          }));
+          return;
+        }
 
         setState((currentState) => ({
           ...currentState,
