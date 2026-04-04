@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import {
   ActionButton,
@@ -25,7 +25,7 @@ import {
   normalizeShedBlockPlan,
 } from '../data/factories';
 import { useApp } from '../state/AppContext';
-import { palette, radius, spacing } from '../theme/tokens';
+import { palette, radius, shadow, spacing } from '../theme/tokens';
 import {
   ApartmentBlockPlanEntry,
   CommercialSpaceType,
@@ -369,8 +369,22 @@ function getUnitsSectionDescription(draft: SocietySetupDraft) {
   return 'Set the count for each structure type this society manages. Total inventory is calculated automatically.';
 }
 
+function getStepTone(isReady: boolean, isActive: boolean): 'success' | 'accent' | 'neutral' {
+  if (isReady) {
+    return 'success';
+  }
+
+  if (isActive) {
+    return 'accent';
+  }
+
+  return 'neutral';
+}
+
 export function SocietySetupWizardScreen() {
   const { state, actions } = useApp();
+  const { width } = useWindowDimensions();
+  const isCompact = width < 768;
   const [draft, setDraft] = useState(() => syncDerivedFields(cloneDraft(state.defaultSetupDraft)));
 
   function updateDraft(patch: Partial<SocietySetupDraft>) {
@@ -678,15 +692,83 @@ export function SocietySetupWizardScreen() {
   }
 
   const canCreate = !state.isSyncing && validationIssues.length === 0;
+  const locationReady =
+    draft.societyName.trim().length > 2
+    && draft.country.trim().length > 1
+    && draft.state.trim().length > 1
+    && draft.city.trim().length > 1
+    && draft.area.trim().length > 1
+    && draft.address.trim().length > 4;
+  const structureReady =
+    enabledStructures.length > 0
+    && (!enabledStructures.includes('commercial') || enabledCommercialSpaceTypes.length > 0);
+  const inventoryReady = totalUnitsValid;
+  const operationsReady = draft.selectedAmenities.length > 0 && draft.rulesSummary.trim().length > 12;
+  const completedStepCount = [locationReady, structureReady, inventoryReady, operationsReady].filter(Boolean).length;
+  const readinessLabel = canCreate ? 'Ready to launch' : `${validationIssues.length} items pending`;
+  const progressSteps = [
+    {
+      key: 'identity',
+      eyebrow: '01',
+      title: 'Identity',
+      description: 'Name, address, and discoverability details.',
+      ready: locationReady,
+      active: !locationReady,
+    },
+    {
+      key: 'blueprint',
+      eyebrow: '02',
+      title: 'Blueprint',
+      description: 'Residential and commercial structure mix.',
+      ready: structureReady,
+      active: locationReady && !structureReady,
+    },
+    {
+      key: 'inventory',
+      eyebrow: '03',
+      title: 'Inventory',
+      description: 'Unit math, numbering logic, and maintenance setup.',
+      ready: inventoryReady,
+      active: locationReady && structureReady && !inventoryReady,
+    },
+    {
+      key: 'operations',
+      eyebrow: '04',
+      title: 'Operations',
+      description: 'Amenities, starter rules, and launch review.',
+      ready: operationsReady,
+      active: locationReady && structureReady && inventoryReady && !operationsReady,
+    },
+  ];
 
   return (
     <Page>
       <HeroCard
         eyebrow="Create Society Portal"
-        title="Create the society workspace from one structured setup flow."
-        subtitle="This portal captures the society identity, country, state, city, area, address, residential or commercial unit structure, amenities, maintenance cycle, and starter operating rules."
+        title={isCompact ? 'Launch a society from one polished setup flow.' : 'Launch a new society workspace with a clear operating blueprint.'}
+        subtitle="This setup captures the society identity, geographic discoverability, inventory model, maintenance defaults, amenities, and the first operating notes before residents begin enrolling."
         tone="accent"
       >
+        <View style={[styles.heroPillRow, isCompact ? styles.heroPillRowCompact : null]}>
+          <Pill label={readinessLabel} tone={canCreate ? 'success' : 'warning'} />
+          <Pill label={`${draft.totalUnits || '0'} planned units`} tone="primary" />
+          <Pill label={`${draft.selectedAmenities.length} amenities`} tone="accent" />
+          <Pill label={draft.city && draft.area ? `${draft.city} / ${draft.area}` : 'Location pending'} tone="warning" />
+        </View>
+        <View style={[styles.heroMetricRow, isCompact ? styles.heroMetricRowCompact : null]}>
+          <View style={[styles.heroMetricCard, isCompact ? styles.heroMetricCardCompact : null]}>
+            <Text style={styles.heroMetricValue}>{completedStepCount}/4</Text>
+            <Caption style={styles.heroMetricLabel}>setup stages ready</Caption>
+          </View>
+          <View style={[styles.heroMetricCard, isCompact ? styles.heroMetricCardCompact : null]}>
+            <Text style={styles.heroMetricValue}>{getSocietyStructurePreviewLabel(draft)}</Text>
+            <Caption style={styles.heroMetricLabel}>workspace model</Caption>
+          </View>
+          <View style={[styles.heroMetricCard, isCompact ? styles.heroMetricCardCompact : null]}>
+            <Text style={styles.heroMetricValue}>{draft.maintenanceDay || '--'}</Text>
+            <Caption style={styles.heroMetricLabel}>maintenance due day</Caption>
+          </View>
+        </View>
         <View style={styles.heroActions}>
           <ActionButton
             label={state.onboarding?.membershipsCount ? 'Back to workspaces' : 'Back to portal selection'}
@@ -696,7 +778,35 @@ export function SocietySetupWizardScreen() {
         </View>
       </HeroCard>
 
-      <SurfaceCard>
+      <SurfaceCard style={styles.flowOverviewCard}>
+        <View style={[styles.flowOverviewHeader, isCompact ? styles.flowOverviewHeaderCompact : null]}>
+          <View style={styles.flowOverviewCopy}>
+            <Text style={styles.flowOverviewTitle}>Creation flow overview</Text>
+            <Caption>
+              The wizard now follows the same polished first-impression language as login: define the society, shape the inventory, attach operational context, then review launch readiness in one pass.
+            </Caption>
+          </View>
+          <View style={styles.flowOverviewBadge}>
+            <Text style={styles.flowOverviewBadgeValue}>{canCreate ? 'Go live' : 'In progress'}</Text>
+            <Caption style={styles.flowOverviewBadgeLabel}>workspace status</Caption>
+          </View>
+        </View>
+        <View style={[styles.flowStepGrid, isCompact ? styles.flowStepGridCompact : null]}>
+          {progressSteps.map((step) => (
+            <View key={step.key} style={[styles.flowStepCard, isCompact ? styles.flowStepCardCompact : null]}>
+              <Pill label={step.ready ? `${step.eyebrow} complete` : `${step.eyebrow} active`} tone={getStepTone(step.ready, step.active)} />
+              <Text style={styles.flowStepTitle}>{step.title}</Text>
+              <Caption>{step.description}</Caption>
+            </View>
+          ))}
+        </View>
+      </SurfaceCard>
+
+      <SurfaceCard style={styles.sectionCardWarm}>
+        <View style={styles.sectionLeadRow}>
+          <Pill label="Step 1" tone="warning" />
+          <Pill label="Discovery data" tone="primary" />
+        </View>
         <SectionHeader title="1. Society identity and location" />
         <InputField
           label="Society name"
@@ -752,7 +862,11 @@ export function SocietySetupWizardScreen() {
         />
       </SurfaceCard>
 
-      <SurfaceCard>
+      <SurfaceCard style={styles.sectionCardCool}>
+        <View style={styles.sectionLeadRow}>
+          <Pill label="Step 2" tone="warning" />
+          <Pill label="Structure design" tone="accent" />
+        </View>
         <SectionHeader
           title="2. Society structure"
           description="Select every structure this society manages. Mixed-use builders can enable apartments, bungalows, and commercial spaces together."
@@ -921,7 +1035,11 @@ export function SocietySetupWizardScreen() {
         ) : null}
       </SurfaceCard>
 
-      <SurfaceCard>
+      <SurfaceCard style={styles.sectionCardNeutral}>
+        <View style={styles.sectionLeadRow}>
+          <Pill label="Step 3" tone="warning" />
+          <Pill label="Inventory and billing" tone="primary" />
+        </View>
         <SectionHeader
           title="3. Units and maintenance"
           description={getUnitsSectionDescription(draft)}
@@ -1134,7 +1252,11 @@ export function SocietySetupWizardScreen() {
         </View>
       </SurfaceCard>
 
-      <SurfaceCard>
+      <SurfaceCard style={styles.sectionCardCool}>
+        <View style={styles.sectionLeadRow}>
+          <Pill label="Step 4" tone="warning" />
+          <Pill label="Amenities and access" tone="accent" />
+        </View>
         <SectionHeader
           title="4. Common amenities"
           description="Pick the amenities you want the society to start with. The catalog is grouped to match how big metro projects usually organize social, sports, wellness, family, and pet/community spaces."
@@ -1188,7 +1310,11 @@ export function SocietySetupWizardScreen() {
         ) : null}
       </SurfaceCard>
 
-      <SurfaceCard>
+      <SurfaceCard style={styles.sectionCardWarm}>
+        <View style={styles.sectionLeadRow}>
+          <Pill label="Step 5" tone="warning" />
+          <Pill label="Governance setup" tone="primary" />
+        </View>
         <SectionHeader title="5. Rules and operations" />
         <InputField
           label="Starter rules summary"
@@ -1199,7 +1325,20 @@ export function SocietySetupWizardScreen() {
         />
       </SurfaceCard>
 
-      <SurfaceCard>
+      <SurfaceCard style={styles.launchReviewCard}>
+        <View style={[styles.launchReviewHeader, isCompact ? styles.launchReviewHeaderCompact : null]}>
+          <View style={styles.launchReviewCopy}>
+            <Pill label="Launch review" tone="success" />
+            <Text style={styles.launchReviewTitle}>Review the society before you create the workspace.</Text>
+            <Caption>
+              This final panel mirrors what the market-facing society will look like in search and onboarding. Verify discoverability, unit count, amenity mix, and operational basics before launch.
+            </Caption>
+          </View>
+          <View style={styles.launchReviewStats}>
+            <Text style={styles.launchReviewStatValue}>{validationIssues.length}</Text>
+            <Caption style={styles.launchReviewStatLabel}>validation items</Caption>
+          </View>
+        </View>
         <SectionHeader
           title="Workspace preview"
           description="This starter setup will create a discoverable society workspace. The first local chairman can then claim it from the join portal for super user approval."
@@ -1238,6 +1377,128 @@ const styles = StyleSheet.create({
   heroActions: {
     flexDirection: 'row',
     gap: spacing.sm,
+    flexWrap: 'wrap',
+  },
+  heroPillRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  heroPillRowCompact: {
+    gap: spacing.xs,
+  },
+  heroMetricRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  heroMetricRowCompact: {
+    gap: spacing.xs,
+  },
+  heroMetricCard: {
+    flex: 1,
+    minWidth: 160,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    backgroundColor: 'rgba(255,255,255,0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.18)',
+    gap: 4,
+  },
+  heroMetricCardCompact: {
+    minWidth: 0,
+  },
+  heroMetricValue: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: palette.white,
+  },
+  heroMetricLabel: {
+    color: '#FFEDE6',
+  },
+  flowOverviewCard: {
+    gap: spacing.lg,
+    backgroundColor: '#FFF8F1',
+  },
+  flowOverviewHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+    flexWrap: 'wrap',
+  },
+  flowOverviewHeaderCompact: {
+    gap: spacing.sm,
+  },
+  flowOverviewCopy: {
+    flex: 1,
+    minWidth: 220,
+    gap: spacing.xs,
+  },
+  flowOverviewTitle: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: palette.ink,
+  },
+  flowOverviewBadge: {
+    minWidth: 140,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    backgroundColor: palette.white,
+    borderWidth: 1,
+    borderColor: '#F1D8CB',
+    gap: 4,
+  },
+  flowOverviewBadgeValue: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: palette.accent,
+  },
+  flowOverviewBadgeLabel: {
+    color: palette.mutedInk,
+  },
+  flowStepGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  flowStepGridCompact: {
+    gap: spacing.xs,
+  },
+  flowStepCard: {
+    flex: 1,
+    minWidth: 180,
+    padding: spacing.md,
+    borderRadius: radius.md,
+    backgroundColor: palette.white,
+    borderWidth: 1,
+    borderColor: '#ECDCCF',
+    gap: spacing.xs,
+    ...shadow.card,
+  },
+  flowStepCardCompact: {
+    minWidth: 0,
+  },
+  flowStepTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: palette.ink,
+  },
+  sectionLeadRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  sectionCardWarm: {
+    backgroundColor: '#FFF8F0',
+  },
+  sectionCardCool: {
+    backgroundColor: '#F8FBFF',
+  },
+  sectionCardNeutral: {
+    backgroundColor: '#FFFCF8',
   },
   choiceWrap: {
     flexDirection: 'row',
@@ -1307,6 +1568,49 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '800',
     color: palette.primary,
+  },
+  launchReviewCard: {
+    gap: spacing.lg,
+    backgroundColor: '#FFF9F5',
+  },
+  launchReviewHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+    flexWrap: 'wrap',
+  },
+  launchReviewHeaderCompact: {
+    gap: spacing.sm,
+  },
+  launchReviewCopy: {
+    flex: 1,
+    minWidth: 220,
+    gap: spacing.sm,
+  },
+  launchReviewTitle: {
+    fontSize: 24,
+    lineHeight: 30,
+    fontWeight: '800',
+    color: palette.ink,
+  },
+  launchReviewStats: {
+    minWidth: 132,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    backgroundColor: palette.white,
+    borderWidth: 1,
+    borderColor: '#EFD7C8',
+    gap: 4,
+  },
+  launchReviewStatValue: {
+    fontSize: 24,
+    fontWeight: '800',
+    color: palette.accent,
+  },
+  launchReviewStatLabel: {
+    color: palette.mutedInk,
   },
   previewRow: {
     flexDirection: 'row',
