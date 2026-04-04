@@ -11,7 +11,7 @@ import { SocietyEnrollmentScreen } from './src/screens/SocietyEnrollmentScreen';
 import { SocietySetupWizardScreen } from './src/screens/SocietySetupWizardScreen';
 import { WorkspaceSelectionScreen } from './src/screens/WorkspaceSelectionScreen';
 import { AppProvider, useApp } from './src/state/AppContext';
-import { palette, spacing } from './src/theme/tokens';
+import { palette, radius, spacing } from './src/theme/tokens';
 import { getPendingSecurityGuestRequestsForResident } from './src/utils/selectors';
 
 function AppRoot() {
@@ -31,11 +31,47 @@ function AppRoot() {
   if (state.isHydrating) {
     return (
       <View style={styles.loadingScreen}>
-        <Text style={styles.loadingEyebrow}>SocietyOS</Text>
-        <Text style={styles.loadingTitle}>Connecting securely</Text>
-        <Text style={styles.loadingBody}>
-          Loading your workspace and verifying the backend connection.
-        </Text>
+        <View pointerEvents="none" style={styles.loadingBackdrop}>
+          <View style={[styles.loadingOrb, styles.loadingOrbTop]} />
+          <View style={[styles.loadingOrb, styles.loadingOrbMiddle]} />
+          <View style={[styles.loadingOrb, styles.loadingOrbBottom]} />
+        </View>
+
+        <View style={styles.loadingCard}>
+          <View style={styles.loadingBrandRow}>
+            <Text style={styles.loadingEyebrow}>SocietyOS</Text>
+            <View style={styles.loadingBrandPill}>
+              <View style={styles.loadingBrandDot} />
+              <Text style={styles.loadingBrandPillText}>Secure startup</Text>
+            </View>
+          </View>
+
+          <Text style={styles.loadingTitle}>Preparing your secure society workspace.</Text>
+          <Text style={styles.loadingBody}>
+            Restoring your verified session, refreshing society access, and confirming the live backend connection before the workspace opens.
+          </Text>
+
+          <View style={styles.loadingChecklist}>
+            <View style={styles.loadingChecklistItem}>
+              <View style={styles.loadingChecklistBullet} />
+              <Text style={styles.loadingChecklistText}>Verifying the production API connection</Text>
+            </View>
+            <View style={styles.loadingChecklistItem}>
+              <View style={styles.loadingChecklistBullet} />
+              <Text style={styles.loadingChecklistText}>Restoring roles, societies, and active access</Text>
+            </View>
+            <View style={styles.loadingChecklistItem}>
+              <View style={styles.loadingChecklistBullet} />
+              <Text style={styles.loadingChecklistText}>Preparing resident, admin, and security modules</Text>
+            </View>
+          </View>
+
+          <View style={styles.loadingPulseRow}>
+            <View style={[styles.loadingPulseBar, styles.loadingPulseBarPrimary]} />
+            <View style={[styles.loadingPulseBar, styles.loadingPulseBarMuted]} />
+            <View style={[styles.loadingPulseBar, styles.loadingPulseBarAccent]} />
+          </View>
+        </View>
       </View>
     );
   }
@@ -112,114 +148,140 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: palette.background,
   },
-  connectionHeaderCompact: {
-    gap: spacing.xs,
-  },
-  connectionCopy: {
-    flex: 1,
-    gap: 2,
-    minWidth: 240,
-  },
-  connectionCopyCompact: {
-    minWidth: 0,
-  },
-  connectionEyebrow: {
-    color: '#795A2B',
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 0.6,
-    textTransform: 'uppercase',
-  },
-  connectionUrl: {
-    color: palette.ink,
-    fontSize: 14,
-    lineHeight: 18,
-    fontWeight: '800',
-  },
-  connectionUrlCompact: {
-    fontSize: 13,
-    lineHeight: 17,
-  },
-  connectionHint: {
-    color: palette.mutedInk,
-    fontSize: 11,
-    lineHeight: 15,
-  },
-  connectionStatusPill: {
-    borderRadius: 999,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 8,
-    borderWidth: 1,
-  },
-  connectionStatusPillCompact: {
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 6,
-  },
-  connectionStatusPillOnline: {
-    backgroundColor: '#E8F6EF',
-    borderColor: '#A6D7BD',
-  },
-  connectionStatusPillOffline: {
-    backgroundColor: '#FFF0CF',
-    borderColor: '#E3C57D',
-  },
-  connectionStatusText: {
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  connectionStatusTextOnline: {
-    color: '#205C40',
-  },
-  connectionStatusTextOffline: {
-    color: '#7B4C06',
-  },
-  connectionActions: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-  },
-  connectionActionsCompact: {
-    gap: spacing.xs,
-  },
-  connectionActionsCollapsed: {
-    alignItems: 'flex-start',
-  },
-  connectionEditor: {
-    gap: spacing.sm,
-    paddingTop: spacing.xs,
-  },
-  connectionEditorCompact: {
-    paddingTop: spacing.xs,
-  },
-  connectionHelperText: {
-    color: '#6D614E',
-    fontSize: 12,
-    lineHeight: 18,
-  },
   loadingScreen: {
     flex: 1,
-    backgroundColor: palette.primaryDark,
+    backgroundColor: '#152230',
     justifyContent: 'center',
-    paddingHorizontal: spacing.xxl,
+    paddingHorizontal: spacing.lg,
+    overflow: 'hidden',
+  },
+  loadingBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  loadingOrb: {
+    position: 'absolute',
+    borderRadius: 999,
+    opacity: 0.92,
+  },
+  loadingOrbTop: {
+    width: 260,
+    height: 260,
+    top: -70,
+    right: -60,
+    backgroundColor: 'rgba(232, 93, 75, 0.18)',
+  },
+  loadingOrbMiddle: {
+    width: 210,
+    height: 210,
+    top: '30%',
+    left: -90,
+    backgroundColor: 'rgba(76, 122, 179, 0.18)',
+  },
+  loadingOrbBottom: {
+    width: 280,
+    height: 280,
+    bottom: -110,
+    right: '8%',
+    backgroundColor: 'rgba(211, 161, 63, 0.14)',
+  },
+  loadingCard: {
+    backgroundColor: 'rgba(15, 28, 40, 0.78)',
+    borderWidth: 1,
+    borderColor: 'rgba(221, 233, 244, 0.12)',
+    borderRadius: radius.xl,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.xxxl,
     gap: spacing.md,
+  },
+  loadingBrandRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing.sm,
+    flexWrap: 'wrap',
   },
   loadingEyebrow: {
     color: '#D6E5F4',
+    fontSize: 14,
+    fontWeight: '800',
+    letterSpacing: 3,
+    textTransform: 'uppercase',
+  },
+  loadingBrandPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  loadingBrandDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 999,
+    backgroundColor: palette.gold,
+  },
+  loadingBrandPillText: {
+    color: '#E7F0F8',
     fontSize: 12,
     fontWeight: '700',
-    letterSpacing: 1.5,
-    textTransform: 'uppercase',
   },
   loadingTitle: {
     color: palette.white,
-    fontSize: 30,
-    lineHeight: 36,
-    fontWeight: '800',
+    fontSize: 42,
+    lineHeight: 46,
+    fontWeight: '900',
+    maxWidth: 420,
   },
   loadingBody: {
     color: '#D6E5F4',
-    fontSize: 15,
-    lineHeight: 23,
+    fontSize: 16,
+    lineHeight: 25,
+    maxWidth: 560,
+  },
+  loadingChecklist: {
+    gap: spacing.sm,
+    paddingTop: spacing.xs,
+  },
+  loadingChecklistItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  loadingChecklistBullet: {
+    width: 10,
+    height: 10,
+    borderRadius: 999,
+    backgroundColor: palette.blue,
+  },
+  loadingChecklistText: {
+    color: '#E7F0F8',
+    fontSize: 14,
+    lineHeight: 19,
+    fontWeight: '700',
+    flex: 1,
+  },
+  loadingPulseRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    paddingTop: spacing.xs,
+  },
+  loadingPulseBar: {
+    flex: 1,
+    height: 8,
+    borderRadius: 999,
+  },
+  loadingPulseBarPrimary: {
+    backgroundColor: '#DCE7F2',
+  },
+  loadingPulseBarMuted: {
+    backgroundColor: 'rgba(220, 231, 242, 0.35)',
+  },
+  loadingPulseBarAccent: {
+    backgroundColor: palette.accent,
   },
   banner: {
     backgroundColor: '#FFF6E0',
