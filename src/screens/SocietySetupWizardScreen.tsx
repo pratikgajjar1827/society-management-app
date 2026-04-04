@@ -5,7 +5,6 @@ import {
   ActionButton,
   Caption,
   ChoiceChip,
-  HeroCard,
   InputField,
   Page,
   Pill,
@@ -385,6 +384,7 @@ export function SocietySetupWizardScreen() {
   const { state, actions } = useApp();
   const { width } = useWindowDimensions();
   const isCompact = width < 768;
+  const isPhone = width < 420;
   const [draft, setDraft] = useState(() => syncDerivedFields(cloneDraft(state.defaultSetupDraft)));
 
   function updateDraft(patch: Partial<SocietySetupDraft>) {
@@ -743,12 +743,39 @@ export function SocietySetupWizardScreen() {
 
   return (
     <Page>
-      <HeroCard
-        eyebrow="Create Society Portal"
-        title={isCompact ? 'Launch a society from one polished setup flow.' : 'Launch a new society workspace with a clear operating blueprint.'}
-        subtitle="This setup captures the society identity, geographic discoverability, inventory model, maintenance defaults, amenities, and the first operating notes before residents begin enrolling."
-        tone="accent"
-      >
+      <SurfaceCard style={[styles.setupHeroCard, isCompact ? styles.setupHeroCardCompact : null]}>
+        <View style={[styles.setupHeroTop, isCompact ? styles.setupHeroTopCompact : null]}>
+          <View style={styles.setupHeroCopy}>
+            <Pill label="Create Society Portal" tone="accent" />
+            <Text
+              style={[
+                styles.setupHeroTitle,
+                isCompact ? styles.setupHeroTitleCompact : null,
+                isPhone ? styles.setupHeroTitlePhone : null,
+              ]}
+            >
+              {isPhone
+                ? 'Create a society with a clean phone-first setup.'
+                : 'Create a new society workspace with the same cleaner, simpler first-impression design.'}
+            </Text>
+            <Caption style={styles.setupHeroDescription}>
+              Start with identity and location, then move through structure, unit math, amenities, and launch checks without the oversized desktop-style header.
+            </Caption>
+          </View>
+
+          <View style={[styles.setupHeroAside, isPhone ? styles.setupHeroAsidePhone : null]}>
+            <View style={styles.setupHeroStatusCard}>
+              <Text style={styles.setupHeroStatusValue}>{completedStepCount}/4</Text>
+              <Caption style={styles.setupHeroStatusLabel}>stages ready</Caption>
+            </View>
+            <ActionButton
+              label={state.onboarding?.membershipsCount ? 'Back to workspaces' : 'Back to portal selection'}
+              onPress={actions.cancelSetup}
+              variant="secondary"
+            />
+          </View>
+        </View>
+
         <View style={[styles.heroPillRow, isCompact ? styles.heroPillRowCompact : null]}>
           <Pill label={readinessLabel} tone={canCreate ? 'success' : 'warning'} />
           <Pill label={`${draft.totalUnits || '0'} planned units`} tone="primary" />
@@ -769,31 +796,31 @@ export function SocietySetupWizardScreen() {
             <Caption style={styles.heroMetricLabel}>maintenance due day</Caption>
           </View>
         </View>
-        <View style={styles.heroActions}>
-          <ActionButton
-            label={state.onboarding?.membershipsCount ? 'Back to workspaces' : 'Back to portal selection'}
-            onPress={actions.cancelSetup}
-            variant="secondary"
-          />
-        </View>
-      </HeroCard>
+      </SurfaceCard>
 
-      <SurfaceCard style={styles.flowOverviewCard}>
+      <SurfaceCard style={[styles.flowOverviewCard, isPhone ? styles.flowOverviewCardPhone : null]}>
         <View style={[styles.flowOverviewHeader, isCompact ? styles.flowOverviewHeaderCompact : null]}>
           <View style={styles.flowOverviewCopy}>
             <Text style={styles.flowOverviewTitle}>Creation flow overview</Text>
             <Caption>
-              The wizard now follows the same polished first-impression language as login: define the society, shape the inventory, attach operational context, then review launch readiness in one pass.
+              Define the society, shape the inventory, add operating context, then review launch readiness in one pass.
             </Caption>
           </View>
-          <View style={styles.flowOverviewBadge}>
+          <View style={[styles.flowOverviewBadge, isPhone ? styles.flowOverviewBadgePhone : null]}>
             <Text style={styles.flowOverviewBadgeValue}>{canCreate ? 'Go live' : 'In progress'}</Text>
             <Caption style={styles.flowOverviewBadgeLabel}>workspace status</Caption>
           </View>
         </View>
         <View style={[styles.flowStepGrid, isCompact ? styles.flowStepGridCompact : null]}>
           {progressSteps.map((step) => (
-            <View key={step.key} style={[styles.flowStepCard, isCompact ? styles.flowStepCardCompact : null]}>
+            <View
+              key={step.key}
+              style={[
+                styles.flowStepCard,
+                isCompact ? styles.flowStepCardCompact : null,
+                isPhone ? styles.flowStepCardPhone : null,
+              ]}
+            >
               <Pill label={step.ready ? `${step.eyebrow} complete` : `${step.eyebrow} active`} tone={getStepTone(step.ready, step.active)} />
               <Text style={styles.flowStepTitle}>{step.title}</Text>
               <Caption>{step.description}</Caption>
@@ -1374,6 +1401,71 @@ export function SocietySetupWizardScreen() {
 }
 
 const styles = StyleSheet.create({
+  setupHeroCard: {
+    gap: spacing.lg,
+    backgroundColor: '#FFF8F0',
+  },
+  setupHeroCardCompact: {
+    gap: spacing.md,
+  },
+  setupHeroTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+    flexWrap: 'wrap',
+  },
+  setupHeroTopCompact: {
+    gap: spacing.sm,
+  },
+  setupHeroCopy: {
+    flex: 1,
+    minWidth: 220,
+    gap: spacing.sm,
+  },
+  setupHeroTitle: {
+    fontSize: 34,
+    lineHeight: 40,
+    fontWeight: '800',
+    color: palette.ink,
+  },
+  setupHeroTitleCompact: {
+    fontSize: 28,
+    lineHeight: 33,
+  },
+  setupHeroTitlePhone: {
+    fontSize: 24,
+    lineHeight: 29,
+  },
+  setupHeroDescription: {
+    maxWidth: 720,
+  },
+  setupHeroAside: {
+    minWidth: 160,
+    gap: spacing.sm,
+    alignItems: 'stretch',
+  },
+  setupHeroAsidePhone: {
+    width: '100%',
+    minWidth: 0,
+  },
+  setupHeroStatusCard: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: '#E7D9C8',
+    backgroundColor: '#FFFDFC',
+    gap: 2,
+  },
+  setupHeroStatusValue: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: palette.accent,
+  },
+  setupHeroStatusLabel: {
+    color: palette.mutedInk,
+  },
   heroActions: {
     flexDirection: 'row',
     gap: spacing.sm,
@@ -1421,6 +1513,9 @@ const styles = StyleSheet.create({
     gap: spacing.lg,
     backgroundColor: '#FFF8F1',
   },
+  flowOverviewCardPhone: {
+    gap: spacing.md,
+  },
   flowOverviewHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -1451,6 +1546,10 @@ const styles = StyleSheet.create({
     borderColor: '#F1D8CB',
     gap: 4,
   },
+  flowOverviewBadgePhone: {
+    width: '100%',
+    minWidth: 0,
+  },
   flowOverviewBadgeValue: {
     fontSize: 18,
     fontWeight: '800',
@@ -1480,6 +1579,9 @@ const styles = StyleSheet.create({
   },
   flowStepCardCompact: {
     minWidth: 0,
+  },
+  flowStepCardPhone: {
+    width: '100%',
   },
   flowStepTitle: {
     fontSize: 17,

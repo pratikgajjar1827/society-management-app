@@ -32,45 +32,18 @@ function AppRoot() {
     return (
       <View style={styles.loadingScreen}>
         <View pointerEvents="none" style={styles.loadingBackdrop}>
-          <View style={[styles.loadingOrb, styles.loadingOrbTop]} />
-          <View style={[styles.loadingOrb, styles.loadingOrbMiddle]} />
-          <View style={[styles.loadingOrb, styles.loadingOrbBottom]} />
+          <View style={[styles.loadingShape, styles.loadingShapeRear]} />
+          <View style={[styles.loadingShape, styles.loadingShapeMid]} />
+          <View style={[styles.loadingShape, styles.loadingShapeFront]} />
         </View>
 
-        <View style={styles.loadingCard}>
-          <View style={styles.loadingBrandRow}>
-            <Text style={styles.loadingEyebrow}>SocietyOS</Text>
-            <View style={styles.loadingBrandPill}>
-              <View style={styles.loadingBrandDot} />
-              <Text style={styles.loadingBrandPillText}>Secure startup</Text>
-            </View>
+        <View style={styles.loadingMarkWrap}>
+          <View style={styles.loadingCubeStack}>
+            <View style={[styles.loadingCube, styles.loadingCubeRear]} />
+            <View style={[styles.loadingCube, styles.loadingCubeMid]} />
+            <View style={[styles.loadingCube, styles.loadingCubeFront]} />
           </View>
-
-          <Text style={styles.loadingTitle}>Preparing your secure society workspace.</Text>
-          <Text style={styles.loadingBody}>
-            Restoring your verified session, refreshing society access, and confirming the live backend connection before the workspace opens.
-          </Text>
-
-          <View style={styles.loadingChecklist}>
-            <View style={styles.loadingChecklistItem}>
-              <View style={styles.loadingChecklistBullet} />
-              <Text style={styles.loadingChecklistText}>Verifying the production API connection</Text>
-            </View>
-            <View style={styles.loadingChecklistItem}>
-              <View style={styles.loadingChecklistBullet} />
-              <Text style={styles.loadingChecklistText}>Restoring roles, societies, and active access</Text>
-            </View>
-            <View style={styles.loadingChecklistItem}>
-              <View style={styles.loadingChecklistBullet} />
-              <Text style={styles.loadingChecklistText}>Preparing resident, admin, and security modules</Text>
-            </View>
-          </View>
-
-          <View style={styles.loadingPulseRow}>
-            <View style={[styles.loadingPulseBar, styles.loadingPulseBarPrimary]} />
-            <View style={[styles.loadingPulseBar, styles.loadingPulseBarMuted]} />
-            <View style={[styles.loadingPulseBar, styles.loadingPulseBarAccent]} />
-          </View>
+          <Text style={styles.loadingTitle}>My Space</Text>
         </View>
       </View>
     );
@@ -150,138 +123,87 @@ const styles = StyleSheet.create({
   },
   loadingScreen: {
     flex: 1,
-    backgroundColor: '#152230',
+    backgroundColor: '#101B26',
     justifyContent: 'center',
     paddingHorizontal: spacing.lg,
     overflow: 'hidden',
+    alignItems: 'center',
   },
   loadingBackdrop: {
     ...StyleSheet.absoluteFillObject,
   },
-  loadingOrb: {
+  loadingShape: {
     position: 'absolute',
-    borderRadius: 999,
-    opacity: 0.92,
+    borderRadius: 36,
+    transform: [{ rotate: '-18deg' }],
   },
-  loadingOrbTop: {
-    width: 260,
-    height: 260,
-    top: -70,
-    right: -60,
-    backgroundColor: 'rgba(232, 93, 75, 0.18)',
+  loadingShapeRear: {
+    width: 250,
+    height: 250,
+    top: 72,
+    right: -82,
+    backgroundColor: 'rgba(232, 93, 75, 0.12)',
   },
-  loadingOrbMiddle: {
-    width: 210,
-    height: 210,
-    top: '30%',
-    left: -90,
-    backgroundColor: 'rgba(76, 122, 179, 0.18)',
+  loadingShapeMid: {
+    width: 220,
+    height: 220,
+    bottom: 120,
+    left: -88,
+    backgroundColor: 'rgba(76, 122, 179, 0.13)',
   },
-  loadingOrbBottom: {
+  loadingShapeFront: {
     width: 280,
     height: 280,
-    bottom: -110,
-    right: '8%',
-    backgroundColor: 'rgba(211, 161, 63, 0.14)',
+    bottom: -96,
+    right: '10%',
+    backgroundColor: 'rgba(211, 161, 63, 0.1)',
   },
-  loadingCard: {
-    backgroundColor: 'rgba(15, 28, 40, 0.78)',
-    borderWidth: 1,
-    borderColor: 'rgba(221, 233, 244, 0.12)',
-    borderRadius: radius.xl,
-    paddingHorizontal: spacing.xl,
-    paddingVertical: spacing.xxxl,
-    gap: spacing.md,
-  },
-  loadingBrandRow: {
-    flexDirection: 'row',
+  loadingMarkWrap: {
     alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing.sm,
-    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: spacing.xl,
   },
-  loadingEyebrow: {
-    color: '#D6E5F4',
-    fontSize: 14,
-    fontWeight: '800',
-    letterSpacing: 3,
-    textTransform: 'uppercase',
-  },
-  loadingBrandPill: {
-    flexDirection: 'row',
+  loadingCubeStack: {
+    width: 150,
+    height: 124,
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: spacing.md,
-    paddingVertical: 8,
-    borderRadius: 999,
-    backgroundColor: 'rgba(255,255,255,0.08)',
+    justifyContent: 'center',
+  },
+  loadingCube: {
+    position: 'absolute',
+    width: 92,
+    height: 92,
+    borderRadius: 26,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+    transform: [{ rotate: '-18deg' }],
   },
-  loadingBrandDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 999,
-    backgroundColor: palette.gold,
+  loadingCubeRear: {
+    backgroundColor: 'rgba(76, 122, 179, 0.22)',
+    borderColor: 'rgba(176, 207, 240, 0.2)',
+    top: 8,
+    left: 18,
   },
-  loadingBrandPillText: {
-    color: '#E7F0F8',
-    fontSize: 12,
-    fontWeight: '700',
+  loadingCubeMid: {
+    backgroundColor: 'rgba(232, 93, 75, 0.26)',
+    borderColor: 'rgba(255, 199, 190, 0.24)',
+    top: 18,
+    right: 12,
+  },
+  loadingCubeFront: {
+    backgroundColor: 'rgba(255, 255, 255, 0.82)',
+    borderColor: 'rgba(255, 255, 255, 0.62)',
+    shadowColor: '#040A10',
+    shadowOpacity: 0.22,
+    shadowRadius: 22,
+    shadowOffset: { width: 0, height: 12 },
+    elevation: 6,
   },
   loadingTitle: {
     color: palette.white,
-    fontSize: 42,
-    lineHeight: 46,
+    fontSize: 40,
+    lineHeight: 44,
     fontWeight: '900',
-    maxWidth: 420,
-  },
-  loadingBody: {
-    color: '#D6E5F4',
-    fontSize: 16,
-    lineHeight: 25,
-    maxWidth: 560,
-  },
-  loadingChecklist: {
-    gap: spacing.sm,
-    paddingTop: spacing.xs,
-  },
-  loadingChecklistItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-  },
-  loadingChecklistBullet: {
-    width: 10,
-    height: 10,
-    borderRadius: 999,
-    backgroundColor: palette.blue,
-  },
-  loadingChecklistText: {
-    color: '#E7F0F8',
-    fontSize: 14,
-    lineHeight: 19,
-    fontWeight: '700',
-    flex: 1,
-  },
-  loadingPulseRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    paddingTop: spacing.xs,
-  },
-  loadingPulseBar: {
-    flex: 1,
-    height: 8,
-    borderRadius: 999,
-  },
-  loadingPulseBarPrimary: {
-    backgroundColor: '#DCE7F2',
-  },
-  loadingPulseBarMuted: {
-    backgroundColor: 'rgba(220, 231, 242, 0.35)',
-  },
-  loadingPulseBarAccent: {
-    backgroundColor: palette.accent,
+    letterSpacing: 1,
   },
   banner: {
     backgroundColor: '#FFF6E0',
