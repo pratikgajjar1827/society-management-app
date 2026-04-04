@@ -578,8 +578,8 @@ async function dispatchOtp(channel, destination, forceDevelopment = false) {
   }
 
   const payload = await sendTwilioRequest('/Verifications', {
-    to: destination,
-    channel,
+    To: destination,
+    Channel: channel,
   });
 
   return {
@@ -595,8 +595,8 @@ async function verifyProviderChallenge(challenge, code) {
   }
 
   const payload = await sendTwilioRequest('/VerificationCheck', {
-    to: challenge.destination,
-    code,
+    To: challenge.destination,
+    Code: code,
   });
 
   return payload.status === 'approved' || payload.valid === true;
