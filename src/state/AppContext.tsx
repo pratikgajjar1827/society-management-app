@@ -597,6 +597,10 @@ function resolveAuthenticatedScreen(session: SessionState, onboarding: Onboardin
     return 'auth';
   }
 
+  if (isCreatorAppVariant() && session.accountRole === 'superUser' && !session.selectedSocietyId) {
+    return 'workspace';
+  }
+
   if (session.selectedSocietyId && session.selectedProfile) {
     const hasSociety = data.societies.some((society) => society.id === session.selectedSocietyId);
 
@@ -979,7 +983,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
         setState((currentState) => ({
           ...currentState,
-          screen: 'setup',
+          screen: 'workspace',
           data: mergeServerData(response.data, currentState.data),
           chairmanAssigned: response.chairmanAssigned,
           amenityLibrary: response.amenityLibrary,
@@ -1417,17 +1421,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setState((currentState) => ({
         ...currentState,
         screen: isCreatorAppVariant()
-          ? 'auth'
+          ? 'workspace'
           : currentState.onboarding?.membershipsCount
             ? 'workspace'
             : 'societyEnrollment',
         apiError: undefined,
         noticeMessage: undefined,
-        onboarding: isCreatorAppVariant() ? undefined : currentState.onboarding,
+        onboarding: currentState.onboarding,
         pendingChallenge: isCreatorAppVariant() ? undefined : currentState.pendingChallenge,
-        session: isCreatorAppVariant()
-          ? {}
-          : currentState.session,
+        session: {
+          ...currentState.session,
+          selectedSocietyId: undefined,
+          selectedProfile: undefined,
+        },
       })),
     selectProfile: (profile) =>
       setState((currentState) => ({
@@ -1442,11 +1448,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     goToWorkspaces: () =>
       setState((currentState) => ({
         ...currentState,
-        screen: currentState.onboarding?.membershipsCount
+        screen: isCreatorAppVariant()
           ? 'workspace'
-          : currentState.session.sessionToken
-            ? resolveScreen(currentState.onboarding)
-            : 'auth',
+          : currentState.onboarding?.membershipsCount
+            ? 'workspace'
+            : currentState.session.sessionToken
+              ? resolveScreen(currentState.onboarding)
+              : 'auth',
         noticeMessage: undefined,
         session: {
           ...currentState.session,
@@ -1494,18 +1502,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
           amenityLibrary: response.amenityLibrary,
           defaultSetupDraft: response.defaultSetupDraft,
           onboarding: response.onboarding,
-          screen: 'role',
+          screen: isCreatorAppVariant() ? 'dashboard' : 'role',
           isSyncing: false,
           dataSource: 'remote',
           noticeMessage: isCreatorAppVariant()
-            ? 'Society created successfully. You can start another society right away from this creator app.'
+            ? 'Society created. You can now open the admin workspace, review claims, or create another society.'
             : 'Society created. The local chairman can now claim this society from the join flow for super user approval.',
           session: {
             ...currentState.session,
             userId: response.currentUserId,
             accountRole: response.onboarding.preferredRole ?? currentState.session.accountRole,
             selectedSocietyId: response.societyId,
-            selectedProfile: undefined,
+            selectedProfile: isCreatorAppVariant() ? 'admin' : undefined,
           },
         }));
       } catch (error) {
@@ -2189,4 +2197,3 @@ export function useApp() {
 
   return context;
 }
-

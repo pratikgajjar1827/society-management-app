@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Image, Linking, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { BackHandler, Image, Linking, Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import {
   ActionButton,
@@ -299,6 +299,24 @@ export function AdminShell() {
   const [activeTab, setActiveTab] = useState<AdminTab>('home');
   const { width } = useWindowDimensions();
   const isCompact = width < 768;
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') {
+      return undefined;
+    }
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (activeTab !== 'home') {
+        setActiveTab('home');
+        return true;
+      }
+
+      actions.goToRoleSelection();
+      return true;
+    });
+
+    return () => subscription.remove();
+  }, [actions, activeTab]);
 
   if (!state.session.userId || !state.session.selectedSocietyId) {
     return null;

@@ -64,6 +64,12 @@ Type-checking:
 npm run typecheck
 ```
 
+## Android production release
+
+The repo now supports proper release signing, release-only HTTPS defaults, and versioned Android builds.
+
+See the full setup and update workflow in [docs/android-production-release.md](docs/android-production-release.md).
+
 Reset the active database backend back to the demo snapshot:
 
 ```bash

@@ -1,9 +1,12 @@
+import { useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { BackHandler, Platform, StyleSheet, Text, View } from 'react-native';
 
 import { AccountRoleSelectionScreen } from './src/screens/AccountRoleSelectionScreen';
 import { AdminShell } from './src/screens/admin/AdminShell';
 import { AuthScreen } from './src/screens/AuthScreen';
+import { CreatorWorkspaceScreen } from './src/screens/CreatorWorkspaceScreen';
 import { ResidentShell } from './src/screens/resident/ResidentShell';
 import { RoleSelectionScreen } from './src/screens/RoleSelectionScreen';
 import { SecurityShell } from './src/screens/security/SecurityShell';
@@ -13,11 +16,13 @@ import { SocietySetupWizardScreen } from './src/screens/SocietySetupWizardScreen
 import { WorkspaceSelectionScreen } from './src/screens/WorkspaceSelectionScreen';
 import { isCreatorAppVariant } from './src/config/appVariant';
 import { AppProvider, useApp } from './src/state/AppContext';
+import { ThemeProvider, useAppTheme } from './src/theme/appTheme';
 import { palette, radius, spacing } from './src/theme/tokens';
 import { getPendingSecurityGuestRequestsForResident } from './src/utils/selectors';
 
 function AppRoot() {
-  const { state } = useApp();
+  const { state, actions } = useApp();
+  const { theme } = useAppTheme();
   const isCreatorApp = isCreatorAppVariant();
   const isAuthScreen = state.screen === 'auth';
   const pendingSecurityApprovals =
@@ -30,6 +35,48 @@ function AppRoot() {
           state.session.selectedSocietyId,
         ).length
       : 0;
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') {
+      return undefined;
+    }
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (state.isHydrating) {
+        return true;
+      }
+
+      if (isCreatorApp) {
+        switch (state.screen) {
+          case 'dashboard':
+            actions.goToWorkspaces();
+            return true;
+          case 'setup':
+            actions.cancelSetup();
+            return true;
+          default:
+            return false;
+        }
+      }
+
+      switch (state.screen) {
+        case 'role':
+          actions.goToWorkspaces();
+          return true;
+        case 'workspace':
+          return false;
+        case 'portalChoice':
+          return false;
+        case 'setup':
+          actions.cancelSetup();
+          return true;
+        default:
+          return false;
+      }
+    });
+
+    return () => subscription.remove();
+  }, [actions, isCreatorApp, state.isHydrating, state.screen, state.session.sessionToken]);
 
   if (state.isHydrating) {
     return (
@@ -59,8 +106,29 @@ function AppRoot() {
       state.session.accountRole === 'superUser',
     );
 
+    let creatorScreen = <SocietyCreatorAccessScreen />;
+
+    if (creatorUnlocked) {
+      switch (state.screen) {
+        case 'setup':
+          creatorScreen = <SocietySetupWizardScreen />;
+          break;
+        case 'dashboard':
+          creatorScreen = <AdminShell />;
+          break;
+        case 'workspace':
+        case 'role':
+        case 'portalChoice':
+        case 'societyEnrollment':
+        case 'auth':
+        default:
+          creatorScreen = <CreatorWorkspaceScreen />;
+          break;
+      }
+    }
+
     return (
-      <View style={styles.appShell}>
+      <View style={[styles.appShell, { backgroundColor: theme.background }]}>
         {state.apiError ? (
           <View style={styles.banner}>
             <Text style={styles.bannerText}>{state.apiError}</Text>
@@ -71,11 +139,7 @@ function AppRoot() {
             <Text style={styles.noticeBannerText}>{state.noticeMessage}</Text>
           </View>
         ) : null}
-        {creatorUnlocked ? (
-          <SocietySetupWizardScreen key={state.session.selectedSocietyId ?? 'creator-setup'} />
-        ) : (
-          <SocietyCreatorAccessScreen />
-        )}
+        {creatorScreen}
       </View>
     );
   }
@@ -113,7 +177,7 @@ function AppRoot() {
   }
 
   return (
-    <View style={styles.appShell}>
+    <View style={[styles.appShell, { backgroundColor: theme.background }]}>
       {!isAuthScreen && state.apiError ? (
         <View style={styles.banner}>
           <Text style={styles.bannerText}>{state.apiError}</Text>
@@ -138,12 +202,29 @@ function AppRoot() {
   );
 }
 
+function ThemedAppFrame() {
+  const { theme } = useAppTheme();
+
+  return (
+    <>
+      <StatusBar
+        style={theme.mode === 'night' ? 'light' : 'dark'}
+        backgroundColor={theme.background}
+      />
+      <AppRoot />
+    </>
+  );
+}
+
 export default function App() {
   return (
-    <AppProvider>
-      <StatusBar style="light" backgroundColor={palette.primaryDark} />
-      <AppRoot />
-    </AppProvider>
+    <SafeAreaProvider>
+      <ThemeProvider>
+        <AppProvider>
+          <ThemedAppFrame />
+        </AppProvider>
+      </ThemeProvider>
+    </SafeAreaProvider>
   );
 }
 

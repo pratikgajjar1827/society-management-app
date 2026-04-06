@@ -4,6 +4,7 @@ import { Animated, Easing, Image, Pressable, ScrollView, StyleSheet, Text, View,
 import { ModuleGlyph } from '../../components/ModuleGlyph';
 import { Caption, Pill, SurfaceCard } from '../../components/ui';
 import { useApp } from '../../state/AppContext';
+import { useAppTheme, type AppThemeColors } from '../../theme/appTheme';
 import { palette, radius, shadow, spacing } from '../../theme/tokens';
 import {
   getMeetingsForSociety,
@@ -97,12 +98,30 @@ type HubConfig = {
   ctaAction: () => void;
 };
 
-const accentStyles = {
-  accent: { badgeBackground: '#FFE4DE', badgeText: palette.accent, borderColor: '#F6D8D0' },
-  blue: { badgeBackground: '#E4EEFC', badgeText: palette.blue, borderColor: '#D6E2F7' },
-  gold: { badgeBackground: '#FFF1D8', badgeText: palette.warning, borderColor: '#F4E3B9' },
-  primary: { badgeBackground: '#E1E9F2', badgeText: palette.primary, borderColor: '#D7E0EA' },
-} as const;
+function getAccentStyles(theme: AppThemeColors) {
+  return {
+    accent: {
+      badgeBackground: theme.mode === 'night' ? '#472A29' : '#FFE4DE',
+      badgeText: theme.accent,
+      borderColor: theme.mode === 'night' ? '#65403E' : '#F6D8D0',
+    },
+    blue: {
+      badgeBackground: theme.mode === 'night' ? '#1E3147' : '#E4EEFC',
+      badgeText: theme.blue,
+      borderColor: theme.mode === 'night' ? '#385270' : '#D6E2F7',
+    },
+    gold: {
+      badgeBackground: theme.mode === 'night' ? '#433722' : '#FFF1D8',
+      badgeText: theme.warning,
+      borderColor: theme.mode === 'night' ? '#5E5137' : '#F4E3B9',
+    },
+    primary: {
+      badgeBackground: theme.mode === 'night' ? '#24384C' : '#E1E9F2',
+      badgeText: theme.primary,
+      borderColor: theme.mode === 'night' ? '#35506A' : '#D7E0EA',
+    },
+  } as const;
+}
 
 export function ResidentHomeExperience({
   societyId,
@@ -126,6 +145,7 @@ export function ResidentHomeExperience({
   onOpenProfileSection: (section: ResidentProfileSection) => void;
 }) {
   const { state } = useApp();
+  const { theme } = useAppTheme();
   const [activeHub, setActiveHub] = useState<HomeHubSectionKey>('community');
   const { width } = useWindowDimensions();
   const isCompact = width < 768;
@@ -947,9 +967,14 @@ export function ResidentHomeExperience({
 
   return (
     <>
-      <AnnouncementTicker announcements={announcements} isCompact={isCompact} isPhone={isPhone} />
+      <AnnouncementTicker
+        announcements={announcements}
+        isCompact={isCompact}
+        isPhone={isPhone}
+        onPress={() => onOpenTab('notices')}
+      />
 
-      <View style={[styles.categoryStrip, isCompact ? styles.categoryStripCompact : null, isPhone ? styles.categoryStripPhone : null]}>
+      <View style={[styles.categoryStrip, isCompact ? styles.categoryStripCompact : null, isPhone ? styles.categoryStripPhone : null, { backgroundColor: theme.mode === 'night' ? theme.surfaceMuted : '#EEE8DF' }]}>
         {topCategories.map((category) => (
           <TopCategoryCard
             key={category.label}
@@ -969,11 +994,11 @@ export function ResidentHomeExperience({
         <SurfaceCard style={styles.urgentApprovalPanel}>
           <View style={[styles.panelHeader, isCompact ? styles.panelHeaderCompact : null]}>
             <View style={styles.panelHeaderLeft}>
-              <Text style={styles.panelTitle}>Gate approvals waiting</Text>
+              <Text style={[styles.panelTitle, { color: theme.ink }]}>Gate approvals waiting</Text>
               <Pill label={`${pendingSecurityGuestRequests.length} live`} tone="warning" />
             </View>
             <Pressable onPress={() => onOpenTab('visitors')} style={({ pressed }) => [styles.seeAllLink, pressed ? styles.pressed : null]}>
-              <Text style={styles.seeAllText}>Open visitors</Text>
+              <Text style={[styles.seeAllText, { color: theme.mutedInk }]}>Open visitors</Text>
             </Pressable>
           </View>
           <View style={[styles.urgentApprovalRow, isCompact ? styles.urgentApprovalRowCompact : null]}>
@@ -1002,10 +1027,10 @@ export function ResidentHomeExperience({
       ) : null}
 
       {isCompact ? (
-        <SurfaceCard style={[styles.compactHubCard, isPhone ? styles.compactHubCardPhone : null]}>
+        <SurfaceCard style={[styles.compactHubCard, isPhone ? styles.compactHubCardPhone : null, { backgroundColor: theme.surfaceElevated, borderColor: theme.border }]}>
           <View style={[styles.compactHubHeader, isPhone ? styles.compactHubHeaderPhone : null]}>
             <View style={styles.compactHubHeaderCopy}>
-              <Text style={[styles.compactHubTitle, isPhone ? styles.compactHubTitlePhone : null]}>{activeHubConfig.pillLabel}</Text>
+              <Text style={[styles.compactHubTitle, isPhone ? styles.compactHubTitlePhone : null, { color: theme.ink }]}>{activeHubConfig.pillLabel}</Text>
               <Caption>{activeHubConfig.metaValue} {activeHubConfig.metaLabel}</Caption>
             </View>
             <Pill label={activeHubConfig.metaValue} tone={activeHubConfig.pillTone} />
@@ -1028,11 +1053,11 @@ export function ResidentHomeExperience({
           </View>
         </SurfaceCard>
       ) : (
-      <SurfaceCard style={[styles.superBoard, isCompact ? styles.superBoardCompact : null]}>
+      <SurfaceCard style={[styles.superBoard, isCompact ? styles.superBoardCompact : null, { backgroundColor: theme.surfaceElevated, borderColor: theme.border }]}>
         <View style={[styles.superBoardHeader, isCompact ? styles.superBoardHeaderCompact : null]}>
           <View style={[styles.superBoardHeaderCopy, isCompact ? styles.superBoardHeaderCopyCompact : null]}>
             <Pill label={activeHubConfig.pillLabel} tone={activeHubConfig.pillTone} />
-            <Text style={[styles.superBoardTitle, isCompact ? styles.superBoardTitleCompact : null]}>
+            <Text style={[styles.superBoardTitle, isCompact ? styles.superBoardTitleCompact : null, { color: theme.ink }]}>
               {activeHubConfig.title}
             </Text>
             <Caption style={[styles.superBoardDescription, isCompact ? styles.superBoardDescriptionCompact : null]}>
@@ -1040,7 +1065,7 @@ export function ResidentHomeExperience({
             </Caption>
           </View>
           <View style={[styles.superBoardMeta, isCompact ? styles.superBoardMetaCompact : null]}>
-            <Text style={styles.superBoardMetaValue}>{activeHubConfig.metaValue}</Text>
+            <Text style={[styles.superBoardMetaValue, { color: theme.warning }]}>{activeHubConfig.metaValue}</Text>
             <Caption style={[styles.superBoardMetaText, isCompact ? styles.superBoardMetaTextCompact : null]}>
               {activeHubConfig.metaLabel}
             </Caption>
@@ -1341,7 +1366,18 @@ export function ResidentHomeExperience({
   );
 }
 
-function AnnouncementTicker({ announcements, isCompact, isPhone }: { announcements: any[]; isCompact: boolean; isPhone?: boolean }) {
+function AnnouncementTicker({
+  announcements,
+  isCompact,
+  isPhone,
+  onPress,
+}: {
+  announcements: any[];
+  isCompact: boolean;
+  isPhone?: boolean;
+  onPress: () => void;
+}) {
+  const { theme } = useAppTheme();
   const scrollX = useRef(new Animated.Value(0)).current;
   const latestAnnouncement = announcements[0];
 
@@ -1369,33 +1405,63 @@ function AnnouncementTicker({ announcements, isCompact, isPhone }: { announcemen
 
   if (!latestAnnouncement) {
     return (
-      <View style={[styles.announcementBanner, isCompact ? styles.announcementBannerCompact : null, styles.announcementBannerEmpty]}>
-        <Text style={styles.announcementTickerLabel}>📢 Latest Announcement</Text>
-        <Text style={styles.announcementTickerBody}>No announcements yet. Check back for society updates.</Text>
-      </View>
+      <Pressable
+        accessibilityRole="button"
+        onPress={onPress}
+        style={({ pressed }) => [
+          styles.announcementBanner,
+          isCompact ? styles.announcementBannerCompact : null,
+          styles.announcementBannerEmpty,
+          { backgroundColor: theme.surfaceElevated, borderLeftColor: theme.borderStrong },
+          pressed ? styles.pressed : null,
+        ]}
+      >
+        <Text style={[styles.announcementTickerLabel, { color: theme.ink }]}>📢 Latest Announcement</Text>
+        <Text style={[styles.announcementTickerBody, { color: theme.mutedInk }]}>No announcements yet. Check back for society updates.</Text>
+      </Pressable>
     );
   }
 
   const priorityTone = latestAnnouncement.priority === 'critical' ? '#E41E3F' : latestAnnouncement.priority === 'high' ? '#F59E0B' : '#3B82F6';
-  const priorityBg = latestAnnouncement.priority === 'critical' ? '#FEE2E2' : latestAnnouncement.priority === 'high' ? '#FEF3C7' : '#DBEAFE';
+  const priorityBg = theme.mode === 'night'
+    ? latestAnnouncement.priority === 'critical'
+      ? '#341B24'
+      : latestAnnouncement.priority === 'high'
+        ? '#3A2D19'
+        : '#1E304A'
+    : latestAnnouncement.priority === 'critical'
+      ? '#FEE2E2'
+      : latestAnnouncement.priority === 'high'
+        ? '#FEF3C7'
+        : '#DBEAFE';
 
   return (
-    <View style={[styles.announcementBanner, isCompact ? styles.announcementBannerCompact : null, isPhone ? styles.announcementBannerPhone : null, { borderLeftColor: priorityTone, backgroundColor: priorityBg }]}>
+    <Pressable
+      accessibilityRole="button"
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.announcementBanner,
+        isCompact ? styles.announcementBannerCompact : null,
+        isPhone ? styles.announcementBannerPhone : null,
+        { borderLeftColor: priorityTone, backgroundColor: priorityBg },
+        pressed ? styles.pressed : null,
+      ]}
+    >
       <View style={[styles.announcementTickerHeader, isPhone ? styles.announcementTickerHeaderPhone : null]}>
         <View style={[styles.announcementTickerLabelWrap, isPhone ? styles.announcementTickerLabelWrapPhone : null]}>
-          <Text style={styles.announcementTickerLabel}>📢 Latest Announcement</Text>
+          <Text style={[styles.announcementTickerLabel, { color: theme.ink }]}>📢 Latest Announcement</Text>
           <View style={[styles.announcementPriorityBadge, { backgroundColor: priorityTone }]}>
             <Text style={styles.announcementPriorityText}>{latestAnnouncement.priority.toUpperCase()}</Text>
           </View>
         </View>
-        <Text style={styles.announcementTickerMeta}>{formatShortDate(latestAnnouncement.createdAt)}</Text>
+        <Text style={[styles.announcementTickerMeta, { color: theme.mutedInk }]}>{formatShortDate(latestAnnouncement.createdAt)}</Text>
       </View>
       {isPhone ? (
         <View style={styles.announcementTickerContent}>
-          <Text style={[styles.announcementTickerTitle, styles.announcementTickerTitlePhone]} numberOfLines={2}>
+          <Text style={[styles.announcementTickerTitle, styles.announcementTickerTitlePhone, { color: theme.ink }]} numberOfLines={2}>
             {latestAnnouncement.title}
           </Text>
-          <Text style={[styles.announcementTickerBody, styles.announcementTickerBodyPhone]} numberOfLines={3}>
+          <Text style={[styles.announcementTickerBody, styles.announcementTickerBodyPhone, { color: theme.mutedInk }]} numberOfLines={3}>
             {latestAnnouncement.body}
           </Text>
         </View>
@@ -1403,13 +1469,13 @@ function AnnouncementTicker({ announcements, isCompact, isPhone }: { announcemen
         <View style={styles.announcementTickerContent}>
           <View style={styles.announcementTickerScrollMask}>
             <Animated.View style={[styles.announcementTickerScrollContent, { transform: [{ translateX: scrollX }] }]}> 
-              <Text style={styles.announcementTickerTitle} numberOfLines={1}>{latestAnnouncement.title}</Text>
-              <Text style={styles.announcementTickerBody} numberOfLines={2}>{latestAnnouncement.body}</Text>
+              <Text style={[styles.announcementTickerTitle, { color: theme.ink }]} numberOfLines={1}>{latestAnnouncement.title}</Text>
+              <Text style={[styles.announcementTickerBody, { color: theme.mutedInk }]} numberOfLines={2}>{latestAnnouncement.body}</Text>
             </Animated.View>
           </View>
         </View>
       )}
-    </View>
+    </Pressable>
   );
 }
 
@@ -1432,7 +1498,8 @@ function TopCategoryCard({
   compact?: boolean;
   phone?: boolean;
 }) {
-  const toneStyle = accentStyles[tone];
+  const { theme } = useAppTheme();
+  const toneStyle = getAccentStyles(theme)[tone];
 
   return (
     <Pressable
@@ -1442,6 +1509,7 @@ function TopCategoryCard({
         compact ? styles.topCategoryCardCompact : null,
         phone ? styles.topCategoryCardPhone : null,
         active ? styles.topCategoryCardActive : null,
+        { backgroundColor: active ? theme.surface : theme.surfaceElevated, borderColor: theme.border },
         (state as { hovered?: boolean }).hovered ? styles.hoverLift : null,
         state.pressed ? styles.pressDip : null,
       ]}
@@ -1454,6 +1522,7 @@ function TopCategoryCard({
           styles.topCategoryTitle,
           phone ? styles.topCategoryTitlePhone : null,
           active ? styles.topCategoryTitleActive : null,
+          { color: theme.ink },
         ]}
         numberOfLines={1}
         adjustsFontSizeToFit
@@ -1461,7 +1530,7 @@ function TopCategoryCard({
       >
         {label}
       </Text>
-      {!compact ? <Caption style={styles.topCategorySubtitle}>{subtitle}</Caption> : null}
+      {!compact ? <Caption style={[styles.topCategorySubtitle, { color: theme.mutedInk }]}>{subtitle}</Caption> : null}
     </Pressable>
   );
 }
@@ -1487,7 +1556,8 @@ function CompactHubTile({
   dense?: boolean;
   minimal?: boolean;
 }) {
-  const toneStyle = accentStyles[tone];
+  const { theme } = useAppTheme();
+  const toneStyle = getAccentStyles(theme)[tone];
   const metricValue = statusLabel || subtitle;
 
   return (
@@ -1498,6 +1568,7 @@ function CompactHubTile({
         phone ? styles.compactHubTilePhone : null,
         dense ? styles.compactHubTileDensePhone : null,
         minimal ? styles.compactHubTileMinimalPhone : null,
+        { backgroundColor: theme.surface, borderColor: theme.border },
         pressed ? styles.pressed : null,
       ]}
     >
@@ -1522,6 +1593,7 @@ function CompactHubTile({
         styles.compactHubTileTitle,
         phone ? styles.compactHubTileTitlePhone : null,
         dense ? styles.compactHubTileTitleDensePhone : null,
+        { color: theme.ink },
       ]} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.78}>
         {label}
       </Text>
@@ -1539,6 +1611,7 @@ function CompactHubTile({
           styles.compactHubTileSubtitle,
           phone ? styles.compactHubTileSubtitlePhone : null,
           dense ? styles.compactHubTileSubtitleDensePhone : null,
+          { color: theme.mutedInk },
         ]} numberOfLines={phone ? 1 : dense ? 1 : 2} adjustsFontSizeToFit minimumFontScale={0.8}>
           {subtitle}
         </Text>
@@ -1564,7 +1637,8 @@ function BoardTile({
   onPress: () => void;
   compact?: boolean;
 }) {
-  const toneStyle = accentStyles[tone];
+  const { theme } = useAppTheme();
+  const toneStyle = getAccentStyles(theme)[tone];
 
   return (
     <Pressable
@@ -1572,6 +1646,7 @@ function BoardTile({
       style={(state) => [
         styles.boardTile,
         compact ? styles.boardTileCompact : null,
+        { backgroundColor: theme.surface, borderColor: theme.border },
         (state as { hovered?: boolean }).hovered ? styles.hoverLift : null,
         state.pressed ? styles.pressDip : null,
       ]}
@@ -1583,7 +1658,7 @@ function BoardTile({
         {statusLabel ? <Pill label={statusLabel} tone={tone === 'accent' ? 'accent' : 'primary'} /> : null}
       </View>
       <View style={styles.boardTileCopy}>
-        <Text style={styles.boardTileTitle}>{label}</Text>
+        <Text style={[styles.boardTileTitle, { color: theme.ink }]}>{label}</Text>
         <Caption>{subtitle}</Caption>
       </View>
       <View style={styles.boardTileFooter}>
@@ -1612,12 +1687,18 @@ function ConversationPreviewCard({
   onPress: () => void;
   compact?: boolean;
 }) {
-  const toneStyle = accentStyles[tone];
+  const { theme } = useAppTheme();
+  const toneStyle = getAccentStyles(theme)[tone];
 
   return (
     <Pressable
       onPress={onPress}
-      style={({ pressed }) => [styles.chatActivityCard, compact ? styles.chatActivityCardCompact : null, pressed ? styles.pressed : null]}
+      style={({ pressed }) => [
+        styles.chatActivityCard,
+        compact ? styles.chatActivityCardCompact : null,
+        { backgroundColor: theme.surface, borderColor: theme.border },
+        pressed ? styles.pressed : null,
+      ]}
     >
       <View style={styles.chatActivityCardHeader}>
         <View style={[styles.chatActivityBadge, { backgroundColor: toneStyle.badgeBackground }]}>
@@ -1629,9 +1710,9 @@ function ConversationPreviewCard({
           </View>
         ) : null}
       </View>
-      <Text numberOfLines={1} style={styles.chatActivityTitle}>{title}</Text>
-      <Text numberOfLines={2} style={styles.chatActivitySubtitle}>{subtitle}</Text>
-      <Text numberOfLines={1} style={styles.chatActivityDetail}>{detail}</Text>
+      <Text numberOfLines={1} style={[styles.chatActivityTitle, { color: theme.ink }]}>{title}</Text>
+      <Text numberOfLines={2} style={[styles.chatActivitySubtitle, { color: theme.mutedInk }]}>{subtitle}</Text>
+      <Text numberOfLines={1} style={[styles.chatActivityDetail, { color: toneStyle.badgeText }]}>{detail}</Text>
     </Pressable>
   );
 }
@@ -1651,7 +1732,8 @@ function QuickActionCard({
   onPress: () => void;
   phone?: boolean;
 }) {
-  const toneStyle = accentStyles[tone];
+  const { theme } = useAppTheme();
+  const toneStyle = getAccentStyles(theme)[tone];
 
   return (
     <Pressable
@@ -1659,6 +1741,7 @@ function QuickActionCard({
       style={(state) => [
         styles.actionCard,
         phone ? styles.actionCardPhone : null,
+        { backgroundColor: theme.surface, borderColor: theme.border },
         (state as { hovered?: boolean }).hovered ? styles.hoverLift : null,
         state.pressed ? styles.pressDip : null,
       ]}
@@ -1666,7 +1749,7 @@ function QuickActionCard({
       <View style={[styles.actionCardArt, phone ? styles.actionCardArtPhone : null, { backgroundColor: toneStyle.badgeBackground }]}> 
         <ModuleGlyph module={module} color={toneStyle.badgeText} size="lg" />
       </View>
-      <Text style={[styles.actionCardTitle, phone ? styles.actionCardTitlePhone : null]}>{title}</Text>
+      <Text style={[styles.actionCardTitle, phone ? styles.actionCardTitlePhone : null, { color: theme.ink }]}>{title}</Text>
       <Text style={[styles.actionCardDetail, phone ? styles.actionCardDetailPhone : null, { color: toneStyle.badgeText }]} numberOfLines={1}>
         {detail}
       </Text>
@@ -1693,7 +1776,8 @@ function PromoCard({
   compact?: boolean;
   phone?: boolean;
 }) {
-  const toneStyle = accentStyles[tone];
+  const { theme } = useAppTheme();
+  const toneStyle = getAccentStyles(theme)[tone];
 
   return (
     <Pressable
@@ -1703,13 +1787,15 @@ function PromoCard({
         compact ? styles.promoCardCompact : null,
         phone ? styles.promoCardPhone : null,
         {
-          backgroundColor: tone === 'accent' ? '#19324A' : '#F7FAFF',
-          borderColor: tone === 'accent' ? '#274767' : toneStyle.borderColor,
+          backgroundColor: tone === 'accent'
+            ? theme.mode === 'night' ? '#183047' : '#19324A'
+            : theme.mode === 'night' ? theme.surface : '#F7FAFF',
+          borderColor: tone === 'accent' ? (theme.mode === 'night' ? '#33526D' : '#274767') : toneStyle.borderColor,
         },
         pressed ? styles.pressed : null,
       ]}
     >
-      <Text style={[styles.promoTitle, tone === 'accent' ? styles.promoTitleLight : null]}>{title}</Text>
+      <Text style={[styles.promoTitle, tone === 'accent' ? styles.promoTitleLight : null, tone !== 'accent' ? { color: theme.ink } : null]}>{title}</Text>
       <Text style={[styles.promoHighlight, tone === 'accent' ? styles.promoHighlightWarm : { color: toneStyle.badgeText }]}>{highlight}</Text>
       <Caption style={tone === 'accent' ? styles.promoBodyLight : styles.promoBody}>{body}</Caption>
       <View style={[styles.promoButton, tone === 'accent' ? styles.promoButtonLight : { backgroundColor: toneStyle.badgeBackground }]}>
@@ -1736,7 +1822,8 @@ function NoticeCard({
   compact?: boolean;
   phone?: boolean;
 }) {
-  const toneStyle = accentStyles[tone];
+  const { theme } = useAppTheme();
+  const toneStyle = getAccentStyles(theme)[tone];
 
   return (
     <Pressable
@@ -1745,16 +1832,16 @@ function NoticeCard({
         styles.noticeCard,
         compact ? styles.noticeCardCompact : null,
         phone ? styles.noticeCardPhone : null,
-        { borderColor: toneStyle.borderColor },
+        { backgroundColor: theme.surface, borderColor: toneStyle.borderColor },
         pressed ? styles.pressed : null,
       ]}
     >
       <View style={styles.noticeCardHeader}>
-        <Text style={styles.noticeCardEyebrow}>NOTICE</Text>
-        <Text numberOfLines={1} style={styles.noticeCardMeta}>{meta}</Text>
+        <Text style={[styles.noticeCardEyebrow, { color: toneStyle.badgeText }]}>NOTICE</Text>
+        <Text numberOfLines={1} style={[styles.noticeCardMeta, { color: theme.mutedInk }]}>{meta}</Text>
       </View>
-      <Text numberOfLines={phone ? 2 : 3} style={[styles.noticeCardTitle, phone ? styles.noticeCardTitlePhone : null]}>{title}</Text>
-      <Text numberOfLines={phone ? 2 : 3} style={styles.noticeCardCaption}>{subtitle}</Text>
+      <Text numberOfLines={phone ? 2 : 3} style={[styles.noticeCardTitle, phone ? styles.noticeCardTitlePhone : null, { color: theme.ink }]}>{title}</Text>
+      <Text numberOfLines={phone ? 2 : 3} style={[styles.noticeCardCaption, { color: theme.mutedInk }]}>{subtitle}</Text>
     </Pressable>
   );
 }

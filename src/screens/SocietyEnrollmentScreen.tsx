@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  BackHandler,
   Image,
   ImageBackground,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -414,6 +416,19 @@ export function SocietyEnrollmentScreen() {
 
     setStep((currentStep) => (currentStep > 1 ? ((currentStep - 1) as EnrollmentStep) : currentStep));
   }
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') {
+      return undefined;
+    }
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      goBack();
+      return true;
+    });
+
+    return () => subscription.remove();
+  }, [hasMemberships, step]);
 
   function goToCountryStep(countryName: string) {
     setSelectedCountry(countryName);

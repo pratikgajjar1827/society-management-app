@@ -3,7 +3,6 @@ import DateTimePicker, { type DateTimePickerEvent } from '@react-native-communit
 import {
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   StyleProp,
   StyleSheet,
@@ -14,7 +13,9 @@ import {
   View,
   ViewStyle,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { useAppTheme, type AppThemeColors } from '../theme/appTheme';
 import { palette, radius, shadow, spacing, typeScale } from '../theme/tokens';
 
 type Tone = 'primary' | 'accent' | 'muted';
@@ -75,28 +76,28 @@ function parseDateTimeFieldValue(value: string, mode: DateTimeFieldMode) {
   return Number.isNaN(parsed.getTime()) ? fallback : parsed;
 }
 
-function getToneStyle(tone: Tone) {
+function getToneStyle(theme: AppThemeColors, tone: Tone) {
   switch (tone) {
     case 'accent':
       return {
-        backgroundColor: palette.accent,
-        highlight: palette.gold,
-        textColor: palette.white,
-        subtitleColor: '#FFF0E8',
+        backgroundColor: theme.accent,
+        highlight: theme.gold,
+        textColor: theme.white,
+        subtitleColor: theme.mode === 'night' ? '#FEE1DB' : '#FFF0E8',
       };
     case 'muted':
       return {
-        backgroundColor: palette.blue,
-        highlight: palette.primarySoft,
-        textColor: palette.white,
-        subtitleColor: '#E8F2FB',
+        backgroundColor: theme.blue,
+        highlight: theme.primarySoft,
+        textColor: theme.white,
+        subtitleColor: theme.mode === 'night' ? '#D8E6F8' : '#E8F2FB',
       };
     default:
       return {
-        backgroundColor: palette.primary,
-        highlight: palette.accent,
-        textColor: palette.white,
-        subtitleColor: '#DAE6F3',
+        backgroundColor: theme.primary,
+        highlight: theme.accent,
+        textColor: theme.mode === 'night' ? '#0E1720' : theme.white,
+        subtitleColor: theme.mode === 'night' ? '#334B61' : '#DAE6F3',
       };
   }
 }
@@ -128,14 +129,15 @@ export function PageFrame({
   footer?: ReactNode;
   contentContainerStyle?: StyleProp<ViewStyle>;
 }) {
+  const { theme } = useAppTheme();
   const { isCompact, isAndroidCompact } = useResponsiveMetrics();
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView edges={['top', 'left', 'right', 'bottom']} style={[styles.safeArea, { backgroundColor: theme.background }]}> 
       <View pointerEvents="none" style={styles.pageBackdrop}>
-        <View style={styles.pageGlowTop} />
-        <View style={styles.pageGlowBottom} />
-        {isAndroidCompact ? <View style={styles.pageGridGlow} /> : null}
+        <View style={[styles.pageGlowTop, { backgroundColor: theme.backdropTop }]} />
+        <View style={[styles.pageGlowBottom, { backgroundColor: theme.backdropBottom }]} />
+        {isAndroidCompact ? <View style={[styles.pageGridGlow, { backgroundColor: theme.gridGlow }]} /> : null}
       </View>
       <View style={styles.pageFrame}>
         <ScrollView
@@ -147,7 +149,7 @@ export function PageFrame({
             footer ? styles.pageContentWithFooter : null,
             contentContainerStyle,
           ]}
-          style={styles.page}
+          style={[styles.page, { backgroundColor: theme.background }]}
           showsVerticalScrollIndicator={false}
         >
           {children}
@@ -171,8 +173,9 @@ export function HeroCard({
   children?: ReactNode;
   tone?: Tone;
 }) {
+  const { theme } = useAppTheme();
   const { isCompact, isAndroidCompact } = useResponsiveMetrics();
-  const toneStyle = getToneStyle(tone);
+  const toneStyle = getToneStyle(theme, tone);
 
   return (
     <View
@@ -219,6 +222,7 @@ export function SurfaceCard({
   children: ReactNode;
   style?: StyleProp<ViewStyle>;
 }) {
+  const { theme } = useAppTheme();
   const { isCompact, isAndroidCompact } = useResponsiveMetrics();
 
   return (
@@ -227,10 +231,11 @@ export function SurfaceCard({
         styles.surfaceCard,
         isCompact ? styles.surfaceCardCompact : null,
         isAndroidCompact ? styles.surfaceCardAndroidCompact : null,
+        { backgroundColor: theme.surface, borderColor: theme.border, shadowColor: theme.shadowColor },
         style,
       ]}
     >
-      <View pointerEvents="none" style={styles.surfaceAccent} />
+      <View pointerEvents="none" style={[styles.surfaceAccent, { backgroundColor: theme.mode === 'night' ? 'rgba(255,255,255,0.03)' : '#FFF7EF' }]} />
       {children}
     </View>
   );
@@ -243,13 +248,14 @@ export function SectionHeader({
   title: string;
   description?: string;
 }) {
+  const { theme } = useAppTheme();
   const { isCompact, isPhone } = useResponsiveMetrics();
 
   return (
     <View style={styles.sectionHeader}>
-      <Text style={[styles.sectionTitle, isCompact ? styles.sectionTitleCompact : null]}>{title}</Text>
+      <Text style={[styles.sectionTitle, isCompact ? styles.sectionTitleCompact : null, { color: theme.ink }]}>{title}</Text>
       {description && !isPhone ? (
-        <Text style={[styles.sectionDescription, isCompact ? styles.sectionDescriptionCompact : null]}>
+        <Text style={[styles.sectionDescription, isCompact ? styles.sectionDescriptionCompact : null, { color: theme.mutedInk }]}>
           {description}
         </Text>
       ) : null}
@@ -268,11 +274,12 @@ export function MetricCard({
   tone?: 'primary' | 'accent' | 'blue';
   onPress?: () => void;
 }) {
+  const { theme } = useAppTheme();
   const { isCompact, isAndroidCompact, isPhone } = useResponsiveMetrics();
   const toneMap = {
-    primary: { backgroundColor: palette.primarySoft, color: palette.primary, borderColor: '#C8D9EE' },
-    accent: { backgroundColor: palette.accentSoft, color: palette.accent, borderColor: '#F0D0C6' },
-    blue: { backgroundColor: palette.blueSoft, color: palette.blue, borderColor: '#C9DCF0' },
+    primary: { backgroundColor: theme.primarySoft, color: theme.primary, borderColor: theme.mode === 'night' ? '#35506A' : '#C8D9EE' },
+    accent: { backgroundColor: theme.accentSoft, color: theme.accent, borderColor: theme.mode === 'night' ? '#65403E' : '#F0D0C6' },
+    blue: { backgroundColor: theme.blueSoft, color: theme.blue, borderColor: theme.mode === 'night' ? '#385270' : '#C9DCF0' },
   };
 
   const content = (
@@ -289,7 +296,7 @@ export function MetricCard({
       ]}
       >
       <Text
-        style={[styles.metricLabel, isCompact ? styles.metricLabelCompact : null, isPhone ? styles.metricLabelPhone : null]}
+        style={[styles.metricLabel, isCompact ? styles.metricLabelCompact : null, isPhone ? styles.metricLabelPhone : null, { color: theme.mutedInk }]}
         numberOfLines={isPhone ? 3 : 2}
       >
         {label}
@@ -328,13 +335,14 @@ export function Pill({
   label: string;
   tone?: 'neutral' | 'primary' | 'accent' | 'warning' | 'success';
 }) {
+  const { theme } = useAppTheme();
   const { isCompact } = useResponsiveMetrics();
   const toneStyles = {
-    neutral: { backgroundColor: palette.surfaceMuted, color: palette.ink },
-    primary: { backgroundColor: palette.primarySoft, color: palette.primary },
-    accent: { backgroundColor: palette.accentSoft, color: palette.accent },
-    warning: { backgroundColor: palette.goldSoft, color: palette.warning },
-    success: { backgroundColor: '#DDF2E8', color: palette.success },
+    neutral: { backgroundColor: theme.surfaceMuted, color: theme.ink },
+    primary: { backgroundColor: theme.primarySoft, color: theme.primary },
+    accent: { backgroundColor: theme.accentSoft, color: theme.accent },
+    warning: { backgroundColor: theme.goldSoft, color: theme.warning },
+    success: { backgroundColor: theme.mode === 'night' ? '#17372B' : '#DDF2E8', color: theme.success },
   };
 
   return (
@@ -363,27 +371,28 @@ export function ActionButton({
   variant?: 'primary' | 'secondary' | 'ghost' | 'danger';
   disabled?: boolean;
 }) {
+  const { theme } = useAppTheme();
   const { isCompact, isAndroidCompact } = useResponsiveMetrics();
   const variantStyles = {
     primary: {
-      backgroundColor: palette.primary,
-      borderColor: palette.primary,
-      color: palette.white,
+      backgroundColor: theme.primary,
+      borderColor: theme.primary,
+      color: theme.mode === 'night' ? '#0E1720' : theme.white,
     },
     secondary: {
-      backgroundColor: '#F8F1E7',
-      borderColor: '#E8DAC4',
-      color: palette.ink,
+      backgroundColor: theme.surfaceMuted,
+      borderColor: theme.border,
+      color: theme.ink,
     },
     ghost: {
-      backgroundColor: 'rgba(255,255,255,0.12)',
-      borderColor: 'rgba(255,255,255,0.16)',
-      color: palette.white,
+      backgroundColor: theme.mode === 'night' ? 'rgba(255,255,255,0.08)' : 'rgba(255,255,255,0.12)',
+      borderColor: theme.mode === 'night' ? 'rgba(138,165,194,0.2)' : 'rgba(255,255,255,0.16)',
+      color: theme.mode === 'night' ? theme.ink : theme.white,
     },
     danger: {
-      backgroundColor: palette.danger,
-      borderColor: palette.danger,
-      color: palette.white,
+      backgroundColor: theme.danger,
+      borderColor: theme.danger,
+      color: theme.mode === 'night' ? '#211314' : theme.white,
     },
   };
 
@@ -413,10 +422,12 @@ export function ActionButton({
 }
 
 export function DetailRow({ label, value }: { label: string; value: string }) {
+  const { theme } = useAppTheme();
+
   return (
     <View style={styles.detailRow}>
-      <Text style={styles.detailLabel}>{label}</Text>
-      <Text style={styles.detailValue}>{value}</Text>
+      <Text style={[styles.detailLabel, { color: theme.mutedInk }]}>{label}</Text>
+      <Text style={[styles.detailValue, { color: theme.ink }]}>{value}</Text>
     </View>
   );
 }
@@ -442,6 +453,7 @@ export function InputField({
   nativeType?: 'text' | 'date' | 'email' | 'tel';
   secureTextEntry?: boolean;
 }) {
+  const { theme } = useAppTheme();
   const { isCompact } = useResponsiveMetrics();
 
   if (nativeType === 'date' && !multiline && typeof document !== 'undefined') {
@@ -475,12 +487,13 @@ export function InputField({
         multiline={multiline}
         onChangeText={onChangeText}
         placeholder={placeholder}
-        placeholderTextColor={palette.mutedInk}
+        placeholderTextColor={theme.mutedInk}
         secureTextEntry={secureTextEntry}
         style={[
           styles.input,
           isCompact ? styles.inputCompact : null,
           multiline ? styles.multilineInput : null,
+          { backgroundColor: theme.surface, borderColor: theme.border, color: theme.ink },
         ]}
         value={value}
       />
@@ -615,6 +628,7 @@ export function ChoiceChip({
   selected: boolean;
   onPress: () => void;
 }) {
+  const { theme } = useAppTheme();
   const { isCompact } = useResponsiveMetrics();
 
   return (
@@ -624,6 +638,8 @@ export function ChoiceChip({
         styles.choiceChip,
         isCompact ? styles.choiceChipCompact : null,
         selected ? styles.choiceChipSelected : null,
+        !selected ? { backgroundColor: theme.surface, borderColor: theme.border } : null,
+        selected ? { backgroundColor: theme.primarySoft, borderColor: theme.primary } : null,
         pressed ? styles.choiceChipPressed : null,
       ]}
     >
@@ -632,6 +648,7 @@ export function ChoiceChip({
           styles.choiceChipLabel,
           isCompact ? styles.choiceChipLabelCompact : null,
           selected ? styles.choiceChipLabelSelected : null,
+          { color: selected ? theme.primary : theme.ink },
         ]}
       >
         {label}
@@ -649,6 +666,7 @@ export function NavigationStrip<T extends string>({
   activeKey: T;
   onChange: (value: T) => void;
 }) {
+  const { theme } = useAppTheme();
   const { isCompact, isAndroidCompact } = useResponsiveMetrics();
 
   return (
@@ -656,6 +674,7 @@ export function NavigationStrip<T extends string>({
       horizontal
       keyboardShouldPersistTaps="handled"
       contentContainerStyle={[styles.navigationStrip, isCompact ? styles.navigationStripCompact : null]}
+      style={{ backgroundColor: 'transparent' }}
       showsHorizontalScrollIndicator={false}
     >
       {items.map((item) => (
@@ -667,6 +686,9 @@ export function NavigationStrip<T extends string>({
             isCompact ? styles.navigationItemCompact : null,
             isAndroidCompact ? styles.navigationItemAndroidCompact : null,
             item.key === activeKey ? styles.navigationItemActive : null,
+            item.key === activeKey
+              ? { backgroundColor: theme.primary, borderColor: theme.primary }
+              : { backgroundColor: theme.surface, borderColor: theme.border },
             pressed ? styles.navigationItemPressed : null,
           ]}
         >
@@ -676,6 +698,7 @@ export function NavigationStrip<T extends string>({
               isCompact ? styles.navigationLabelCompact : null,
               isAndroidCompact ? styles.navigationLabelAndroidCompact : null,
               item.key === activeKey ? styles.navigationLabelActive : null,
+              { color: item.key === activeKey ? (theme.mode === 'night' ? '#0E1720' : theme.white) : theme.ink },
             ]}
           >
             {item.label}
@@ -693,8 +716,9 @@ export function Caption({
   children: ReactNode;
   style?: StyleProp<TextStyle>;
 }) {
+  const { theme } = useAppTheme();
   const { isCompact } = useResponsiveMetrics();
-  return <Text style={[styles.caption, isCompact ? styles.captionCompact : null, style]}>{children}</Text>;
+  return <Text style={[styles.caption, isCompact ? styles.captionCompact : null, { color: theme.mutedInk }, style]}>{children}</Text>;
 }
 
 const webNativeInputStyle: CSSProperties = {

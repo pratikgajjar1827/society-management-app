@@ -4,13 +4,19 @@ const appVariant = String(
   .trim()
   .toLowerCase();
 
+const allowCleartextTraffic =
+  String(process.env.ALLOW_CLEARTEXT_TRAFFIC ?? '')
+    .trim()
+    .toLowerCase() === 'true';
+const appVersion = String(process.env.APP_VERSION ?? '1.0.0').trim() || '1.0.0';
+
 const isCreatorApp = appVariant === 'creator';
 
 module.exports = {
   expo: {
     name: isCreatorApp ? 'Society Creator' : 'SocietyOS',
     slug: isCreatorApp ? 'society-creator-app' : 'society-management-app',
-    version: '1.0.0',
+    version: appVersion,
     orientation: 'portrait',
     icon: './assets/icon.png',
     userInterfaceStyle: 'light',
@@ -26,7 +32,7 @@ module.exports = {
         : 'com.anonymous.societymanagementapp',
     },
     android: {
-      usesCleartextTraffic: true,
+      usesCleartextTraffic: allowCleartextTraffic,
       adaptiveIcon: {
         backgroundColor: '#163D34',
         foregroundImage: './assets/android-icon-foreground.png',

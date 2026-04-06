@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as Clipboard from 'expo-clipboard';
-import { Image, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type ImageSourcePropType } from 'react-native';
+import { BackHandler, Image, Linking, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions, type ImageSourcePropType } from 'react-native';
 
 import {
   ActionButton,
@@ -19,6 +19,7 @@ import { ModuleGlyph } from '../../components/ModuleGlyph';
 import { MaintenanceReceiptCard } from '../../components/MaintenanceReceiptCard';
 import { ResidentHomeExperience } from './ResidentHomeExperience';
 import { useApp } from '../../state/AppContext';
+import { useAppTheme } from '../../theme/appTheme';
 import { palette, radius, shadow, spacing } from '../../theme/tokens';
 import { openPhoneDialer, openWhatsAppConversation, startRingAlert, stopRingAlert } from '../../utils/communication';
 import {
@@ -589,6 +590,7 @@ function getComplaintTemplatesForSociety(
 
 export function ResidentShell() {
   const { state, actions } = useApp();
+  const { theme, toggleMode } = useAppTheme();
   const [activeTab, setActiveTab] = useState<ResidentTab>('home');
   const [preferredCommunitySection, setPreferredCommunitySection] = useState<ResidentCommunitySection>('members');
   const [preferredVisitorsSection, setPreferredVisitorsSection] = useState<ResidentVisitorsSection>('create');
@@ -600,6 +602,29 @@ export function ResidentShell() {
   const isCompact = width < 768;
   const isPhone = width < 420;
   const phoneDrawerWidth = Math.min(width - 28, 320);
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') {
+      return undefined;
+    }
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (isDrawerOpen) {
+        setIsDrawerOpen(false);
+        return true;
+      }
+
+      if (activeTab !== 'home') {
+        setActiveTab('home');
+        return true;
+      }
+
+      actions.goToRoleSelection();
+      return true;
+    });
+
+    return () => subscription.remove();
+  }, [actions, activeTab, isDrawerOpen]);
 
   if (!state.session.userId || !state.session.selectedSocietyId) {
     return null;
@@ -687,7 +712,7 @@ export function ResidentShell() {
       ) : undefined}
     >
       {isCompact ? (
-        <SurfaceCard style={[styles.compactWorkspaceCard, isPhone ? styles.compactWorkspaceCardPhone : null]}>
+        <SurfaceCard style={[styles.compactWorkspaceCard, isPhone ? styles.compactWorkspaceCardPhone : null, { backgroundColor: theme.surfaceElevated, borderColor: theme.border }]}>
           <View style={[styles.compactWorkspaceTopRow, isPhone ? styles.compactWorkspaceTopRowPhone : null]}>
             {isPhone ? (
               <Pressable
@@ -706,18 +731,34 @@ export function ResidentShell() {
             ) : null}
             <View style={styles.compactWorkspaceTitleWrap}>
               <Pill label="Resident" tone="accent" />
-              <Text style={[styles.compactWorkspaceTitle, isPhone ? styles.compactWorkspaceTitlePhone : null]}>{society.name}</Text>
+              <Text style={[styles.compactWorkspaceTitle, isPhone ? styles.compactWorkspaceTitlePhone : null, { color: theme.ink }]}>{society.name}</Text>
               <Caption>{user.name.split(' ')[0]} | {residentTabs.find((item) => item.key === activeTab)?.label ?? 'Home'}</Caption>
             </View>
+            {activeTab === 'home' ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={toggleMode}
+                style={({ pressed }) => [
+                  styles.themeMoonButton,
+                  {
+                    backgroundColor: theme.mode === 'night' ? theme.primarySoft : theme.surface,
+                    borderColor: theme.border,
+                  },
+                  pressed ? styles.themeMoonButtonPressed : null,
+                ]}
+              >
+                <Text style={[styles.themeMoonIcon, { color: theme.mode === 'night' ? theme.gold : theme.primary }]}>☾</Text>
+              </Pressable>
+            ) : null}
             <View style={styles.compactWorkspaceStatsRow}>
               <Pressable
                 accessibilityRole="button"
                 onPress={() => setActiveTab('notices')}
                 style={({ pressed }) => [styles.compactWorkspaceStatPressable, pressed ? styles.interactiveCardPressed : null]}
               >
-                <View style={[styles.compactWorkspaceStat, isPhone ? styles.compactWorkspaceStatPhone : null]}>
+                <View style={[styles.compactWorkspaceStat, isPhone ? styles.compactWorkspaceStatPhone : null, { backgroundColor: theme.surface, borderColor: theme.border }]}>
                   <Text style={[styles.compactWorkspaceStatValue, isPhone ? styles.compactWorkspaceStatValuePhone : null]}>{overview.unreadAnnouncements.length}</Text>
-                  <Text style={styles.compactWorkspaceStatLabel}>Unread</Text>
+                  <Text style={[styles.compactWorkspaceStatLabel, { color: theme.mutedInk }]}>Unread</Text>
                 </View>
               </Pressable>
               <Pressable
@@ -725,11 +766,11 @@ export function ResidentShell() {
                 onPress={() => setActiveTab('helpdesk')}
                 style={({ pressed }) => [styles.compactWorkspaceStatPressable, pressed ? styles.interactiveCardPressed : null]}
               >
-                <View style={[styles.compactWorkspaceStat, isPhone ? styles.compactWorkspaceStatPhone : null]}>
+                <View style={[styles.compactWorkspaceStat, isPhone ? styles.compactWorkspaceStatPhone : null, { backgroundColor: theme.surface, borderColor: theme.border }]}>
                   <Text style={[styles.compactWorkspaceStatValue, isPhone ? styles.compactWorkspaceStatValuePhone : null]}>
                     {overview.myComplaints.filter((item) => item.status !== 'resolved').length}
                   </Text>
-                  <Text style={styles.compactWorkspaceStatLabel}>Open</Text>
+                  <Text style={[styles.compactWorkspaceStatLabel, { color: theme.mutedInk }]}>Open</Text>
                 </View>
               </Pressable>
             </View>
@@ -757,9 +798,12 @@ export function ResidentShell() {
           userFirstName={user.name.split(' ')[0] ?? user.name}
           photoDataUrl={residentPhotoDataUrl}
           canUseAdmin={canUseAdmin}
+          showThemeToggle={activeTab === 'home'}
+          isNightMode={theme.mode === 'night'}
           onOpenProfile={() => setActiveTab('profile')}
           onOpenWorkspaces={actions.goToWorkspaces}
           onSwitchAdmin={actions.goToRoleSelection}
+          onToggleTheme={toggleMode}
         />
       ) : null}
 
@@ -999,9 +1043,12 @@ function ResidentWorkspaceRibbon({
   userFirstName,
   photoDataUrl,
   canUseAdmin,
+  showThemeToggle,
+  isNightMode,
   onOpenProfile,
   onOpenWorkspaces,
   onSwitchAdmin,
+  onToggleTheme,
 }: {
   societyName: string;
   societyArea: string;
@@ -1011,10 +1058,15 @@ function ResidentWorkspaceRibbon({
   userFirstName: string;
   photoDataUrl: string;
   canUseAdmin: boolean;
+  showThemeToggle: boolean;
+  isNightMode: boolean;
   onOpenProfile: () => void;
   onOpenWorkspaces: () => void;
   onSwitchAdmin: () => void;
+  onToggleTheme: () => void;
 }) {
+  const { theme } = useAppTheme();
+
   return (
     <View style={styles.utilityBar}>
       <Pressable onPress={onOpenProfile} style={({ pressed }) => [styles.unitPill, pressed ? styles.pressed : null]}>
@@ -1042,6 +1094,22 @@ function ResidentWorkspaceRibbon({
       </Pressable>
 
       <View style={styles.utilityIcons}>
+        {showThemeToggle ? (
+          <Pressable
+            accessibilityRole="button"
+            onPress={onToggleTheme}
+            style={({ pressed }) => [
+              styles.themeMoonButton,
+              {
+                backgroundColor: isNightMode ? theme.primarySoft : theme.surface,
+                borderColor: theme.border,
+              },
+              pressed ? styles.themeMoonButtonPressed : null,
+            ]}
+          >
+            <Text style={[styles.themeMoonIcon, { color: isNightMode ? theme.gold : theme.primary }]}>☾</Text>
+          </Pressable>
+        ) : null}
         <RoundUtilityButton label="WK" onPress={onOpenWorkspaces} />
         {canUseAdmin ? <RoundUtilityButton label="AD" onPress={onSwitchAdmin} /> : null}
         {photoDataUrl ? (
@@ -4979,9 +5047,11 @@ const styles = StyleSheet.create({
   },
   compactWorkspaceTopRowPhone: {
     gap: 6,
+    alignItems: 'stretch',
   },
   compactWorkspaceTitleWrap: {
     flex: 1,
+    minWidth: 0,
     gap: spacing.xs,
   },
   compactWorkspaceTitle: {
@@ -4991,7 +5061,7 @@ const styles = StyleSheet.create({
     color: palette.ink,
   },
   compactWorkspaceTitlePhone: {
-    fontSize: 18,
+    fontSize: 17,
     lineHeight: 21,
   },
   compactWorkspaceStatsRow: {
@@ -5018,6 +5088,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.xs,
     paddingVertical: 6,
     borderRadius: 14,
+    minHeight: 86,
   },
   compactWorkspaceStatValue: {
     fontSize: 16,
@@ -5039,6 +5110,21 @@ const styles = StyleSheet.create({
   },
   compactWorkspaceActionRowPhone: {
     gap: 6,
+  },
+  themeMoonButton: {
+    width: 42,
+    height: 42,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+  },
+  themeMoonButtonPressed: {
+    opacity: 0.72,
+  },
+  themeMoonIcon: {
+    fontSize: 18,
+    fontWeight: '800',
   },
   residentNavigationCard: {
     gap: spacing.md,

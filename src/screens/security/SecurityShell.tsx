@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { BackHandler, Image, Platform, Pressable, ScrollView, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import {
   ActionButton,
@@ -136,6 +136,29 @@ export function SecurityShell() {
   const { width } = useWindowDimensions();
   const isCompact = width < 768;
   const isPhone = width < 420;
+
+  useEffect(() => {
+    if (Platform.OS !== 'android') {
+      return undefined;
+    }
+
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (isDrawerOpen) {
+        setIsDrawerOpen(false);
+        return true;
+      }
+
+      if (activeTab !== 'desk') {
+        setActiveTab('desk');
+        return true;
+      }
+
+      actions.goToRoleSelection();
+      return true;
+    });
+
+    return () => subscription.remove();
+  }, [actions, activeTab, isDrawerOpen]);
 
   const userId = state.session.userId;
   const societyId = state.session.selectedSocietyId;

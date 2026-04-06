@@ -1501,10 +1501,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     borderRadius: radius.md,
-    backgroundColor: 'rgba(255,255,255,0.14)',
+    backgroundColor: '#FFFDFC',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.18)',
+    borderColor: '#E8DACA',
     gap: 4,
+    ...shadow.card,
   },
   heroMetricCardCompact: {
     minWidth: 0,
@@ -1512,10 +1513,10 @@ const styles = StyleSheet.create({
   heroMetricValue: {
     fontSize: 20,
     fontWeight: '800',
-    color: palette.white,
+    color: palette.ink,
   },
   heroMetricLabel: {
-    color: '#FFEDE6',
+    color: palette.mutedInk,
   },
   flowOverviewCard: {
     gap: spacing.lg,
