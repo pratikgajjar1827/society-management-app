@@ -29,7 +29,7 @@ module.exports = {
       supportsTablet: true,
       bundleIdentifier: isCreatorApp
         ? 'com.anonymous.societycreatorapp'
-        : 'com.anonymous.societymanagementapp',
+        : 'com.mindsflux.residencyhub',
     },
     android: {
       usesCleartextTraffic: allowCleartextTraffic,
@@ -42,7 +42,7 @@ module.exports = {
       predictiveBackGestureEnabled: false,
       package: isCreatorApp
         ? 'com.anonymous.societycreatorapp'
-        : 'com.anonymous.societymanagementapp',
+        : 'com.mindsflux.residencyhub',
     },
     web: {
       favicon: './assets/favicon.png',
