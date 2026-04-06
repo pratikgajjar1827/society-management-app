@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 
 import { pickWebFileAsDataUrl } from './fileUploads';
 
@@ -19,6 +20,65 @@ type TextDetectorDetection = {
   rawValue?: string;
   lines?: Array<{ rawValue?: string }>;
 };
+
+const MAX_UPLOAD_DIMENSION = 1280;
+const TARGET_DATA_URL_LENGTH = 900_000;
+
+function buildImageDataUrl(base64: string, mimeType = 'image/jpeg') {
+  return `data:${mimeType};base64,${base64}`;
+}
+
+async function optimizeNativeImageAsset(asset: ImagePicker.ImagePickerAsset) {
+  if (!asset.uri) {
+    throw new Error('The selected image could not be read.');
+  }
+
+  const largestSide = Math.max(asset.width ?? 0, asset.height ?? 0);
+  const resizeWidth = largestSide > MAX_UPLOAD_DIMENSION ? MAX_UPLOAD_DIMENSION : asset.width ?? null;
+  const resizeHeight =
+    largestSide > MAX_UPLOAD_DIMENSION && asset.width && asset.height
+      ? Math.round((asset.height / asset.width) * MAX_UPLOAD_DIMENSION)
+      : null;
+  const attempts = [
+    { compress: 0.45, width: resizeWidth, height: resizeHeight },
+    { compress: 0.3, width: 960, height: asset.width && asset.height ? Math.round((asset.height / asset.width) * 960) : null },
+    { compress: 0.22, width: 720, height: asset.width && asset.height ? Math.round((asset.height / asset.width) * 720) : null },
+  ];
+
+  let smallestResult = '';
+
+  for (const attempt of attempts) {
+    const result = await manipulateAsync(
+      asset.uri,
+      attempt.width
+        ? [{ resize: { width: attempt.width, height: attempt.height } }]
+        : [],
+      {
+        compress: attempt.compress,
+        format: SaveFormat.JPEG,
+        base64: true,
+      },
+    );
+
+    const dataUrl = buildImageDataUrl(result.base64 ?? '');
+
+    if (!dataUrl || dataUrl === 'data:image/jpeg;base64,') {
+      continue;
+    }
+
+    smallestResult = dataUrl;
+
+    if (dataUrl.length <= TARGET_DATA_URL_LENGTH) {
+      return dataUrl;
+    }
+  }
+
+  if (smallestResult) {
+    return smallestResult;
+  }
+
+  return assetToDataUrl(asset);
+}
 
 function assetToDataUrl(asset: ImagePicker.ImagePickerAsset) {
   if (!asset.base64) {
@@ -67,7 +127,7 @@ async function capturePhoto(options: CapturePhotoOptions): Promise<CapturedPhoto
   }
 
   return {
-    dataUrl: assetToDataUrl(result.assets[0]),
+    dataUrl: await optimizeNativeImageAsset(result.assets[0]),
     capturedAt: new Date().toISOString(),
   };
 }
@@ -169,7 +229,7 @@ export async function pickResidentProfilePhoto(capture?: 'user' | 'environment')
     }
 
     return {
-      dataUrl: assetToDataUrl(result.assets[0]),
+      dataUrl: await optimizeNativeImageAsset(result.assets[0]),
       capturedAt: new Date().toISOString(),
     };
   }
@@ -192,7 +252,7 @@ export async function pickResidentProfilePhoto(capture?: 'user' | 'environment')
   }
 
   return {
-    dataUrl: assetToDataUrl(result.assets[0]),
+    dataUrl: await optimizeNativeImageAsset(result.assets[0]),
     capturedAt: new Date().toISOString(),
   };
 }

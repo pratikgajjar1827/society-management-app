@@ -40,6 +40,24 @@ In a second terminal:
 npm run start
 ```
 
+Run the separate society creator app variant:
+
+```bash
+npm run start:creator
+```
+
+Android creator build:
+
+```bash
+npm run android:creator
+```
+
+Web creator build:
+
+```bash
+npm run web:creator
+```
+
 Type-checking:
 
 ```bash
@@ -85,6 +103,7 @@ Available local endpoints:
 
 - `GET /health`
 - `GET /api/bootstrap`
+- `POST /api/creator/access`
 - `POST /api/auth/request-otp`
 - `POST /api/auth/verify-otp`
 - `POST /api/auth/role`
@@ -146,6 +165,18 @@ set TWILIO_API_KEY_SECRET=your_api_key_secret
 ```
 
 If those variables are not set, the app still works locally and shows the development OTP on screen after you request it.
+
+## Creator app access
+
+The separate creator app is meant for internal workspace creation when you do not want to rely on the seeded super-user OTP number.
+
+Set this backend variable before using the creator app:
+
+```bash
+set SOCIETY_CREATOR_ACCESS_KEY=choose-a-strong-internal-key
+```
+
+The creator app then uses that key through `POST /api/creator/access` and opens directly into the society setup wizard.
 
 ## Product architecture recommendation
 

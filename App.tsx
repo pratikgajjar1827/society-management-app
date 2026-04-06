@@ -7,15 +7,18 @@ import { AuthScreen } from './src/screens/AuthScreen';
 import { ResidentShell } from './src/screens/resident/ResidentShell';
 import { RoleSelectionScreen } from './src/screens/RoleSelectionScreen';
 import { SecurityShell } from './src/screens/security/SecurityShell';
+import { SocietyCreatorAccessScreen } from './src/screens/SocietyCreatorAccessScreen';
 import { SocietyEnrollmentScreen } from './src/screens/SocietyEnrollmentScreen';
 import { SocietySetupWizardScreen } from './src/screens/SocietySetupWizardScreen';
 import { WorkspaceSelectionScreen } from './src/screens/WorkspaceSelectionScreen';
+import { isCreatorAppVariant } from './src/config/appVariant';
 import { AppProvider, useApp } from './src/state/AppContext';
 import { palette, radius, spacing } from './src/theme/tokens';
 import { getPendingSecurityGuestRequestsForResident } from './src/utils/selectors';
 
 function AppRoot() {
   const { state } = useApp();
+  const isCreatorApp = isCreatorAppVariant();
   const isAuthScreen = state.screen === 'auth';
   const pendingSecurityApprovals =
     state.session.userId &&
@@ -45,6 +48,34 @@ function AppRoot() {
           </View>
           <Text style={styles.loadingTitle}>My Space</Text>
         </View>
+      </View>
+    );
+  }
+
+  if (isCreatorApp) {
+    const creatorUnlocked = Boolean(
+      state.session.sessionToken &&
+      state.session.userId &&
+      state.session.accountRole === 'superUser',
+    );
+
+    return (
+      <View style={styles.appShell}>
+        {state.apiError ? (
+          <View style={styles.banner}>
+            <Text style={styles.bannerText}>{state.apiError}</Text>
+          </View>
+        ) : null}
+        {!state.apiError && state.noticeMessage ? (
+          <View style={styles.noticeBanner}>
+            <Text style={styles.noticeBannerText}>{state.noticeMessage}</Text>
+          </View>
+        ) : null}
+        {creatorUnlocked ? (
+          <SocietySetupWizardScreen key={state.session.selectedSocietyId ?? 'creator-setup'} />
+        ) : (
+          <SocietyCreatorAccessScreen />
+        )}
       </View>
     );
   }

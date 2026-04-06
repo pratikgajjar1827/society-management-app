@@ -24,6 +24,7 @@ import {
   getApiBaseUrl,
   localFallbackSnapshot,
   markAnnouncementRead as markAnnouncementReadRequest,
+  requestCreatorAccess as requestCreatorAccessRequest,
   requestOtp as requestOtpRequest,
   recordManualPayment as recordManualPaymentRequest,
   reviewAmenityBooking as reviewAmenityBookingRequest,
@@ -77,6 +78,7 @@ import {
   StaffCategory,
   VerificationState,
 } from '../types/domain';
+import { isCreatorAppVariant } from '../config/appVariant';
 
 type Screen =
   | 'auth'
@@ -300,6 +302,7 @@ interface AppState {
 interface AppContextValue {
   state: AppState;
   actions: {
+    requestCreatorAccess: (accessKey: string) => Promise<void>;
     requestOtp: (destination: string) => Promise<void>;
     verifyOtp: (code: string) => Promise<void>;
     retryBackendConnection: () => Promise<boolean>;
@@ -463,7 +466,9 @@ const initialState: AppState = {
   dataSource: 'fallback',
 };
 
-const SESSION_STORAGE_KEY = 'societyos.session';
+function getSessionStorageKey() {
+  return isCreatorAppVariant() ? 'societyos.creator.session' : 'societyos.session';
+}
 
 const AppContext = createContext<AppContextValue | undefined>(undefined);
 
@@ -524,7 +529,8 @@ function normalizePersistedSession(value: unknown): PersistedSessionState | unde
 }
 
 async function loadPersistedSession() {
-  const rawValue = await AsyncStorage.getItem(SESSION_STORAGE_KEY);
+  const sessionStorageKey = getSessionStorageKey();
+  const rawValue = await AsyncStorage.getItem(sessionStorageKey);
 
   if (!rawValue) {
     return undefined;
@@ -533,14 +539,16 @@ async function loadPersistedSession() {
   try {
     return normalizePersistedSession(JSON.parse(rawValue));
   } catch {
-    await AsyncStorage.removeItem(SESSION_STORAGE_KEY);
+    await AsyncStorage.removeItem(sessionStorageKey);
     return undefined;
   }
 }
 
 async function persistSession(session: SessionState) {
+  const sessionStorageKey = getSessionStorageKey();
+
   if (!session.sessionToken || !session.userId) {
-    await AsyncStorage.removeItem(SESSION_STORAGE_KEY);
+    await AsyncStorage.removeItem(sessionStorageKey);
     return;
   }
 
@@ -554,14 +562,14 @@ async function persistSession(session: SessionState) {
     selectedProfile: session.selectedProfile,
   };
 
-  await AsyncStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(payload));
+  await AsyncStorage.setItem(sessionStorageKey, JSON.stringify(payload));
 }
 
 async function clearPersistedSession() {
-  await AsyncStorage.removeItem(SESSION_STORAGE_KEY);
+  await AsyncStorage.removeItem(getSessionStorageKey());
 }
 
-function normalizeSessionSelection(session: SessionState, data: SeedData) {
+function normalizeSessionSelection(session: SessionState, data: SeedData): SessionState {
   const hasSelectedSociety = Boolean(
     session.selectedSocietyId && data.societies.some((society) => society.id === session.selectedSocietyId),
   );
@@ -957,6 +965,50 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }
 
   const actions: AppContextValue['actions'] = {
+    requestCreatorAccess: async (accessKey) => {
+      setState((currentState) => ({
+        ...currentState,
+        isSyncing: true,
+        apiError: undefined,
+        noticeMessage: undefined,
+        pendingChallenge: undefined,
+      }));
+
+      try {
+        const response = await requestCreatorAccessRequest(accessKey);
+
+        setState((currentState) => ({
+          ...currentState,
+          screen: 'setup',
+          data: mergeServerData(response.data, currentState.data),
+          chairmanAssigned: response.chairmanAssigned,
+          amenityLibrary: response.amenityLibrary,
+          defaultSetupDraft: response.defaultSetupDraft,
+          onboarding: response.onboarding,
+          pendingChallenge: undefined,
+          isSyncing: false,
+          apiError: undefined,
+          noticeMessage: 'Creator access granted. You can create a society now.',
+          dataSource: 'remote',
+          session: {
+            ...currentState.session,
+            userId: response.currentUserId,
+            sessionToken: response.sessionToken,
+            verifiedDestination: 'creator-app',
+            accountRole: response.onboarding.preferredRole ?? 'superUser',
+            selectedSocietyId: undefined,
+            selectedProfile: undefined,
+          },
+        }));
+      } catch (error) {
+        setState((currentState) => ({
+          ...currentState,
+          isSyncing: false,
+          apiError: getErrorMessage(error),
+          noticeMessage: undefined,
+        }));
+      }
+    },
     retryBackendConnection: async () =>
       refreshBackendConnection({
         loadingMode: 'sync',
@@ -1364,9 +1416,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     cancelSetup: () =>
       setState((currentState) => ({
         ...currentState,
-        screen: currentState.onboarding?.membershipsCount ? 'workspace' : 'societyEnrollment',
+        screen: isCreatorAppVariant()
+          ? 'auth'
+          : currentState.onboarding?.membershipsCount
+            ? 'workspace'
+            : 'societyEnrollment',
         apiError: undefined,
         noticeMessage: undefined,
+        onboarding: isCreatorAppVariant() ? undefined : currentState.onboarding,
+        pendingChallenge: isCreatorAppVariant() ? undefined : currentState.pendingChallenge,
+        session: isCreatorAppVariant()
+          ? {}
+          : currentState.session,
       })),
     selectProfile: (profile) =>
       setState((currentState) => ({
@@ -1436,7 +1497,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           screen: 'role',
           isSyncing: false,
           dataSource: 'remote',
-          noticeMessage: 'Society created. The local chairman can now claim this society from the join flow for super user approval.',
+          noticeMessage: isCreatorAppVariant()
+            ? 'Society created successfully. You can start another society right away from this creator app.'
+            : 'Society created. The local chairman can now claim this society from the join flow for super user approval.',
           session: {
             ...currentState.session,
             userId: response.currentUserId,
@@ -2126,8 +2189,4 @@ export function useApp() {
 
   return context;
 }
-
-
-
-
 

@@ -48,6 +48,8 @@ type SessionSnapshotResponse = AuthenticatedResponse & {
   user: UserProfile;
 };
 
+type CreatorAccessResponse = SessionSnapshotResponse;
+
 type VerifyOtpResponse = AuthenticatedResponse & {
   sessionToken: string;
   user: UserProfile;
@@ -194,6 +196,7 @@ export interface SocietyChatMessageInput {
 }
 
 const DEFAULT_API_PORT = 4000;
+const DEFAULT_PRODUCTION_API_BASE_URL = 'https://api.mindsflux.com';
 const API_BASE_URL_STORAGE_KEY = 'societyos.apiBaseUrl';
 
 let runtimeApiBaseUrlOverride: string | undefined;
@@ -335,6 +338,10 @@ export function getDefaultApiBaseUrl() {
     return normalizeBaseUrl(configured);
   }
 
+  if (!__DEV__) {
+    return DEFAULT_PRODUCTION_API_BASE_URL;
+  }
+
   if (Platform.OS === 'web' && typeof window !== 'undefined') {
     const protocol = window.location.protocol || 'http:';
     const hostname = window.location.hostname || 'localhost';
@@ -419,6 +426,13 @@ export async function fetchSessionSnapshot(sessionToken: string) {
   return requestJson<SessionSnapshotResponse>('/api/session/snapshot', {
     method: 'GET',
     headers: createAuthHeaders(sessionToken),
+  });
+}
+
+export async function requestCreatorAccess(accessKey: string) {
+  return requestJson<CreatorAccessResponse>('/api/creator/access', {
+    method: 'POST',
+    body: JSON.stringify({ accessKey }),
   });
 }
 

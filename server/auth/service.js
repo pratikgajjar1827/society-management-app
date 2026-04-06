@@ -1200,6 +1200,42 @@ function buildAuthPayload(userId, sessionToken) {
   };
 }
 
+function hasMatchingCreatorAccessKey(accessKeyInput) {
+  const configuredKey = String(process.env.SOCIETY_CREATOR_ACCESS_KEY ?? '').trim();
+  const accessKey = String(accessKeyInput ?? '').trim();
+
+  if (!configuredKey) {
+    throw new HttpError(
+      503,
+      'Creator app access is not configured on the backend. Set SOCIETY_CREATOR_ACCESS_KEY and try again.',
+    );
+  }
+
+  if (!accessKey) {
+    throw new HttpError(400, 'Enter the creator access key.');
+  }
+
+  const configuredBuffer = Buffer.from(configuredKey, 'utf8');
+  const providedBuffer = Buffer.from(accessKey, 'utf8');
+
+  return (
+    configuredBuffer.length === providedBuffer.length
+    && crypto.timingSafeEqual(configuredBuffer, providedBuffer)
+  );
+}
+
+function requestCreatorSession(accessKeyInput) {
+  cleanupExpiredRecords();
+
+  if (!hasMatchingCreatorAccessKey(accessKeyInput)) {
+    throw new HttpError(403, 'Creator access key is incorrect.');
+  }
+
+  const sessionToken = createSession(SUPER_USER_ID);
+
+  return buildAuthPayload(SUPER_USER_ID, sessionToken);
+}
+
 async function requestOtp(intentInput, channelInput, destinationInput, forceDevelopment = false) {
   cleanupExpiredRecords();
   const intent = normalizeAuthIntent(intentInput);
@@ -4350,6 +4386,7 @@ module.exports = {
   markAnnouncementRead,
   normalizeAuthChannel,
   normalizeAuthIntent,
+  requestCreatorSession,
   recordManualPayment,
   requestOtp,
   ringSecurityGuestRequest,

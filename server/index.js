@@ -42,6 +42,7 @@ const {
   hasAssignedChairman,
   markAnnouncementRead,
   requestOtp,
+  requestCreatorSession,
   recordManualPayment,
   requireSuperUserRole,
   requireSession,
@@ -361,6 +362,17 @@ async function requestHandler(request, response) {
       const payload = buildAuthPayload(userId, sessionToken);
       sendJson(response, 200, {
         ...payload,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/creator/access') {
+      const body = await parseBody(request);
+      const result = requestCreatorSession(body.accessKey);
+      sendJson(response, 200, {
+        ...result,
         amenityLibrary,
         defaultSetupDraft,
       });

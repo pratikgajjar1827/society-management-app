@@ -430,6 +430,7 @@ export function InputField({
   keyboardType = 'default',
   autoCapitalize = 'sentences',
   nativeType = 'text',
+  secureTextEntry = false,
 }: {
   label: string;
   value: string;
@@ -439,6 +440,7 @@ export function InputField({
   keyboardType?: 'default' | 'numeric' | 'phone-pad' | 'email-address';
   autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
   nativeType?: 'text' | 'date' | 'email' | 'tel';
+  secureTextEntry?: boolean;
 }) {
   const { isCompact } = useResponsiveMetrics();
 
@@ -474,6 +476,7 @@ export function InputField({
         onChangeText={onChangeText}
         placeholder={placeholder}
         placeholderTextColor={palette.mutedInk}
+        secureTextEntry={secureTextEntry}
         style={[
           styles.input,
           isCompact ? styles.inputCompact : null,

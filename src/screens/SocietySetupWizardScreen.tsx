@@ -34,6 +34,7 @@ import {
   SocietyStructure,
   SocietyStructureOption,
 } from '../types/domain';
+import { isCreatorAppVariant } from '../config/appVariant';
 import {
   getEnabledCommercialSpaceTypes,
   getEnabledStructures,
@@ -383,6 +384,7 @@ function getStepTone(isReady: boolean, isActive: boolean): 'success' | 'accent' 
 export function SocietySetupWizardScreen() {
   const { state, actions } = useApp();
   const { width } = useWindowDimensions();
+  const isCreatorApp = isCreatorAppVariant();
   const isCompact = width < 768;
   const isPhone = width < 420;
   const [draft, setDraft] = useState(() => syncDerivedFields(cloneDraft(state.defaultSetupDraft)));
@@ -769,7 +771,13 @@ export function SocietySetupWizardScreen() {
               <Caption style={styles.setupHeroStatusLabel}>stages ready</Caption>
             </View>
             <ActionButton
-              label={state.onboarding?.membershipsCount ? 'Back to workspaces' : 'Back to portal selection'}
+              label={
+                isCreatorApp
+                  ? 'Lock creator app'
+                  : state.onboarding?.membershipsCount
+                    ? 'Back to workspaces'
+                    : 'Back to portal selection'
+              }
               onPress={actions.cancelSetup}
               variant="secondary"
             />
