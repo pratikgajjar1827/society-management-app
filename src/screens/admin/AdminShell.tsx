@@ -73,7 +73,13 @@ import {
   humanizeJoinRequestRole,
   humanizeRole,
 } from '../../utils/selectors';
-import { AnnouncementAudience, AnnouncementPriority, PaymentMethod, SocietyDocumentCategory } from '../../types/domain';
+import {
+  AnnouncementAudience,
+  AnnouncementPriority,
+  PaymentMethod,
+  SocietyDocumentCategory,
+  SocietyMeetingType,
+} from '../../types/domain';
 
 type AdminTab = 'home' | AdminRecommendationTab | 'ledger' | 'meetings' | 'documents';
 type OfficeMaintenanceState = 'paid' | 'pending' | 'overdue' | 'unbilled';
@@ -4173,7 +4179,7 @@ function AdminMeetings({ societyId, userId }: { societyId: string; userId: strin
 
   // Create meeting form
   const [meetingTitle, setMeetingTitle] = useState('');
-  const [meetingType, setMeetingType] = useState<'society' | 'committee' | 'emergency'>('society');
+  const [meetingType, setMeetingType] = useState<SocietyMeetingType>('society');
   const [meetingDate, setMeetingDate] = useState('');
   const [meetingTime, setMeetingTime] = useState('18:00');
   const [meetingVenue, setMeetingVenue] = useState('');
@@ -4184,7 +4190,7 @@ function AdminMeetings({ societyId, userId }: { societyId: string; userId: strin
   const [agendaDescription, setAgendaDescription] = useState('');
   const [agendaRequiresVoting, setAgendaRequiresVoting] = useState(false);
 
-  const meetingTypeOptions: Array<{ key: 'society' | 'committee' | 'emergency'; label: string }> = [
+  const meetingTypeOptions: Array<{ key: SocietyMeetingType; label: string }> = [
     { key: 'society', label: 'Society Meeting' },
     { key: 'committee', label: 'Committee Meeting' },
     { key: 'emergency', label: 'Emergency Meeting' },

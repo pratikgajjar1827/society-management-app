@@ -76,6 +76,7 @@ import {
   RoleProfile,
   SecurityGuestRequestStatus,
   SeedData,
+  SocietyMeetingType,
   SocietySetupDraft,
   StaffCategory,
   VerificationState,
@@ -246,7 +247,7 @@ interface VisitorPassStatusInput {
 
 interface SocietyMeetingInput {
   title: string;
-  meetingType: 'agm' | 'sgm' | 'committee' | 'emergency';
+  meetingType: SocietyMeetingType;
   scheduledAt: string;
   venue: string;
   summary?: string;

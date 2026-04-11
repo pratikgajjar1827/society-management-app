@@ -1035,6 +1035,9 @@ export function getResidentsDirectory(data: SeedData, societyId: string) {
             item.societyId === societyId &&
             item.unitIds.includes(unit.id),
         );
+        const residenceProfile = data.residenceProfiles.find(
+          (profile) => profile.userId === occupancy.userId && profile.societyId === societyId,
+        );
 
         if (!user) {
           return undefined;
@@ -1042,6 +1045,7 @@ export function getResidentsDirectory(data: SeedData, societyId: string) {
 
         return {
           user,
+          residenceProfile,
           category: occupancy.category,
           roles: membership?.roles ?? [],
           startDate: occupancy.startDate,
@@ -1050,6 +1054,7 @@ export function getResidentsDirectory(data: SeedData, societyId: string) {
       })
       .filter(Boolean) as Array<{
       user: UserProfile;
+      residenceProfile?: ResidenceProfile;
       category: string;
       roles: MembershipRole[];
       startDate: string;

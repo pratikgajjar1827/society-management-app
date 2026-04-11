@@ -34,15 +34,15 @@ async function optimizeNativeImageAsset(asset: ImagePicker.ImagePickerAsset) {
   }
 
   const largestSide = Math.max(asset.width ?? 0, asset.height ?? 0);
-  const resizeWidth = largestSide > MAX_UPLOAD_DIMENSION ? MAX_UPLOAD_DIMENSION : asset.width ?? null;
+  const resizeWidth = largestSide > MAX_UPLOAD_DIMENSION ? MAX_UPLOAD_DIMENSION : asset.width;
   const resizeHeight =
     largestSide > MAX_UPLOAD_DIMENSION && asset.width && asset.height
       ? Math.round((asset.height / asset.width) * MAX_UPLOAD_DIMENSION)
-      : null;
+      : undefined;
   const attempts = [
     { compress: 0.45, width: resizeWidth, height: resizeHeight },
-    { compress: 0.3, width: 960, height: asset.width && asset.height ? Math.round((asset.height / asset.width) * 960) : null },
-    { compress: 0.22, width: 720, height: asset.width && asset.height ? Math.round((asset.height / asset.width) * 720) : null },
+    { compress: 0.3, width: 960, height: asset.width && asset.height ? Math.round((asset.height / asset.width) * 960) : undefined },
+    { compress: 0.22, width: 720, height: asset.width && asset.height ? Math.round((asset.height / asset.width) * 720) : undefined },
   ];
 
   let smallestResult = '';

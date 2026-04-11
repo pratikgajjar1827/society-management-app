@@ -5228,6 +5228,9 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '800',
   },
+  pressed: {
+    opacity: 0.84,
+  },
   profileRing: {
     width: 42,
     height: 42,
