@@ -18,6 +18,7 @@ import {
 import { ModuleGlyph } from '../../components/ModuleGlyph';
 import { MaintenanceReceiptCard } from '../../components/MaintenanceReceiptCard';
 import { ResidentHomeExperience } from './ResidentHomeExperience';
+import { getAccountDeletionUrl, getPrivacyPolicyUrl } from '../../api/client';
 import { useApp } from '../../state/AppContext';
 import { useAppTheme } from '../../theme/appTheme';
 import { palette, radius, shadow, spacing } from '../../theme/tokens';
@@ -95,7 +96,7 @@ type ResidentVisitorsSection = 'create' | 'approvals' | 'history' | 'desk';
 type ResidentBillingSection = 'pay' | 'reminders' | 'outstanding' | 'history';
 type ResidentNoticeSection = 'announcements' | 'unread' | 'priority' | 'rules';
 type ResidentBookingsSection = 'booking' | 'amenities' | 'history';
-type ResidentProfileSection = 'household' | 'contacts' | 'vehicles';
+type ResidentProfileSection = 'household' | 'contacts' | 'vehicles' | 'account';
 type AmenityRecord = SeedData['amenities'][number];
 type EditableVehicleDraft = {
   id: string;
@@ -197,6 +198,20 @@ const residentProfileSections: Array<{ key: ResidentProfileSection; label: strin
   { key: 'household', label: 'Household' },
   { key: 'contacts', label: 'Contacts' },
   { key: 'vehicles', label: 'Vehicles' },
+  { key: 'account', label: 'Account' },
+];
+
+const privacyPolicyHighlights = [
+  'We collect account details like name, mobile number, email, and avatar initials.',
+  'We store residence details such as unit mapping, emergency contacts, tenancy proof, and vehicles.',
+  'We use this data for sign-in, society operations, notices, billing, bookings, helpdesk, and gate access.',
+  'We do not sell personal information, and visibility depends on the society role permissions inside the app.',
+];
+
+const deletionPageHighlights = [
+  'Signed-in users can submit deletion requests from this profile page.',
+  'Deletion may remove login access, memberships, residence data, vehicles, and linked records where allowed.',
+  'Some records may be retained for legal, billing, security, or operational reasons during review.',
 ];
 
 function getAmenityVisual(amenityName: string): {
@@ -4223,6 +4238,9 @@ function ResidentProfile({
       : [],
   );
   const [profileActionMessage, setProfileActionMessage] = useState('');
+  const [showAccountDeletionPanel, setShowAccountDeletionPanel] = useState(false);
+  const [confirmAccountDeletion, setConfirmAccountDeletion] = useState(false);
+  const [accountDeletionReason, setAccountDeletionReason] = useState('');
   const hasIncompleteProfileVehicle = profileVehicles.some(
     (vehicle) =>
       (vehicle.registrationNumber.trim() ||
@@ -4474,6 +4492,39 @@ function ResidentProfile({
 
     if (saved) {
       setProfileActionMessage('Residence profile saved.');
+    }
+  }
+
+  async function handleOpenSupportPage(url: string, label: string) {
+    try {
+      const response = await fetch(url, { method: 'GET' });
+      const body = await response.text();
+
+      if (!response.ok || /route not found/i.test(body)) {
+        setProfileActionMessage(
+          `${label} is not live on the server yet. You can still read the in-app copy in this profile section.`,
+        );
+        return;
+      }
+
+      await Linking.openURL(url);
+    } catch (error) {
+      setProfileActionMessage(
+        error instanceof Error
+          ? `${label} could not be opened right now. You can still use the in-app copy below.`
+          : `${label} could not be opened right now.`,
+      );
+    }
+  }
+
+  async function handleRequestAccountDeletion() {
+    const submitted = await actions.requestAccountDeletion(accountDeletionReason);
+
+    if (submitted) {
+      setShowAccountDeletionPanel(false);
+      setConfirmAccountDeletion(false);
+      setAccountDeletionReason('');
+      setProfileActionMessage('Account deletion request submitted for review.');
     }
   }
 
@@ -4916,6 +4967,124 @@ function ResidentProfile({
             </View>
           )) : (
             <Caption>No vehicle saved in your residence profile yet.</Caption>
+          )}
+        </SurfaceCard>
+      ) : null}
+
+      {activeSection === 'account' ? (
+        <SurfaceCard>
+          <Text style={styles.cardTitle}>Account and privacy</Text>
+          <Caption>
+            Privacy support and account deletion now live inside the resident profile so they stay with your residence settings.
+          </Caption>
+          <View style={styles.inlineSection}>
+            <View style={styles.profileInfoGrid}>
+              <View style={styles.profileInfoCard}>
+                <Text style={styles.profileInfoLabel}>Privacy policy</Text>
+                <Text style={styles.profileInfoValue}>In-app copy available</Text>
+                <Caption>You can read the key privacy points below even if the public page is not live on the server yet.</Caption>
+              </View>
+              <View style={styles.profileInfoCard}>
+                <Text style={styles.profileInfoLabel}>Deletion support page</Text>
+                <Text style={styles.profileInfoValue}>In-app copy available</Text>
+                <Caption>The signed-in deletion request is available here, so you do not need to leave the profile page.</Caption>
+              </View>
+            </View>
+            <View style={styles.heroActions}>
+              <ActionButton
+                label="Open privacy policy"
+                onPress={() => {
+                  void handleOpenSupportPage(getPrivacyPolicyUrl(), 'Privacy policy');
+                }}
+                variant="secondary"
+              />
+              <ActionButton
+                label="Open deletion page"
+                onPress={() => {
+                  void handleOpenSupportPage(getAccountDeletionUrl(), 'Deletion page');
+                }}
+                variant="secondary"
+              />
+            </View>
+          </View>
+
+          <View style={styles.inlineSection}>
+            <Text style={styles.compactTitle}>Privacy policy highlights</Text>
+            {privacyPolicyHighlights.map((item) => (
+              <View key={item} style={styles.policyItemRow}>
+                <View style={styles.policyItemDot} />
+                <Caption style={styles.policyItemText}>{item}</Caption>
+              </View>
+            ))}
+          </View>
+
+          <View style={styles.inlineSection}>
+            <Text style={styles.compactTitle}>Deletion and retention</Text>
+            {deletionPageHighlights.map((item) => (
+              <View key={item} style={styles.policyItemRow}>
+                <View style={styles.policyItemDot} />
+                <Caption style={styles.policyItemText}>{item}</Caption>
+              </View>
+            ))}
+          </View>
+
+          {profileActionMessage ? <Caption>{profileActionMessage}</Caption> : null}
+
+          {!showAccountDeletionPanel ? (
+            <ActionButton
+              label="Request account deletion"
+              onPress={() => setShowAccountDeletionPanel(true)}
+              variant="danger"
+              disabled={state.isSyncing}
+            />
+          ) : (
+            <View style={styles.accountDangerCard}>
+              <Text style={styles.inlineTitle}>Submit account deletion request</Text>
+              <Caption>
+                This sends a deletion request for your signed-in account. We review linked society records before removing the account permanently.
+              </Caption>
+              <InputField
+                label="Reason for deletion (optional)"
+                value={accountDeletionReason}
+                onChangeText={setAccountDeletionReason}
+                placeholder="Tell us why you want the account removed."
+                multiline
+              />
+              {confirmAccountDeletion ? (
+                <Caption style={styles.accountDangerWarning}>
+                  Confirm only if you want us to start reviewing this account for deletion.
+                </Caption>
+              ) : null}
+              <View style={styles.heroActions}>
+                <ActionButton
+                  label="Cancel"
+                  onPress={() => {
+                    setShowAccountDeletionPanel(false);
+                    setConfirmAccountDeletion(false);
+                    setAccountDeletionReason('');
+                  }}
+                  variant="secondary"
+                  disabled={state.isSyncing}
+                />
+                {!confirmAccountDeletion ? (
+                  <ActionButton
+                    label="Continue"
+                    onPress={() => setConfirmAccountDeletion(true)}
+                    variant="danger"
+                    disabled={state.isSyncing}
+                  />
+                ) : (
+                  <ActionButton
+                    label={state.isSyncing ? 'Submitting...' : 'Submit deletion request'}
+                    onPress={() => {
+                      void handleRequestAccountDeletion();
+                    }}
+                    variant="danger"
+                    disabled={state.isSyncing}
+                  />
+                )}
+              </View>
+            </View>
           )}
         </SurfaceCard>
       ) : null}
@@ -5990,6 +6159,33 @@ const styles = StyleSheet.create({
     paddingTop: spacing.md,
     borderTopWidth: 1,
     borderTopColor: '#F0E5D8',
+  },
+  policyItemRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.xs,
+  },
+  policyItemDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginTop: 8,
+    backgroundColor: '#D96A39',
+  },
+  policyItemText: {
+    flex: 1,
+  },
+  accountDangerCard: {
+    gap: spacing.sm,
+    padding: spacing.md,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#F0D0C6',
+    backgroundColor: '#FFF6F2',
+  },
+  accountDangerWarning: {
+    color: palette.danger,
+    fontWeight: '700',
   },
   inlineSectionPhone: {
     paddingTop: spacing.sm,

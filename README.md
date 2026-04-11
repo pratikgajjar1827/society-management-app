@@ -184,6 +184,31 @@ set SOCIETY_CREATOR_ACCESS_KEY=choose-a-strong-internal-key
 
 The creator app then uses that key through `POST /api/creator/access` and opens directly into the society setup wizard.
 
+## Play review access
+
+The main app now supports a review-only login path for Google Play reviewers so review does not depend on real-time OTP delivery.
+
+Set these backend variables before submitting to Play:
+
+```bash
+set PLAY_REVIEW_ACCESS_KEY=choose-a-strong-review-key
+set PLAY_REVIEW_PHONE=+919876543210
+```
+
+Or use email instead of phone:
+
+```bash
+set PLAY_REVIEW_ACCESS_KEY=choose-a-strong-review-key
+set PLAY_REVIEW_EMAIL=reviewer@example.com
+```
+
+Important notes:
+
+- The review phone or email must already belong to a real account in your backend.
+- That account should already have the society memberships and role you want Play reviewers to inspect.
+- When configured, the login screen shows a `Play review access` panel and the app opens a normal session through `POST /api/play-review/access`.
+- Keep this review access active until Google Play finishes review.
+
 ## Product architecture recommendation
 
 The recommended live flow is:

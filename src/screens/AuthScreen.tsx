@@ -26,6 +26,7 @@ export function AuthScreen() {
   const { state, actions } = useApp();
   const [destination, setDestination] = useState('');
   const [code, setCode] = useState('');
+  const [reviewAccessKey, setReviewAccessKey] = useState('');
   const { width } = useWindowDimensions();
   const isCompact = width < 768;
 
@@ -43,6 +44,12 @@ export function AuthScreen() {
   useEffect(() => {
     setCode('');
   }, [challenge?.challengeId]);
+
+  useEffect(() => {
+    if (!state.playReviewAccessEnabled) {
+      setReviewAccessKey('');
+    }
+  }, [state.playReviewAccessEnabled]);
 
   useEffect(() => {
     if (challenge?.destination) {
@@ -102,6 +109,29 @@ export function AuthScreen() {
               }
             />
           </View>
+
+          {state.playReviewAccessEnabled && !challenge ? (
+            <View style={styles.reviewAccessCard}>
+              <Text style={styles.reviewAccessTitle}>Play review access</Text>
+              <Caption style={styles.reviewAccessDescription}>
+                Use this only for Google Play review credentials. Regular users should sign in with mobile OTP.
+              </Caption>
+              <InputField
+                label="Review access key"
+                value={reviewAccessKey}
+                onChangeText={setReviewAccessKey}
+                placeholder="Enter configured review key"
+                autoCapitalize="none"
+                secureTextEntry
+              />
+              <ActionButton
+                label={state.isSyncing ? 'Opening review access...' : 'Open review access'}
+                onPress={() => actions.requestPlayReviewAccess(reviewAccessKey)}
+                variant="secondary"
+                disabled={state.isSyncing || reviewAccessKey.trim().length === 0}
+              />
+            </View>
+          ) : null}
 
           {challenge ? (
             <View style={styles.statusCard}>
@@ -179,6 +209,23 @@ const styles = StyleSheet.create({
   },
   formStack: {
     gap: spacing.sm,
+  },
+  reviewAccessCard: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: '#D7E1D6',
+    backgroundColor: '#F6FBF6',
+    gap: spacing.sm,
+  },
+  reviewAccessTitle: {
+    color: palette.ink,
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  reviewAccessDescription: {
+    color: palette.mutedInk,
   },
   statusCard: {
     paddingHorizontal: spacing.md,

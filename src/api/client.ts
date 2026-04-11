@@ -33,6 +33,7 @@ import {
 type BootstrapResponse = {
   currentUserId: string | null;
   chairmanAssigned: boolean;
+  playReviewAccessEnabled: boolean;
   amenityLibrary: string[];
   defaultSetupDraft: SocietySetupDraft;
   data: SeedData;
@@ -49,6 +50,7 @@ type SessionSnapshotResponse = AuthenticatedResponse & {
 };
 
 type CreatorAccessResponse = SessionSnapshotResponse;
+type PlayReviewAccessResponse = SessionSnapshotResponse;
 
 type VerifyOtpResponse = AuthenticatedResponse & {
   sessionToken: string;
@@ -445,6 +447,13 @@ export async function fetchSessionSnapshot(sessionToken: string) {
 
 export async function requestCreatorAccess(accessKey: string) {
   return requestJson<CreatorAccessResponse>('/api/creator/access', {
+    method: 'POST',
+    body: JSON.stringify({ accessKey }),
+  });
+}
+
+export async function requestPlayReviewAccess(accessKey: string) {
+  return requestJson<PlayReviewAccessResponse>('/api/play-review/access', {
     method: 'POST',
     body: JSON.stringify({ accessKey }),
   });
@@ -1177,6 +1186,7 @@ export async function resetDatabase() {
 export const localFallbackSnapshot: BootstrapResponse = {
   currentUserId: null,
   chairmanAssigned: false,
+  playReviewAccessEnabled: false,
   amenityLibrary,
   defaultSetupDraft,
   data: seedData,

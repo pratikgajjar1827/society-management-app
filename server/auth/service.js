@@ -1319,14 +1319,31 @@ function buildAuthPayload(userId, sessionToken) {
     sessionToken,
     user,
     chairmanAssigned: hasAssignedChairman(),
+    playReviewAccessEnabled: isPlayReviewAccessConfigured(),
     onboarding: getOnboardingState(userId),
     data: getSynchronizedSnapshot(),
   };
 }
 
+function hasMatchingConfiguredAccessKey(configuredKeyInput, providedKeyInput, emptyMessage) {
+  const configuredKey = String(configuredKeyInput ?? '').trim();
+  const providedKey = String(providedKeyInput ?? '').trim();
+
+  if (!providedKey) {
+    throw new HttpError(400, emptyMessage);
+  }
+
+  const configuredBuffer = Buffer.from(configuredKey, 'utf8');
+  const providedBuffer = Buffer.from(providedKey, 'utf8');
+
+  return (
+    configuredBuffer.length === providedBuffer.length
+    && crypto.timingSafeEqual(configuredBuffer, providedBuffer)
+  );
+}
+
 function hasMatchingCreatorAccessKey(accessKeyInput) {
   const configuredKey = String(process.env.SOCIETY_CREATOR_ACCESS_KEY ?? '').trim();
-  const accessKey = String(accessKeyInput ?? '').trim();
 
   if (!configuredKey) {
     throw new HttpError(
@@ -1335,16 +1352,10 @@ function hasMatchingCreatorAccessKey(accessKeyInput) {
     );
   }
 
-  if (!accessKey) {
-    throw new HttpError(400, 'Enter the creator access key.');
-  }
-
-  const configuredBuffer = Buffer.from(configuredKey, 'utf8');
-  const providedBuffer = Buffer.from(accessKey, 'utf8');
-
-  return (
-    configuredBuffer.length === providedBuffer.length
-    && crypto.timingSafeEqual(configuredBuffer, providedBuffer)
+  return hasMatchingConfiguredAccessKey(
+    configuredKey,
+    accessKeyInput,
+    'Enter the creator access key.',
   );
 }
 
@@ -1358,6 +1369,77 @@ function requestCreatorSession(accessKeyInput) {
   const sessionToken = createSession(SUPER_USER_ID);
 
   return buildAuthPayload(SUPER_USER_ID, sessionToken);
+}
+
+function getConfiguredPlayReviewUserId() {
+  const configuredPhone = String(process.env.PLAY_REVIEW_PHONE ?? '').trim();
+  const configuredEmail = String(process.env.PLAY_REVIEW_EMAIL ?? '').trim().toLowerCase();
+  let matchedUserId = null;
+
+  if (configuredPhone) {
+    const phoneIdentity = getIdentity('sms', normalizePhoneNumber(configuredPhone));
+    matchedUserId = phoneIdentity?.userId ?? null;
+  }
+
+  if (configuredEmail) {
+    const emailIdentity = getIdentity('email', normalizeEmail(configuredEmail));
+
+    if (matchedUserId && emailIdentity?.userId && matchedUserId !== emailIdentity.userId) {
+      throw new HttpError(
+        503,
+        'PLAY_REVIEW_PHONE and PLAY_REVIEW_EMAIL point to different accounts. Configure only one review account.',
+      );
+    }
+
+    matchedUserId = matchedUserId || emailIdentity?.userId || null;
+  }
+
+  return matchedUserId;
+}
+
+function isPlayReviewAccessConfigured() {
+  const configuredKey = String(process.env.PLAY_REVIEW_ACCESS_KEY ?? '').trim();
+  const configuredPhone = String(process.env.PLAY_REVIEW_PHONE ?? '').trim();
+  const configuredEmail = String(process.env.PLAY_REVIEW_EMAIL ?? '').trim();
+
+  return Boolean(configuredKey && (configuredPhone || configuredEmail));
+}
+
+function requestPlayReviewSession(accessKeyInput) {
+  cleanupExpiredRecords();
+
+  const configuredKey = String(process.env.PLAY_REVIEW_ACCESS_KEY ?? '').trim();
+
+  if (!configuredKey) {
+    throw new HttpError(
+      503,
+      'Play review access is not configured on the backend. Set PLAY_REVIEW_ACCESS_KEY and a review phone or email.',
+    );
+  }
+
+  if (!isPlayReviewAccessConfigured()) {
+    throw new HttpError(
+      503,
+      'Play review access is incomplete. Configure PLAY_REVIEW_ACCESS_KEY with PLAY_REVIEW_PHONE or PLAY_REVIEW_EMAIL.',
+    );
+  }
+
+  if (!hasMatchingConfiguredAccessKey(configuredKey, accessKeyInput, 'Enter the Play review access key.')) {
+    throw new HttpError(403, 'Play review access key is incorrect.');
+  }
+
+  const userId = getConfiguredPlayReviewUserId();
+
+  if (!userId) {
+    throw new HttpError(
+      503,
+      'No account matches PLAY_REVIEW_PHONE or PLAY_REVIEW_EMAIL. Create and verify the dedicated review account first.',
+    );
+  }
+
+  const sessionToken = createSession(userId);
+
+  return buildAuthPayload(userId, sessionToken);
 }
 
 async function requestOtp(intentInput, channelInput, destinationInput, forceDevelopment = false) {
@@ -4507,11 +4589,13 @@ module.exports = {
   requestSocietyDocumentDownload,
   getOnboardingState,
   hasAssignedChairman,
+  isPlayReviewAccessConfigured,
   isOtpDeliveryConfigured,
   markAnnouncementRead,
   normalizeAuthChannel,
   normalizeAuthIntent,
   requestCreatorSession,
+  requestPlayReviewSession,
   recordManualPayment,
   requestOtp,
   requestAuthenticatedAccountDeletion,

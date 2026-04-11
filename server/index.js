@@ -40,12 +40,14 @@ const {
   createVisitorPass,
   getSynchronizedSnapshot,
   isOtpDeliveryConfigured,
+  isPlayReviewAccessConfigured,
   HttpError,
   getOnboardingState,
   hasAssignedChairman,
   markAnnouncementRead,
   requestOtp,
   requestCreatorSession,
+  requestPlayReviewSession,
   recordManualPayment,
   requestAuthenticatedAccountDeletion,
   requireSuperUserRole,
@@ -137,6 +139,7 @@ function buildBootstrapPayload(currentUserId = null) {
   return {
     currentUserId,
     chairmanAssigned: hasAssignedChairman(),
+    playReviewAccessEnabled: isPlayReviewAccessConfigured(),
     amenityLibrary,
     defaultSetupDraft,
     data: getSynchronizedSnapshot(),
@@ -403,6 +406,17 @@ async function requestHandler(request, response) {
     if (request.method === 'POST' && url.pathname === '/api/creator/access') {
       const body = await parseBody(request);
       const result = requestCreatorSession(body.accessKey);
+      sendJson(response, 200, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/play-review/access') {
+      const body = await parseBody(request);
+      const result = requestPlayReviewSession(body.accessKey);
       sendJson(response, 200, {
         ...result,
         amenityLibrary,

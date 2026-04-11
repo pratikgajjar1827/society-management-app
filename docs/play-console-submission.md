@@ -60,9 +60,14 @@ Recommended reviewer setup before production submission:
 - Add a review-only access method that does not depend on a real-time OTP arriving on a private phone during review.
 - Keep that review access active until the app is approved.
 
+Implemented option in this codebase:
+- Configure backend env vars `PLAY_REVIEW_ACCESS_KEY` plus either `PLAY_REVIEW_PHONE` or `PLAY_REVIEW_EMAIL`.
+- The configured phone or email must already belong to a real account in your backend.
+- When enabled, the login screen shows a `Play review access` panel that opens a normal authenticated session through `POST /api/play-review/access`.
+
 Draft reviewer note for Play Console:
 
-`The app requires sign-in before most society features can be reviewed. Current production login uses mobile OTP. Before submitting for review, configure a dedicated reviewer account and a reusable review login method that does not depend on real-time OTP delivery. Once that is ready, paste the exact review phone/account details and the steps here.`
+`The app requires sign-in before most society features can be reviewed. Standard user login uses mobile OTP. For Google Play review, use the in-app Play review access option on the login screen. Enter the review access key provided below. This opens the dedicated review account without requiring a live OTP.`
 
 ### Target audience and content
 
@@ -160,7 +165,7 @@ If you later add analytics, crash reporting, ad SDKs, location, or device-contac
 1. Deploy the updated backend.
 2. Verify `https://api.mindsflux.com/privacy-policy`.
 3. Verify `https://api.mindsflux.com/account-deletion`.
-4. Decide how Play reviewers will access the OTP-protected app without a fragile real-time OTP dependency.
+4. Configure `PLAY_REVIEW_ACCESS_KEY` with `PLAY_REVIEW_PHONE` or `PLAY_REVIEW_EMAIL`, and verify the dedicated review account can enter the app from the login screen.
 5. Create the Play app with package `com.mindsflux.residencyhub`.
 6. Upload `dist/aab/society-main-release.aab`.
 7. Complete App content:

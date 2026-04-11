@@ -1,17 +1,15 @@
 import { useState } from 'react';
-import { Linking, StyleSheet, Text, View, useWindowDimensions } from 'react-native';
+import { StyleSheet, Text, View, useWindowDimensions } from 'react-native';
 
 import {
   ActionButton,
   Caption,
   HeroCard,
-  InputField,
   Page,
   Pill,
   SectionHeader,
   SurfaceCard,
 } from '../components/ui';
-import { getAccountDeletionUrl, getPrivacyPolicyUrl } from '../api/client';
 import { useApp } from '../state/AppContext';
 import { palette, spacing } from '../theme/tokens';
 import {
@@ -30,9 +28,6 @@ import {
 export function WorkspaceSelectionScreen() {
   const { state, actions } = useApp();
   const [pendingDeleteSocietyId, setPendingDeleteSocietyId] = useState<string>();
-  const [showAccountDeletionPanel, setShowAccountDeletionPanel] = useState(false);
-  const [confirmAccountDeletion, setConfirmAccountDeletion] = useState(false);
-  const [accountDeletionReason, setAccountDeletionReason] = useState('');
   const { width } = useWindowDimensions();
   const isCompact = width < 768;
   const user = getCurrentUser(state.data, state.session.userId);
@@ -72,20 +67,6 @@ export function WorkspaceSelectionScreen() {
     }
   }
 
-  async function handleOpenUrl(url: string) {
-    await Linking.openURL(url);
-  }
-
-  async function handleRequestAccountDeletion() {
-    const wasSubmitted = await actions.requestAccountDeletion(accountDeletionReason);
-
-    if (wasSubmitted) {
-      setShowAccountDeletionPanel(false);
-      setConfirmAccountDeletion(false);
-      setAccountDeletionReason('');
-    }
-  }
-
   return (
     <Page>
       <HeroCard
@@ -114,89 +95,6 @@ export function WorkspaceSelectionScreen() {
             : 'Each card below represents one society workspace tied to your login. The same person can safely move across communities without new accounts.'
         }
       />
-
-      <SurfaceCard>
-        <SectionHeader
-          title="Account and privacy"
-          description="Use these links for Play Store privacy disclosures and to submit an account deletion request from inside the app."
-        />
-        <Caption>
-          The privacy policy and deletion page are public support pages. Signed-in users can also submit a deletion request directly here.
-        </Caption>
-        <View style={[styles.heroActions, isCompact ? styles.heroActionsCompact : null]}>
-          <ActionButton
-            label="Privacy policy"
-            onPress={() => {
-              void handleOpenUrl(getPrivacyPolicyUrl());
-            }}
-            variant="secondary"
-          />
-          <ActionButton
-            label="Deletion web page"
-            onPress={() => {
-              void handleOpenUrl(getAccountDeletionUrl());
-            }}
-            variant="secondary"
-          />
-          {!showAccountDeletionPanel ? (
-            <ActionButton
-              label="Request account deletion"
-              onPress={() => setShowAccountDeletionPanel(true)}
-              variant="danger"
-              disabled={state.isSyncing}
-            />
-          ) : null}
-        </View>
-        {showAccountDeletionPanel ? (
-          <View style={styles.accountDangerCard}>
-            <Text style={styles.accountDangerTitle}>Submit account deletion request</Text>
-            <Caption>
-              This sends a deletion request for your signed-in account. We review the account before permanent removal because society records may be linked to it.
-            </Caption>
-            <InputField
-              label="Reason for deletion (optional)"
-              value={accountDeletionReason}
-              onChangeText={setAccountDeletionReason}
-              placeholder="Tell us why you want the account removed."
-              multiline
-            />
-            {confirmAccountDeletion ? (
-              <Caption style={styles.deleteWarning}>
-                Confirm only if you want us to start reviewing this account for deletion.
-              </Caption>
-            ) : null}
-            <View style={[styles.cardActions, isCompact ? styles.cardActionsCompact : null]}>
-              <ActionButton
-                label="Cancel"
-                onPress={() => {
-                  setShowAccountDeletionPanel(false);
-                  setConfirmAccountDeletion(false);
-                  setAccountDeletionReason('');
-                }}
-                variant="secondary"
-                disabled={state.isSyncing}
-              />
-              {!confirmAccountDeletion ? (
-                <ActionButton
-                  label="Continue"
-                  onPress={() => setConfirmAccountDeletion(true)}
-                  variant="danger"
-                  disabled={state.isSyncing}
-                />
-              ) : (
-                <ActionButton
-                  label={state.isSyncing ? 'Submitting...' : 'Submit deletion request'}
-                  onPress={() => {
-                    void handleRequestAccountDeletion();
-                  }}
-                  variant="danger"
-                  disabled={state.isSyncing}
-                />
-              )}
-            </View>
-          </View>
-        ) : null}
-      </SurfaceCard>
 
       {pendingRequests.length > 0 ? (
         <SurfaceCard>
@@ -428,19 +326,6 @@ const styles = StyleSheet.create({
   cardActionsCompact: {
     gap: spacing.xs,
     flexDirection: 'column',
-  },
-  accountDangerCard: {
-    gap: spacing.sm,
-    padding: spacing.md,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: '#F0D0C6',
-    backgroundColor: '#FFF6F2',
-  },
-  accountDangerTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: palette.ink,
   },
   deleteWarning: {
     color: palette.danger,

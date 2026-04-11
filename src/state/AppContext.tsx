@@ -24,6 +24,7 @@ import {
   getApiBaseUrl,
   localFallbackSnapshot,
   markAnnouncementRead as markAnnouncementReadRequest,
+  requestPlayReviewAccess as requestPlayReviewAccessRequest,
   requestCreatorAccess as requestCreatorAccessRequest,
   requestAccountDeletion as requestAccountDeletionRequest,
   requestOtp as requestOtpRequest,
@@ -260,6 +261,7 @@ interface MeetingAgendaItemInput {
 interface SocietyMutationResponse {
   currentUserId: string;
   chairmanAssigned: boolean;
+  playReviewAccessEnabled: boolean;
   amenityLibrary: string[];
   defaultSetupDraft: SocietySetupDraft;
   onboarding: OnboardingState;
@@ -287,6 +289,7 @@ interface AppState {
   session: SessionState;
   data: SeedData;
   chairmanAssigned: boolean;
+  playReviewAccessEnabled: boolean;
   amenityLibrary: string[];
   defaultSetupDraft: SocietySetupDraft;
   pendingChallenge?: AuthChallenge;
@@ -304,6 +307,7 @@ interface AppContextValue {
   state: AppState;
   actions: {
     requestCreatorAccess: (accessKey: string) => Promise<void>;
+    requestPlayReviewAccess: (accessKey: string) => Promise<void>;
     requestOtp: (destination: string) => Promise<void>;
     verifyOtp: (code: string) => Promise<void>;
     retryBackendConnection: () => Promise<boolean>;
@@ -455,6 +459,7 @@ const initialState: AppState = {
   session: {},
   data: localFallbackSnapshot.data,
   chairmanAssigned: localFallbackSnapshot.chairmanAssigned,
+  playReviewAccessEnabled: false,
   amenityLibrary: localFallbackSnapshot.amenityLibrary,
   defaultSetupDraft: localFallbackSnapshot.defaultSetupDraft,
   pendingChallenge: undefined,
@@ -733,6 +738,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
             : resolveAuthenticatedScreen(nextSession, sessionResponse?.onboarding ?? currentState.onboarding, nextRemoteData),
           data: mergeServerData(nextRemoteData, currentState.data),
           chairmanAssigned: sessionResponse?.chairmanAssigned ?? bootstrapResponse.chairmanAssigned,
+          playReviewAccessEnabled:
+            sessionResponse?.playReviewAccessEnabled ?? bootstrapResponse.playReviewAccessEnabled,
           amenityLibrary: sessionResponse?.amenityLibrary ?? bootstrapResponse.amenityLibrary,
           defaultSetupDraft: sessionResponse?.defaultSetupDraft ?? bootstrapResponse.defaultSetupDraft,
           onboarding: authenticationFailed ? undefined : (sessionResponse?.onboarding ?? currentState.onboarding),
@@ -838,6 +845,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           ),
           data: mergeServerData(response.data, currentState.data),
           chairmanAssigned: response.chairmanAssigned,
+          playReviewAccessEnabled: response.playReviewAccessEnabled,
           amenityLibrary: response.amenityLibrary,
           defaultSetupDraft: response.defaultSetupDraft,
           onboarding: response.onboarding,
@@ -988,6 +996,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           screen: 'workspace',
           data: mergeServerData(response.data, currentState.data),
           chairmanAssigned: response.chairmanAssigned,
+          playReviewAccessEnabled: response.playReviewAccessEnabled,
           amenityLibrary: response.amenityLibrary,
           defaultSetupDraft: response.defaultSetupDraft,
           onboarding: response.onboarding,
@@ -1002,6 +1011,51 @@ export function AppProvider({ children }: { children: ReactNode }) {
             sessionToken: response.sessionToken,
             verifiedDestination: 'creator-app',
             accountRole: response.onboarding.preferredRole ?? 'superUser',
+            selectedSocietyId: undefined,
+            selectedProfile: undefined,
+          },
+        }));
+      } catch (error) {
+        setState((currentState) => ({
+          ...currentState,
+          isSyncing: false,
+          apiError: getErrorMessage(error),
+          noticeMessage: undefined,
+        }));
+      }
+    },
+    requestPlayReviewAccess: async (accessKey) => {
+      setState((currentState) => ({
+        ...currentState,
+        isSyncing: true,
+        apiError: undefined,
+        noticeMessage: undefined,
+        pendingChallenge: undefined,
+      }));
+
+      try {
+        const response = await requestPlayReviewAccessRequest(accessKey);
+
+        setState((currentState) => ({
+          ...currentState,
+          screen: resolveScreen(response.onboarding),
+          data: mergeServerData(response.data, currentState.data),
+          chairmanAssigned: response.chairmanAssigned,
+          playReviewAccessEnabled: response.playReviewAccessEnabled,
+          amenityLibrary: response.amenityLibrary,
+          defaultSetupDraft: response.defaultSetupDraft,
+          onboarding: response.onboarding,
+          pendingChallenge: undefined,
+          isSyncing: false,
+          apiError: undefined,
+          noticeMessage: 'Play review access granted.',
+          dataSource: 'remote',
+          session: {
+            userId: response.currentUserId,
+            sessionToken: response.sessionToken,
+            authChannel: 'sms',
+            verifiedDestination: 'play-review-access',
+            accountRole: response.onboarding.preferredRole ?? undefined,
             selectedSocietyId: undefined,
             selectedProfile: undefined,
           },
@@ -1096,6 +1150,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           ...currentState,
           data: mergeServerData(response.data, currentState.data),
           chairmanAssigned: response.chairmanAssigned,
+          playReviewAccessEnabled: response.playReviewAccessEnabled,
           amenityLibrary: response.amenityLibrary,
           defaultSetupDraft: response.defaultSetupDraft,
           pendingChallenge: undefined,
