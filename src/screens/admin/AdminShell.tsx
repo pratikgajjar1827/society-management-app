@@ -972,8 +972,9 @@ function AdminHome({ societyId, onOpenTab }: { societyId: string; onOpenTab: (ta
 function AdminResidents({ societyId }: { societyId: string }) {
   const { state, actions } = useApp();
   const { width } = useWindowDimensions();
-  const isCompact = width < 768;
+  const isPhone = width < 420;
   const useWideDetailGrid = width >= 1120;
+  const [residentDirectoryFilter, setResidentDirectoryFilter] = useState<'all' | 'occupied' | 'vacant' | 'chairman'>('all');
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null);
   const [chairmanResidentType, setChairmanResidentType] = useState<'owner' | 'tenant'>('owner');
   const currentUserId = state.session.userId;
@@ -999,11 +1000,28 @@ function AdminResidents({ societyId }: { societyId: string }) {
   const [selectedLeadershipUserId, setSelectedLeadershipUserId] = useState<string>(
     leadershipCandidates[0]?.user.id ?? '',
   );
-  const activeUnitId = residents.some((entry) => entry.unit.id === selectedUnitId) ? selectedUnitId : null;
-  const activeResidentEntry = activeUnitId
-    ? residents.find((entry) => entry.unit.id === activeUnitId) ?? null
-    : null;
   const currentChairmanUnitIds = new Set(chairmanMembership?.unitIds ?? []);
+  const filteredResidents = residents.filter((entry) => {
+    if (residentDirectoryFilter === 'occupied') {
+      return entry.residents.length > 0;
+    }
+
+    if (residentDirectoryFilter === 'vacant') {
+      return entry.residents.length === 0;
+    }
+
+    if (residentDirectoryFilter === 'chairman') {
+      return currentChairmanUnitIds.has(entry.unit.id);
+    }
+
+    return true;
+  });
+  const activeUnitId = filteredResidents.some((entry) => entry.unit.id === selectedUnitId)
+    ? selectedUnitId
+    : null;
+  const activeResidentEntry = activeUnitId
+    ? filteredResidents.find((entry) => entry.unit.id === activeUnitId) ?? null
+    : null;
   const currentLeadershipProfile = leadershipDirectory.find(({ user }) => user.id === currentUserId)?.leadershipProfile;
   const canEditLeadershipProfile = Boolean(
     chairmanMembership?.roles.includes('chairman') || chairmanMembership?.roles.includes('committee'),
@@ -1016,6 +1034,14 @@ function AdminResidents({ societyId }: { societyId: string }) {
     .map((entry) => entry.unit.code);
   const occupiedUnits = residents.filter((entry) => entry.residents.length > 0).length;
   const vacantUnits = residents.length - occupiedUnits;
+  const residentFilterSummary =
+    residentDirectoryFilter === 'occupied'
+      ? `Showing ${filteredResidents.length} occupied units only.`
+      : residentDirectoryFilter === 'vacant'
+        ? `Showing ${filteredResidents.length} vacant units only.`
+        : residentDirectoryFilter === 'chairman'
+          ? `Showing ${filteredResidents.length} chairman-linked units only.`
+          : `Showing all ${filteredResidents.length} units.`;
   const currentUserProfile = currentUserId ? getCurrentUser(state.data, currentUserId) : undefined;
   const defaultLeadershipRoleLabel = chairmanMembership?.roles.includes('chairman') ? 'Chairman' : 'Committee member';
   const [leadershipDisplayName, setLeadershipDisplayName] = useState(
@@ -1061,6 +1087,19 @@ function AdminResidents({ societyId }: { societyId: string }) {
 
     setSelectedLeadershipUserId(leadershipCandidates[0]?.user.id ?? '');
   }, [leadershipCandidates, selectedLeadershipUserId]);
+
+  useEffect(() => {
+    if (filteredResidents.length === 0) {
+      if (selectedUnitId !== null) {
+        setSelectedUnitId(null);
+      }
+      return;
+    }
+
+    if (!selectedUnitId || !filteredResidents.some((entry) => entry.unit.id === selectedUnitId)) {
+      setSelectedUnitId(filteredResidents[0].unit.id);
+    }
+  }, [filteredResidents, selectedUnitId]);
 
   useEffect(() => {
     setLeadershipDisplayName(currentLeadershipProfile?.displayName ?? currentUserProfile?.name ?? '');
@@ -1173,40 +1212,193 @@ function AdminResidents({ societyId }: { societyId: string }) {
       <SurfaceCard>
         <View style={styles.metricGrid}>
           <MetricCard
-            label="Total units"
+            label={residentDirectoryFilter === 'all' ? 'Total units - selected' : 'Total units'}
             value={String(residents.length)}
             tone="primary"
-            onPress={() => setSelectedUnitId(activeUnitId ?? residents[0]?.unit.id ?? null)}
+            onPress={() => {
+              setResidentDirectoryFilter('all');
+            }}
           />
           <MetricCard
-            label="Occupied"
+            label={residentDirectoryFilter === 'occupied' ? 'Occupied - selected' : 'Occupied'}
             value={String(occupiedUnits)}
             tone="accent"
-            onPress={() => setSelectedUnitId(residents.find((entry) => entry.residents.length > 0)?.unit.id ?? null)}
+            onPress={() => {
+              setResidentDirectoryFilter('occupied');
+            }}
           />
           <MetricCard
-            label="Vacant"
+            label={residentDirectoryFilter === 'vacant' ? 'Vacant - selected' : 'Vacant'}
             value={String(vacantUnits)}
             tone="blue"
-            onPress={() => setSelectedUnitId(residents.find((entry) => entry.residents.length === 0)?.unit.id ?? null)}
+            onPress={() => {
+              setResidentDirectoryFilter('vacant');
+            }}
           />
           <MetricCard
-            label="Chairman links"
+            label={residentDirectoryFilter === 'chairman' ? 'Chairman links - selected' : 'Chairman links'}
             value={String(currentChairmanUnits.length)}
             tone="primary"
-            onPress={() => setSelectedUnitId(residents.find((entry) => currentChairmanUnitIds.has(entry.unit.id))?.unit.id ?? null)}
+            onPress={() => {
+              setResidentDirectoryFilter('chairman');
+            }}
           />
         </View>
         <View style={styles.inlineSection}>
           <Caption>
-            Open any unit below to review resident details, occupancy, domestic staff records, and current payment visibility.
+            Tap a summary card to filter the directory, then open a unit below to review occupancy, resident details, domestic staff, and payment visibility.
           </Caption>
         </View>
       </SurfaceCard>
       <SectionHeader
         title="Units and occupancy"
-        description={`Showing all ${residents.length} units. Click any plot, apartment, office, or shed to see resident detail.`}
+        description={`${residentFilterSummary} Tap any plot, apartment, office, or shed to see resident detail.`}
       />
+      <SurfaceCard style={styles.residentDirectoryCard}>
+        <View style={styles.choiceRow}>
+          <ChoiceChip
+            label={`All (${residents.length})`}
+            selected={residentDirectoryFilter === 'all'}
+            onPress={() => setResidentDirectoryFilter('all')}
+          />
+          <ChoiceChip
+            label={`Occupied (${occupiedUnits})`}
+            selected={residentDirectoryFilter === 'occupied'}
+            onPress={() => setResidentDirectoryFilter('occupied')}
+          />
+          <ChoiceChip
+            label={`Vacant (${vacantUnits})`}
+            selected={residentDirectoryFilter === 'vacant'}
+            onPress={() => setResidentDirectoryFilter('vacant')}
+          />
+          <ChoiceChip
+            label={`Chairman (${currentChairmanUnits.length})`}
+            selected={residentDirectoryFilter === 'chairman'}
+            onPress={() => setResidentDirectoryFilter('chairman')}
+          />
+        </View>
+        <View style={[styles.residentUnitGrid, isPhone ? styles.residentUnitGridPhone : null]}>
+          {filteredResidents.length > 0 ? (
+            filteredResidents.map((entry) => {
+              const isSelected = entry.unit.id === activeUnitId;
+              const residentSummary = entry.residents.length > 0
+                ? entry.residents.map((resident) => resident.user.name).join(', ')
+                : 'No resident linked';
+
+              return (
+                <Pressable
+                  key={entry.unit.id}
+                  onPress={() => setSelectedUnitId(isSelected ? null : entry.unit.id)}
+                  style={({ pressed }) => [
+                    styles.residentUnitTile,
+                    isPhone ? styles.residentUnitTilePhone : null,
+                    isSelected ? styles.residentUnitTileActive : null,
+                    pressed ? styles.residentUnitTilePressed : null,
+                  ]}
+                >
+                  <View style={styles.residentUnitTileHeader}>
+                    <View style={styles.residentUnitHeadingRow}>
+                      <Text style={styles.residentUnitCode}>{entry.unit.code}</Text>
+                      <Pill
+                        label={entry.residents.length > 0 ? 'Occupied' : 'Vacant'}
+                        tone={entry.residents.length > 0 ? 'primary' : 'warning'}
+                      />
+                    </View>
+                    <Pill
+                      label={entry.residents.length > 0 ? `${entry.residents.length} resident${entry.residents.length > 1 ? 's' : ''}` : '0 residents'}
+                      tone={entry.residents.length > 0 ? 'primary' : 'warning'}
+                    />
+                  </View>
+                  {entry.building?.name ? (
+                    <Caption style={styles.residentUnitBuilding}>{entry.building.name}</Caption>
+                  ) : null}
+                  <Text style={styles.residentUnitResidents} numberOfLines={isPhone ? 1 : 2}>
+                    {residentSummary}
+                  </Text>
+                </Pressable>
+              );
+            })
+          ) : (
+            <Caption>No units match the current filter.</Caption>
+          )}
+        </View>
+      </SurfaceCard>
+      {activeResidentEntry ? (
+        <SurfaceCard style={styles.residentExpandedCard}>
+          <SectionHeader
+            title={`${activeResidentEntry.unit.code} details`}
+            description="Selected unit details are shown here so the directory stays compact."
+          />
+          <View style={[styles.residentDetailGrid, useWideDetailGrid ? styles.residentDetailGridWide : null]}>
+            <View style={[styles.residentDetailPanel, useWideDetailGrid ? styles.residentDetailPanelWide : null]}>
+              <Text style={styles.detailTitle}>Unit snapshot</Text>
+              <DetailRow label="Unit type" value={activeResidentEntry.unit.unitType} />
+              <DetailRow label="Building / block" value={activeResidentEntry.building?.name ?? 'Direct unit mapping'} />
+              <DetailRow label="Outstanding dues" value={activeResidentEntry.outstandingAmount > 0 ? formatCurrency(activeResidentEntry.outstandingAmount) : 'None'} />
+              <DetailRow label="Last payment" value={activeResidentEntry.latestPayment ? formatLongDate(activeResidentEntry.latestPayment.paidAt) : 'No payment recorded'} />
+            </View>
+
+            <View style={[styles.residentDetailPanel, useWideDetailGrid ? styles.residentDetailPanelWide : null]}>
+              <Text style={styles.detailTitle}>Resident detail</Text>
+              {activeResidentEntry.residents.length > 0 ? (
+                <View style={styles.residentDetailList}>
+                  {activeResidentEntry.residents.map((resident) => (
+                    <View key={`${activeResidentEntry.unit.id}-${resident.user.id}`} style={styles.residentDetailItem}>
+                      <Text style={styles.inlineTitle}>{resident.user.name}</Text>
+                      <Caption>{resident.category}{resident.roles.length > 0 ? ` - ${resident.roles.map(humanizeRole).join(', ')}` : ''}</Caption>
+                      {resident.residenceProfile?.businessName ? (
+                        <Caption>Business: {resident.residenceProfile.businessName}</Caption>
+                      ) : null}
+                      {resident.residenceProfile?.businessDetails ? (
+                        <Caption>{resident.residenceProfile.businessDetails}</Caption>
+                      ) : null}
+                      <Caption>{resident.user.phone}</Caption>
+                      <Caption>{resident.user.email}</Caption>
+                      <Caption>Started on {formatLongDate(resident.startDate)}</Caption>
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Caption>No resident detail is linked yet.</Caption>
+              )}
+            </View>
+
+            <View style={[styles.residentDetailPanel, useWideDetailGrid ? styles.residentDetailPanelWide : null]}>
+              <Text style={styles.detailTitle}>Domestic staff linked to this unit</Text>
+              {activeResidentEntry.unitStaffRecords.length > 0 ? (
+                <View style={styles.residentDetailList}>
+                  {activeResidentEntry.unitStaffRecords.map(({ staff, assignments, requestedBy, reviewedBy }) => (
+                    <View key={`${activeResidentEntry.unit.id}-${staff.id}`} style={styles.residentDetailItem}>
+                      <View style={styles.rowBetween}>
+                        <Text style={styles.inlineTitle}>{staff.name}</Text>
+                        <Pill
+                          label={humanizeVerificationState(staff.verificationState)}
+                          tone={getVerificationTone(staff.verificationState)}
+                        />
+                      </View>
+                      <Caption>{humanizeStaffCategory(staff.category)} - {staff.phone}</Caption>
+                      <Caption>
+                        Submitted by {requestedBy?.name ?? 'Unknown resident'} on{' '}
+                        {staff.requestedAt ? formatLongDate(staff.requestedAt) : 'date not recorded'}
+                      </Caption>
+                      <Caption>
+                        {reviewedBy && staff.reviewedAt
+                          ? `Reviewed by ${reviewedBy.name} on ${formatLongDate(staff.reviewedAt)}`
+                          : 'Awaiting chairman review'}
+                      </Caption>
+                      {getAssignmentSummaries(assignments).map((summary) => (
+                        <Caption key={`${staff.id}-${summary}`}>{summary}</Caption>
+                      ))}
+                    </View>
+                  ))}
+                </View>
+              ) : (
+                <Caption>No domestic staff is linked to this unit.</Caption>
+              )}
+            </View>
+          </View>
+        </SurfaceCard>
+      ) : null}
       {society && chairmanMembership?.roles.includes('chairman') ? (
         <SurfaceCard>
           <SectionHeader
@@ -1471,116 +1663,6 @@ function AdminResidents({ societyId }: { societyId: string }) {
               </View>
             </View>
           ) : null}
-        </SurfaceCard>
-      ) : null}
-      <View style={styles.residentUnitGrid}>
-        {residents.map((entry) => {
-          const isSelected = entry.unit.id === activeUnitId;
-          const residentSummary = entry.residents.length > 0
-            ? entry.residents.map((resident) => resident.user.name).join(', ')
-            : 'No resident linked';
-
-          return (
-            <Pressable
-              key={entry.unit.id}
-              onPress={() => setSelectedUnitId(isSelected ? null : entry.unit.id)}
-              style={({ pressed }) => [
-                styles.residentUnitTile,
-                isSelected ? styles.residentUnitTileActive : null,
-                pressed ? styles.residentUnitTilePressed : null,
-              ]}
-            >
-              <View style={styles.residentUnitTileHeader}>
-                <Text style={styles.residentUnitCode}>{entry.unit.code}</Text>
-                <Pill
-                  label={entry.residents.length > 0 ? `${entry.residents.length}` : '0'}
-                  tone={entry.residents.length > 0 ? 'primary' : 'warning'}
-                />
-              </View>
-              {!isCompact && entry.building?.name ? (
-                <Caption style={styles.residentUnitBuilding}>{entry.building.name}</Caption>
-              ) : null}
-              <Text style={styles.residentUnitResidents} numberOfLines={2}>
-                {residentSummary}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
-      {activeResidentEntry ? (
-        <SurfaceCard style={styles.residentExpandedCard}>
-          <SectionHeader
-            title={`${activeResidentEntry.unit.code} details`}
-            description="Selected unit details are shown here so the grid above stays compact."
-          />
-          <View style={[styles.residentDetailGrid, useWideDetailGrid ? styles.residentDetailGridWide : null]}>
-            <View style={[styles.residentDetailPanel, useWideDetailGrid ? styles.residentDetailPanelWide : null]}>
-              <Text style={styles.detailTitle}>Unit snapshot</Text>
-              <DetailRow label="Unit type" value={activeResidentEntry.unit.unitType} />
-              <DetailRow label="Building / block" value={activeResidentEntry.building?.name ?? 'Direct unit mapping'} />
-              <DetailRow label="Outstanding dues" value={activeResidentEntry.outstandingAmount > 0 ? formatCurrency(activeResidentEntry.outstandingAmount) : 'None'} />
-              <DetailRow label="Last payment" value={activeResidentEntry.latestPayment ? formatLongDate(activeResidentEntry.latestPayment.paidAt) : 'No payment recorded'} />
-            </View>
-
-            <View style={[styles.residentDetailPanel, useWideDetailGrid ? styles.residentDetailPanelWide : null]}>
-              <Text style={styles.detailTitle}>Resident detail</Text>
-              {activeResidentEntry.residents.length > 0 ? (
-                <View style={styles.residentDetailList}>
-                  {activeResidentEntry.residents.map((resident) => (
-                    <View key={`${activeResidentEntry.unit.id}-${resident.user.id}`} style={styles.residentDetailItem}>
-                      <Text style={styles.inlineTitle}>{resident.user.name}</Text>
-                      <Caption>{resident.category}{resident.roles.length > 0 ? ` - ${resident.roles.map(humanizeRole).join(', ')}` : ''}</Caption>
-                      {resident.residenceProfile?.businessName ? (
-                        <Caption>Business: {resident.residenceProfile.businessName}</Caption>
-                      ) : null}
-                      {resident.residenceProfile?.businessDetails ? (
-                        <Caption>{resident.residenceProfile.businessDetails}</Caption>
-                      ) : null}
-                      <Caption>{resident.user.phone}</Caption>
-                      <Caption>{resident.user.email}</Caption>
-                      <Caption>Started on {formatLongDate(resident.startDate)}</Caption>
-                    </View>
-                  ))}
-                </View>
-              ) : (
-                <Caption>No resident detail is linked yet.</Caption>
-              )}
-            </View>
-
-            <View style={[styles.residentDetailPanel, useWideDetailGrid ? styles.residentDetailPanelWide : null]}>
-              <Text style={styles.detailTitle}>Domestic staff linked to this unit</Text>
-              {activeResidentEntry.unitStaffRecords.length > 0 ? (
-                <View style={styles.residentDetailList}>
-                  {activeResidentEntry.unitStaffRecords.map(({ staff, assignments, requestedBy, reviewedBy }) => (
-                    <View key={`${activeResidentEntry.unit.id}-${staff.id}`} style={styles.residentDetailItem}>
-                      <View style={styles.rowBetween}>
-                        <Text style={styles.inlineTitle}>{staff.name}</Text>
-                        <Pill
-                          label={humanizeVerificationState(staff.verificationState)}
-                          tone={getVerificationTone(staff.verificationState)}
-                        />
-                      </View>
-                      <Caption>{humanizeStaffCategory(staff.category)} - {staff.phone}</Caption>
-                      <Caption>
-                        Submitted by {requestedBy?.name ?? 'Unknown resident'} on{' '}
-                        {staff.requestedAt ? formatLongDate(staff.requestedAt) : 'date not recorded'}
-                      </Caption>
-                      <Caption>
-                        {reviewedBy && staff.reviewedAt
-                          ? `Reviewed by ${reviewedBy.name} on ${formatLongDate(staff.reviewedAt)}`
-                          : 'Awaiting chairman review'}
-                      </Caption>
-                      {getAssignmentSummaries(assignments).map((summary) => (
-                        <Caption key={`${staff.id}-${summary}`}>{summary}</Caption>
-                      ))}
-                    </View>
-                  ))}
-                </View>
-              ) : (
-                <Caption>No domestic staff is linked to this unit.</Caption>
-              )}
-            </View>
-          </View>
         </SurfaceCard>
       ) : null}
     </>
@@ -4686,7 +4768,9 @@ const styles = StyleSheet.create({
     ...shadow.card,
   },
   recommendationTitle: { fontSize: 16, fontWeight: '800', color: palette.ink },
+  residentDirectoryCard: { gap: spacing.sm },
   residentUnitGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
+  residentUnitGridPhone: { gap: spacing.xs },
   residentUnitTile: {
     flexGrow: 1,
     flexBasis: 220,
@@ -4700,6 +4784,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E8DDCF',
     ...shadow.card,
+  },
+  residentUnitTilePhone: {
+    flexBasis: '100%',
+    minWidth: 0,
+    maxWidth: '100%',
+    paddingHorizontal: spacing.sm,
   },
   residentUnitTileActive: { borderColor: '#F0C07C', backgroundColor: '#FFF5E8' },
   residentUnitTilePressed: { opacity: 0.9 },

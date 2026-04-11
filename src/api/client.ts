@@ -89,6 +89,12 @@ type VehicleNumberDetectionResponse = {
   source: 'backend-ocr';
 };
 
+type AccountDeletionRequestResponse = {
+  deletionRequestId: string;
+  status: 'pending';
+  message: string;
+};
+
 export interface ResidenceVehicleInput {
   unitId: string;
   registrationNumber: string;
@@ -359,6 +365,14 @@ export function getApiBaseUrl() {
   return runtimeApiBaseUrlOverride ?? getDefaultApiBaseUrl();
 }
 
+export function getPrivacyPolicyUrl() {
+  return `${getApiBaseUrl()}/privacy-policy`;
+}
+
+export function getAccountDeletionUrl() {
+  return `${getApiBaseUrl()}/account-deletion`;
+}
+
 export async function loadPersistedApiBaseUrl() {
   const storedValue = await AsyncStorage.getItem(API_BASE_URL_STORAGE_KEY);
   const normalizedValue = storedValue ? normalizeBaseUrl(storedValue) : '';
@@ -543,6 +557,14 @@ export async function deleteSocietyWorkspace(sessionToken: string, societyId: st
       headers: createAuthHeaders(sessionToken),
     },
   );
+}
+
+export async function requestAccountDeletion(sessionToken: string, reason?: string) {
+  return requestJson<AccountDeletionRequestResponse>('/api/account/delete-request', {
+    method: 'POST',
+    headers: createAuthHeaders(sessionToken),
+    body: JSON.stringify({ reason }),
+  });
 }
 
 export async function assignChairmanResidence(

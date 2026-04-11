@@ -1,6 +1,8 @@
 require('./config/load-env');
 
+const fs = require('node:fs');
 const http = require('node:http');
+const path = require('node:path');
 
 const {
   createSocietyWorkspace,
@@ -24,6 +26,7 @@ const {
   assignChairmanResidence,
   buildAuthPayload,
   captureResidentUpiPayment,
+  createPublicAccountDeletionRequest,
   createAnnouncement,
   createAmenityBooking,
   createComplaintTicket,
@@ -44,6 +47,7 @@ const {
   requestOtp,
   requestCreatorSession,
   recordManualPayment,
+  requestAuthenticatedAccountDeletion,
   requireSuperUserRole,
   requireSession,
   ringSecurityGuestRequest,
@@ -75,6 +79,8 @@ const { detectVehicleNumberFromPhotoDataUrl } = require('./ocr/vehicleNumber');
 const { amenityLibrary, defaultSetupDraft } = require('./seed/seedData');
 
 const DEFAULT_PORT = Number(process.env.PORT || 4000);
+const SUPPORT_EMAIL = String(process.env.PUBLIC_SUPPORT_EMAIL ?? 'support@mindsflux.com').trim() || 'support@mindsflux.com';
+const publicDirectory = path.join(__dirname, 'public');
 
 function sendJson(response, statusCode, payload) {
   response.writeHead(statusCode, {
@@ -109,6 +115,22 @@ function parseBody(request) {
 
     request.on('error', reject);
   });
+}
+
+function sendHtml(response, statusCode, html) {
+  response.writeHead(statusCode, {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    'Access-Control-Allow-Methods': 'GET,POST,DELETE,OPTIONS',
+    'Content-Type': 'text/html; charset=utf-8',
+  });
+  response.end(html);
+}
+
+function renderPublicPage(fileName) {
+  return fs
+    .readFileSync(path.join(publicDirectory, fileName), 'utf8')
+    .replaceAll('{{SUPPORT_EMAIL}}', SUPPORT_EMAIL);
 }
 
 function buildBootstrapPayload(currentUserId = null) {
@@ -342,6 +364,16 @@ async function requestHandler(request, response) {
   const url = new URL(request.url, 'http://localhost');
 
   try {
+    if (request.method === 'GET' && url.pathname === '/privacy-policy') {
+      sendHtml(response, 200, renderPublicPage('privacy-policy.html'));
+      return;
+    }
+
+    if (request.method === 'GET' && url.pathname === '/account-deletion') {
+      sendHtml(response, 200, renderPublicPage('account-deletion.html'));
+      return;
+    }
+
     if (request.method === 'GET' && url.pathname === '/health') {
       sendJson(response, 200, {
         status: 'ok',
@@ -413,6 +445,21 @@ async function requestHandler(request, response) {
         amenityLibrary,
         defaultSetupDraft,
       });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/account-deletion-requests') {
+      const body = await parseBody(request);
+      const result = createPublicAccountDeletionRequest(body);
+      sendJson(response, 200, result);
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/account/delete-request') {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = requestAuthenticatedAccountDeletion(userId, body);
+      sendJson(response, 200, result);
       return;
     }
 

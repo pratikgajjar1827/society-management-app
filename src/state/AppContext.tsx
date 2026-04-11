@@ -25,6 +25,7 @@ import {
   localFallbackSnapshot,
   markAnnouncementRead as markAnnouncementReadRequest,
   requestCreatorAccess as requestCreatorAccessRequest,
+  requestAccountDeletion as requestAccountDeletionRequest,
   requestOtp as requestOtpRequest,
   recordManualPayment as recordManualPaymentRequest,
   reviewAmenityBooking as reviewAmenityBookingRequest,
@@ -308,6 +309,7 @@ interface AppContextValue {
     retryBackendConnection: () => Promise<boolean>;
     resetAuthFlow: () => void;
     logout: () => void;
+    requestAccountDeletion: (reason?: string) => Promise<boolean>;
     goToPortalSelection: () => void;
     enrollIntoSociety: (
       societyId: string,
@@ -1144,6 +1146,47 @@ export function AppProvider({ children }: { children: ReactNode }) {
         apiError: undefined,
         noticeMessage: undefined,
       })),
+    requestAccountDeletion: async (reason) => {
+      const sessionToken = state.session.sessionToken;
+
+      if (!sessionToken) {
+        setState((currentState) => ({
+          ...currentState,
+          apiError: 'Your session expired. Sign in again.',
+          noticeMessage: undefined,
+          screen: 'auth',
+        }));
+        return false;
+      }
+
+      setState((currentState) => ({
+        ...currentState,
+        isSyncing: true,
+        apiError: undefined,
+        noticeMessage: undefined,
+      }));
+
+      try {
+        const response = await requestAccountDeletionRequest(sessionToken, reason);
+
+        setState((currentState) => ({
+          ...currentState,
+          isSyncing: false,
+          apiError: undefined,
+          noticeMessage: response.message,
+        }));
+
+        return true;
+      } catch (error) {
+        setState((currentState) => ({
+          ...currentState,
+          isSyncing: false,
+          apiError: getErrorMessage(error),
+          noticeMessage: undefined,
+        }));
+        return false;
+      }
+    },
     goToPortalSelection: () =>
       setState((currentState) => ({
         ...currentState,

@@ -57,6 +57,7 @@ const SOCIETY_DOCUMENT_CATEGORIES = new Set([
   'auditReport',
   'other',
 ]);
+const ACCOUNT_DELETION_REQUEST_SOURCES = new Set(['inApp', 'web']);
 
 class HttpError extends Error {
   constructor(statusCode, message) {
@@ -655,6 +656,89 @@ function getRegisteredSocietyNames(userId) {
     .map((row) => row.name);
 }
 
+function findUserIdForDeletionRequest(phoneInput, emailInput) {
+  const normalizedPhone = String(phoneInput ?? '').trim();
+  const normalizedEmail = String(emailInput ?? '').trim().toLowerCase();
+
+  if (normalizedPhone) {
+    const identity = getIdentity('sms', normalizePhoneNumber(normalizedPhone));
+
+    if (identity?.userId) {
+      return identity.userId;
+    }
+  }
+
+  if (normalizedEmail) {
+    const identity = getIdentity('email', normalizeEmail(normalizedEmail));
+
+    if (identity?.userId) {
+      return identity.userId;
+    }
+  }
+
+  return null;
+}
+
+function createAccountDeletionRequestRecord({
+  userId = null,
+  name,
+  phone = null,
+  email = null,
+  requestSource,
+  reason = null,
+}) {
+  const normalizedName = normalizeRequiredText(name, 'your full name');
+  const normalizedPhone = normalizeOptionalPhoneNumber(phone, 'mobile number');
+  const normalizedEmail = normalizeOptionalEmail(email);
+  const normalizedReason = normalizeOptionalText(reason, 1000);
+  const normalizedSource = ACCOUNT_DELETION_REQUEST_SOURCES.has(requestSource) ? requestSource : 'web';
+
+  if (!normalizedPhone && !normalizedEmail) {
+    throw new HttpError(400, 'Enter at least a mobile number or email address.');
+  }
+
+  const matchedUserId = userId || findUserIdForDeletionRequest(normalizedPhone, normalizedEmail);
+  const requestedAt = nowIso();
+  const requestId = nextId('account-delete');
+
+  db.prepare(
+    `INSERT INTO accountDeletionRequests (
+      id,
+      userId,
+      name,
+      phone,
+      email,
+      requestSource,
+      reason,
+      status,
+      requestedAt,
+      processedAt,
+      resolutionNote
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    requestId,
+    matchedUserId,
+    normalizedName,
+    normalizedPhone,
+    normalizedEmail,
+    normalizedSource,
+    normalizedReason,
+    'pending',
+    requestedAt,
+    null,
+    null,
+  );
+
+  return {
+    deletionRequestId: requestId,
+    status: 'pending',
+    message:
+      normalizedSource === 'inApp'
+        ? 'Your account deletion request has been recorded. Our team will review the account and contact you if anything needs to be confirmed before deletion.'
+        : 'Your account deletion request has been submitted. Our team will review it and contact you if more verification is needed.',
+  };
+}
+
 function formatNaturalList(items) {
   if (items.length <= 1) {
     return items[0] ?? '';
@@ -680,6 +764,46 @@ function buildExistingAccountMessage(channel, userId) {
   return `This ${identityLabel} is already registered with the ${workspaceLabel} ${formatNaturalList(
     societyNames,
   )}. Use sign in instead.`;
+}
+
+function createPublicAccountDeletionRequest(input = {}) {
+  return createAccountDeletionRequestRecord({
+    userId: null,
+    name: input.name,
+    phone: input.phone,
+    email: input.email,
+    requestSource: input.source === 'inApp' ? 'inApp' : 'web',
+    reason: input.reason,
+  });
+}
+
+function requestAuthenticatedAccountDeletion(userId, input = {}) {
+  const user = getUserById(userId);
+
+  if (!user) {
+    throw new HttpError(404, 'No account was found for this session.');
+  }
+
+  const leadershipMemberships = db
+    .prepare('SELECT societyId, roles FROM memberships WHERE userId = ?')
+    .all(userId)
+    .filter((membership) => parseStoredJson(membership.roles).includes('chairman'));
+  const result = createAccountDeletionRequestRecord({
+    userId,
+    name: user.name,
+    phone: user.phone,
+    email: user.email,
+    requestSource: 'inApp',
+    reason: input.reason,
+  });
+
+  return {
+    ...result,
+    message:
+      isPlatformSuperUserAccount(userId) || leadershipMemberships.length > 0
+        ? 'Your deletion request has been recorded. This account has elevated society access, so our team will review it before permanently removing the account.'
+        : result.message,
+  };
 }
 
 function hasAssignedChairman(excludedUserId = null) {
@@ -4376,6 +4500,7 @@ module.exports = {
   buildAuthPayload,
   captureResidentUpiPayment,
   createAnnouncement,
+  createPublicAccountDeletionRequest,
   createAmenityBooking,
   createComplaintTicket,
   createSocietyDocument,
@@ -4389,6 +4514,7 @@ module.exports = {
   requestCreatorSession,
   recordManualPayment,
   requestOtp,
+  requestAuthenticatedAccountDeletion,
   ringSecurityGuestRequest,
   sendDirectChatMessage,
   sendSocietyChatMessage,

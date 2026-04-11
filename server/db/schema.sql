@@ -590,3 +590,18 @@ CREATE TABLE IF NOT EXISTS authSessions (
   createdAt TEXT NOT NULL,
   FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS accountDeletionRequests (
+  id TEXT PRIMARY KEY,
+  userId TEXT,
+  name TEXT NOT NULL,
+  phone TEXT,
+  email TEXT,
+  requestSource TEXT NOT NULL,
+  reason TEXT,
+  status TEXT NOT NULL,
+  requestedAt TEXT NOT NULL,
+  processedAt TEXT,
+  resolutionNote TEXT,
+  FOREIGN KEY (userId) REFERENCES users(id) ON DELETE SET NULL
+);

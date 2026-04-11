@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SocietyOS Account Deletion</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f6efe6;
+        --surface: #fffaf4;
+        --border: #e8ddcf;
+        --ink: #173042;
+        --muted: #5e6772;
+        --accent: #d96a39;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Segoe UI", Arial, sans-serif;
+        background: linear-gradient(180deg, #f7eadf 0%, var(--bg) 100%);
+        color: var(--ink);
+      }
+
+      main {
+        max-width: 760px;
+        margin: 0 auto;
+        padding: 32px 20px 56px;
+      }
+
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 24px;
+        box-shadow: 0 18px 50px rgba(23, 48, 66, 0.08);
+        padding: 24px;
+      }
+
+      .stack {
+        display: grid;
+        gap: 16px;
+      }
+
+      h1 {
+        margin: 8px 0 12px;
+        font-size: 34px;
+      }
+
+      h2 {
+        margin: 0 0 10px;
+        font-size: 22px;
+      }
+
+      p,
+      li,
+      label {
+        color: var(--muted);
+        font-size: 16px;
+        line-height: 1.7;
+      }
+
+      .eyebrow {
+        color: var(--accent);
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 1.2px;
+        text-transform: uppercase;
+      }
+
+      .field {
+        display: grid;
+        gap: 8px;
+      }
+
+      input,
+      textarea {
+        width: 100%;
+        border: 1px solid #dacaba;
+        border-radius: 16px;
+        padding: 14px 16px;
+        font: inherit;
+        color: var(--ink);
+        background: #fffdf9;
+      }
+
+      textarea {
+        min-height: 120px;
+        resize: vertical;
+      }
+
+      button {
+        border: none;
+        border-radius: 999px;
+        padding: 14px 18px;
+        background: #173d34;
+        color: #fff;
+        font: inherit;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        opacity: 0.6;
+        cursor: default;
+      }
+
+      .note {
+        padding: 14px 16px;
+        border-radius: 16px;
+        background: #fff3e6;
+        border: 1px solid #eed6c4;
+      }
+
+      .success,
+      .error {
+        display: none;
+        padding: 14px 16px;
+        border-radius: 16px;
+      }
+
+      .success {
+        background: #e8f5ee;
+        border: 1px solid #c3e3cf;
+        color: #1f5d3c;
+      }
+
+      .error {
+        background: #fdeceb;
+        border: 1px solid #f3c8c3;
+        color: #8a2d21;
+      }
+
+      a {
+        color: var(--accent);
+      }
+
+      @media (max-width: 640px) {
+        main {
+          padding: 18px 14px 40px;
+        }
+
+        .card {
+          border-radius: 20px;
+        }
+
+        h1 {
+          font-size: 28px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="stack">
+      <section class="card">
+        <div class="eyebrow">SocietyOS</div>
+        <h1>Account Deletion Request</h1>
+        <p>
+          Use this page if you want your SocietyOS account reviewed for deletion. If you are currently
+          signed in to the app, you can also submit the same request from the workspace switcher.
+        </p>
+        <div class="note">
+          <strong>Before you continue:</strong>
+          <p>
+            Deletion may remove your login, residence profile, vehicles, society memberships, and other
+            linked records, subject to legal and operational retention requirements.
+          </p>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Submit your request</h2>
+        <div id="success" class="success"></div>
+        <div id="error" class="error"></div>
+        <form id="deletion-form" class="stack">
+          <div class="field">
+            <label for="name">Full name</label>
+            <input id="name" name="name" required maxlength="80" />
+          </div>
+          <div class="field">
+            <label for="phone">Mobile number</label>
+            <input id="phone" name="phone" maxlength="20" placeholder="+91 9876543210" />
+          </div>
+          <div class="field">
+            <label for="email">Email address</label>
+            <input id="email" name="email" maxlength="120" placeholder="name@example.com" />
+          </div>
+          <div class="field">
+            <label for="reason">Reason for deletion request (optional)</label>
+            <textarea id="reason" name="reason" maxlength="1000"></textarea>
+          </div>
+          <button id="submit-button" type="submit">Submit deletion request</button>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>Need help?</h2>
+        <p>
+          Email <a href="mailto:{{SUPPORT_EMAIL}}">{{SUPPORT_EMAIL}}</a> if you need help with account
+          deletion, privacy, or data handling.
+        </p>
+        <p>
+          Privacy Policy: <a href="/privacy-policy">/privacy-policy</a>
+        </p>
+      </section>
+    </main>
+
+    <script>
+      const form = document.getElementById('deletion-form');
+      const submitButton = document.getElementById('submit-button');
+      const successBox = document.getElementById('success');
+      const errorBox = document.getElementById('error');
+
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        successBox.style.display = 'none';
+        errorBox.style.display = 'none';
+        submitButton.disabled = true;
+
+        const payload = {
+          name: document.getElementById('name').value,
+          phone: document.getElementById('phone').value,
+          email: document.getElementById('email').value,
+          reason: document.getElementById('reason').value,
+          source: 'web',
+        };
+
+        try {
+          const response = await fetch('/api/account-deletion-requests', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+          });
+
+          const result = await response.json();
+
+          if (!response.ok) {
+            throw new Error(result.error || 'Could not submit the deletion request.');
+          }
+
+          successBox.textContent = result.message || 'Your deletion request has been submitted.';
+          successBox.style.display = 'block';
+          form.reset();
+        } catch (error) {
+          errorBox.textContent = error instanceof Error ? error.message : 'Could not submit the deletion request.';
+          errorBox.style.display = 'block';
+        } finally {
+          submitButton.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>

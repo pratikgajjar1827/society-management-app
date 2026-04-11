@@ -4160,6 +4160,7 @@ function ResidentProfile({
   const { state, actions } = useApp();
   const { width } = useWindowDimensions();
   const isCompact = width < 768;
+  const isPhone = width < 420;
   const currentUser = getCurrentUser(state.data, userId);
   const membership = getMembershipForSociety(state.data, userId, societyId);
   const residenceProfile = getResidenceProfileForUserSociety(state.data, userId, societyId);
@@ -4242,6 +4243,32 @@ function ResidentProfile({
     profileEmergencyContactPhone,
     profileSecondaryEmergencyContactPhone,
   ].filter((value) => value.trim()).length;
+  const profileOverviewSummaryCards = [
+    {
+      label: 'Primary unit',
+      value: units[0]?.code ?? 'Awaiting mapping',
+      caption: units.length > 1 ? `${units.length} linked units` : 'Single linked unit',
+    },
+    {
+      label: 'Emergency contacts',
+      value: String(emergencyContactCount),
+      caption: 'Primary and backup household contacts',
+    },
+    {
+      label: 'Vehicles',
+      value: String(userVehicles.length),
+      caption: 'Registered for gate visibility',
+    },
+    ...(!isPhone
+      ? [
+          {
+            label: 'Move-in date',
+            value: profileMoveInDate || 'Pending',
+            caption: 'Occupancy start kept for society records',
+          },
+        ]
+      : []),
+  ];
   const saveResidenceProfileDisabled =
     state.isSyncing ||
     !profileFullName.trim() ||
@@ -4456,16 +4483,36 @@ function ResidentProfile({
         title="Residence profile"
         description="Housing apps usually keep resident profiles focused on unit mapping, verified contact details, emergency contacts, vehicles, and tenancy proof. This page now follows that simpler residence-first structure."
       />
-      <SurfaceCard style={isCompact ? styles.profileOverviewCardCompact : null}>
+      <SurfaceCard
+        style={[
+          isCompact ? styles.profileOverviewCardCompact : null,
+          isPhone ? styles.profileOverviewCardPhone : null,
+        ]}
+      >
         <View style={styles.profileOverviewHeader}>
-          <View style={styles.profileOverviewTopRow}>
-            <View style={styles.profileOverviewCopy}>
+          <View
+            style={[
+              styles.profileOverviewTopRow,
+              isPhone ? styles.profileOverviewTopRowPhone : null,
+            ]}
+          >
+            <View
+              style={[
+                styles.profileOverviewCopy,
+                isPhone ? styles.profileOverviewCopyPhone : null,
+              ]}
+            >
               <Text style={styles.cardTitle}>Your home in this society</Text>
               <Caption>
-                Keep this page limited to the details that prove where you stay, how the society can reach you, and which vehicles belong to your household.
+                Keep only your residence, contact, and vehicle details here.
               </Caption>
             </View>
-            <View style={styles.profileIdentityCard}>
+            <View
+              style={[
+                styles.profileIdentityCard,
+                isPhone ? styles.profileIdentityCardPhone : null,
+              ]}
+            >
               {profilePhotoDataUrl ? (
                 <Image source={{ uri: profilePhotoDataUrl }} style={styles.profileIdentityImage} />
               ) : (
@@ -4474,43 +4521,45 @@ function ResidentProfile({
                 </View>
               )}
               <View style={styles.profileIdentityCopy}>
-                <Text style={styles.profileIdentityName}>{profileFullName || currentUser?.name || 'Resident'}</Text>
-                <Caption>{profilePhotoDataUrl ? 'Workspace photo ready' : 'Add a workspace photo'}</Caption>
+                <Text style={styles.profileIdentityName} numberOfLines={1}>
+                  {profileFullName || currentUser?.name || 'Resident'}
+                </Text>
+                <Caption>
+                  {isPhone
+                    ? currentUser?.phone
+                      ? `Verified mobile ${currentUser.phone}`
+                      : 'Verified mobile pending'
+                    : profilePhotoDataUrl
+                      ? 'Workspace photo ready'
+                      : 'Add a workspace photo'}
+                </Caption>
               </View>
             </View>
           </View>
-          <View style={styles.pillRow}>
-            <Pill label={residenceStatusLabel} tone={residentType === 'tenant' ? 'accent' : 'primary'} />
-            <Pill label={`Verified mobile ${currentUser?.phone ?? ''}`.trim()} tone="primary" />
-            {residentType === 'tenant' ? (
-              <Pill
-                label={rentAgreementFileName ? 'Agreement on file' : 'Agreement pending'}
-                tone={rentAgreementFileName ? 'success' : 'warning'}
-              />
-            ) : null}
-          </View>
+          {!isPhone ? (
+            <View style={styles.pillRow}>
+              <Pill label={residenceStatusLabel} tone={residentType === 'tenant' ? 'accent' : 'primary'} />
+              <Pill label={`Verified mobile ${currentUser?.phone ?? ''}`.trim()} tone="primary" />
+              {residentType === 'tenant' ? (
+                <Pill
+                  label={rentAgreementFileName ? 'Agreement on file' : 'Agreement pending'}
+                  tone={rentAgreementFileName ? 'success' : 'warning'}
+                />
+              ) : null}
+            </View>
+          ) : null}
         </View>
-        <View style={styles.profileSummaryGrid}>
-          <View style={styles.profileSummaryCard}>
-            <Text style={styles.profileSummaryLabel}>Primary unit</Text>
-            <Text style={styles.profileSummaryValue}>{units[0]?.code ?? 'Awaiting mapping'}</Text>
-            <Caption>{units.length > 1 ? `${units.length} linked units` : 'Single linked unit'}</Caption>
-          </View>
-          <View style={styles.profileSummaryCard}>
-            <Text style={styles.profileSummaryLabel}>Emergency contacts</Text>
-            <Text style={styles.profileSummaryValue}>{String(emergencyContactCount)}</Text>
-            <Caption>Primary and backup household contacts</Caption>
-          </View>
-          <View style={styles.profileSummaryCard}>
-            <Text style={styles.profileSummaryLabel}>Vehicles</Text>
-            <Text style={styles.profileSummaryValue}>{String(userVehicles.length)}</Text>
-            <Caption>Registered for gate visibility</Caption>
-          </View>
-          <View style={styles.profileSummaryCard}>
-            <Text style={styles.profileSummaryLabel}>Move-in date</Text>
-            <Text style={styles.profileSummaryValue}>{profileMoveInDate || 'Pending'}</Text>
-            <Caption>Occupancy start kept for society records</Caption>
-          </View>
+        <View style={[styles.profileSummaryGrid, isPhone ? styles.profileSummaryGridPhone : null]}>
+          {profileOverviewSummaryCards.map((card) => (
+            <View
+              key={card.label}
+              style={[styles.profileSummaryCard, isPhone ? styles.profileSummaryCardPhone : null]}
+            >
+              <Text style={styles.profileSummaryLabel}>{card.label}</Text>
+              <Text style={styles.profileSummaryValue}>{card.value}</Text>
+              <Caption>{card.caption}</Caption>
+            </View>
+          ))}
         </View>
       </SurfaceCard>
 
@@ -5581,6 +5630,9 @@ const styles = StyleSheet.create({
   profileOverviewCardCompact: {
     gap: spacing.sm,
   },
+  profileOverviewCardPhone: {
+    gap: spacing.xs,
+  },
   profileOverviewHeader: {
     gap: spacing.sm,
   },
@@ -5591,10 +5643,17 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     alignItems: 'center',
   },
+  profileOverviewTopRowPhone: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+  },
   profileOverviewCopy: {
     flex: 1,
     minWidth: 220,
     gap: spacing.xs,
+  },
+  profileOverviewCopyPhone: {
+    minWidth: 0,
   },
   profileIdentityCard: {
     flexDirection: 'row',
@@ -5607,6 +5666,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E7D9C8',
     backgroundColor: '#FFF8F0',
+  },
+  profileIdentityCardPhone: {
+    width: '100%',
+    minWidth: 0,
   },
   profileIdentityAvatar: {
     width: 56,
@@ -5643,6 +5706,9 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: spacing.sm,
   },
+  profileSummaryGridPhone: {
+    gap: spacing.xs,
+  },
   profileSummaryCard: {
     flexGrow: 1,
     flexBasis: 180,
@@ -5654,6 +5720,9 @@ const styles = StyleSheet.create({
     borderColor: '#E6D9C9',
     backgroundColor: '#FFF8F0',
     gap: 4,
+  },
+  profileSummaryCardPhone: {
+    flexBasis: '100%',
   },
   profileSummaryLabel: {
     fontSize: 11,
