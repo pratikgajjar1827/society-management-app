@@ -72,6 +72,11 @@ const tableConfigs = [
   ['securityGuestLogs'],
   ['chatThreads', ['participantUserIds']],
   ['chatMessages'],
+  ['societyMeetings'],
+  ['meetingAgendaItems'],
+  ['meetingVotes'],
+  ['meetingAttendeeSigns'],
+  ['pushSubscriptions'],
 ];
 
 const authTableNames = ['authSessions', 'authChallenges', 'authIdentities', 'userProfiles'];
@@ -293,6 +298,24 @@ function ensureSchema() {
     ['vehiclePhotoDataUrl', 'TEXT'],
     ['vehiclePhotoCapturedAt', 'TEXT'],
   ]);
+
+  addMissingColumns('societyMeetings', [
+    ['minutesDocumentDataUrl', 'TEXT'],
+    ['summary', 'TEXT'],
+  ]);
+
+  addMissingColumns('meetingAgendaItems', [
+    ['votingDeadline', 'TEXT'],
+    ['resolution', 'TEXT'],
+  ]);
+
+  addMissingColumns('pushSubscriptions', [
+    ['appVariant', 'TEXT'],
+    ['lastDeliveredAt', 'TEXT'],
+    ['lastErrorAt', 'TEXT'],
+    ['disabledAt', 'TEXT'],
+    ['disabledReason', 'TEXT'],
+  ]);
 }
 
 function ensureSuperUserAccount() {
@@ -360,6 +383,10 @@ function ensureSupplementalSeedRows() {
     'visitorPasses',
     'securityGuestRequests',
     'securityGuestLogs',
+    'societyMeetings',
+    'meetingAgendaItems',
+    'meetingVotes',
+    'meetingAttendeeSigns',
   ];
 
   for (const tableName of supplementalTables) {
@@ -602,7 +629,12 @@ function toStoredValue(columnName, value) {
     return null;
   }
 
-  if (columnName === 'isPrimary' || columnName === 'acknowledgementRequired' || columnName === 'active') {
+  if (
+    columnName === 'isPrimary' ||
+    columnName === 'acknowledgementRequired' ||
+    columnName === 'active' ||
+    columnName === 'requiresVoting'
+  ) {
     return value ? 1 : 0;
   }
 
@@ -654,7 +686,12 @@ function fromStoredValue(columnName, value) {
     return JSON.parse(value);
   }
 
-  if (columnName === 'isPrimary' || columnName === 'acknowledgementRequired' || columnName === 'active') {
+  if (
+    columnName === 'isPrimary' ||
+    columnName === 'acknowledgementRequired' ||
+    columnName === 'active' ||
+    columnName === 'requiresVoting'
+  ) {
     return Boolean(value);
   }
 

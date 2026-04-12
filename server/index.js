@@ -28,9 +28,11 @@ const {
   captureResidentUpiPayment,
   createPublicAccountDeletionRequest,
   createAnnouncement,
+  createSocietyMeeting,
   createAmenityBooking,
   createComplaintTicket,
   createSocietyDocument,
+  addMeetingAgendaItem,
   requestSocietyDocumentDownload,
   createEntryLogRecord,
   createExpenseRecord,
@@ -45,9 +47,11 @@ const {
   getOnboardingState,
   hasAssignedChairman,
   markAnnouncementRead,
+  openMeetingVoting,
   requestOtp,
   requestCreatorSession,
   requestPlayReviewSession,
+  registerPushSubscription,
   recordManualPayment,
   requestAuthenticatedAccountDeletion,
   requireSuperUserRole,
@@ -67,7 +71,9 @@ const {
   sendMaintenanceReminder,
   selectSocietyForResident,
   setPreferredRole,
+  signMeeting,
   submitResidentPayment,
+  uploadMeetingMinutes,
   updateLeadershipRole,
   updateLeadershipProfile,
   updateMaintenancePlanSettings,
@@ -75,6 +81,9 @@ const {
   updateResidenceProfile,
   updateSocietyProfile,
   updateComplaintTicket,
+  closeMeetingVoting,
+  castMeetingVote,
+  completeSocietyMeeting,
   verifyOtp,
 } = require('./auth/service');
 const { detectVehicleNumberFromPhotoDataUrl } = require('./ocr/vehicleNumber');
@@ -400,6 +409,14 @@ async function requestHandler(request, response) {
         amenityLibrary,
         defaultSetupDraft,
       });
+      return;
+    }
+
+    if (request.method === 'POST' && url.pathname === '/api/push/subscriptions') {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = registerPushSubscription(userId, body);
+      sendJson(response, 200, result);
       return;
     }
 
@@ -784,6 +801,9 @@ async function requestHandler(request, response) {
     const announcementCreateRouteMatch = request.method === 'POST'
       ? url.pathname.match(/^\/api\/societies\/([^/]+)\/announcements$/)
       : null;
+    const meetingCreateRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/societies\/([^/]+)\/meetings$/)
+      : null;
 
     const societyDocumentCreateRouteMatch = request.method === 'POST'
       ? url.pathname.match(/^\/api\/societies\/([^/]+)\/documents$/)
@@ -810,6 +830,22 @@ async function requestHandler(request, response) {
       const result = createAnnouncement(
         userId,
         decodeURIComponent(announcementCreateRouteMatch[1]),
+        body,
+      );
+      sendJson(response, 201, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    if (meetingCreateRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = createSocietyMeeting(
+        userId,
+        decodeURIComponent(meetingCreateRouteMatch[1]),
         body,
       );
       sendJson(response, 201, {
@@ -871,6 +907,27 @@ async function requestHandler(request, response) {
     const maintenanceBillingConfigRouteMatch = request.method === 'POST'
       ? url.pathname.match(/^\/api\/maintenance-plans\/([^/]+)\/billing-config$/)
       : null;
+    const meetingMinutesRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/meetings\/([^/]+)\/minutes$/)
+      : null;
+    const meetingAgendaItemRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/meetings\/([^/]+)\/agenda-items$/)
+      : null;
+    const openMeetingVotingRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/agenda-items\/([^/]+)\/open-voting$/)
+      : null;
+    const closeMeetingVotingRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/agenda-items\/([^/]+)\/close-voting$/)
+      : null;
+    const castMeetingVoteRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/agenda-items\/([^/]+)\/votes$/)
+      : null;
+    const signMeetingRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/meetings\/([^/]+)\/sign$/)
+      : null;
+    const completeMeetingRouteMatch = request.method === 'POST'
+      ? url.pathname.match(/^\/api\/meetings\/([^/]+)\/complete$/)
+      : null;
     const documentDownloadReviewRouteMatch = request.method === 'POST'
       ? url.pathname.match(/^\/api\/document-download-requests\/([^/]+)\/review$/)
       : null;
@@ -899,6 +956,92 @@ async function requestHandler(request, response) {
       const userId = requireSession(getBearerToken(request));
       const body = await parseBody(request);
       const result = updateMaintenanceBillingConfig(userId, decodeURIComponent(maintenanceBillingConfigRouteMatch[1]), body);
+      sendJson(response, 200, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    if (meetingMinutesRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = uploadMeetingMinutes(userId, decodeURIComponent(meetingMinutesRouteMatch[1]), body.dataUrl);
+      sendJson(response, 200, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    if (meetingAgendaItemRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = addMeetingAgendaItem(userId, decodeURIComponent(meetingAgendaItemRouteMatch[1]), body);
+      sendJson(response, 201, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    if (openMeetingVotingRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const result = openMeetingVoting(userId, decodeURIComponent(openMeetingVotingRouteMatch[1]));
+      sendJson(response, 200, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    if (closeMeetingVotingRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = closeMeetingVoting(
+        userId,
+        decodeURIComponent(closeMeetingVotingRouteMatch[1]),
+        body.resolution,
+      );
+      sendJson(response, 200, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    if (castMeetingVoteRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = castMeetingVote(userId, decodeURIComponent(castMeetingVoteRouteMatch[1]), body.vote);
+      sendJson(response, 200, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    if (signMeetingRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const body = await parseBody(request);
+      const result = signMeeting(userId, decodeURIComponent(signMeetingRouteMatch[1]), body.signatureText);
+      sendJson(response, 200, {
+        ...result,
+        amenityLibrary,
+        defaultSetupDraft,
+      });
+      return;
+    }
+
+    if (completeMeetingRouteMatch) {
+      const userId = requireSession(getBearerToken(request));
+      const result = completeSocietyMeeting(userId, decodeURIComponent(completeMeetingRouteMatch[1]));
       sendJson(response, 200, {
         ...result,
         amenityLibrary,

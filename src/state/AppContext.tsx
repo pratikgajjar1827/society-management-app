@@ -1,14 +1,18 @@
 ﻿import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ReactNode, createContext, useContext, useEffect, useState } from 'react';
+import { Platform } from 'react-native';
 
 import {
   clearPersistedApiBaseUrl,
+  addMeetingAgendaItem as addMeetingAgendaItemRequest,
   assignChairmanResidence as assignChairmanResidenceRequest,
+  castMeetingVote as castMeetingVoteRequest,
   captureResidentUpiPayment as captureResidentUpiPaymentRequest,
   createAnnouncement as createAnnouncementRequest,
   createAmenityBooking as createAmenityBookingRequest,
   createComplaintTicket as createComplaintTicketRequest,
   createSocietyDocument as createSocietyDocumentRequest,
+  createSocietyMeeting as createSocietyMeetingRequest,
   requestSocietyDocumentDownload as requestSocietyDocumentDownloadMutation,
   createEntryLogRecord as createEntryLogRecordRequest,
   createExpenseRecord as createExpenseRecordRequest,
@@ -24,11 +28,13 @@ import {
   getApiBaseUrl,
   localFallbackSnapshot,
   markAnnouncementRead as markAnnouncementReadRequest,
+  openMeetingVoting as openMeetingVotingRequest,
   requestPlayReviewAccess as requestPlayReviewAccessRequest,
   requestCreatorAccess as requestCreatorAccessRequest,
   requestAccountDeletion as requestAccountDeletionRequest,
   requestOtp as requestOtpRequest,
   recordManualPayment as recordManualPaymentRequest,
+  registerPushSubscription as registerPushSubscriptionRequest,
   reviewAmenityBooking as reviewAmenityBookingRequest,
   reviewSocietyDocumentDownloadRequest as reviewSocietyDocumentDownloadRequestMutation,
   reviewResidentPayment as reviewResidentPaymentRequest,
@@ -39,8 +45,11 @@ import {
   sendMaintenanceReminder as sendMaintenanceReminderRequest,
   sendSocietyChatMessage as sendSocietyChatMessageRequest,
   sendSecurityGuestMessage as sendSecurityGuestMessageRequest,
+  signMeeting as signMeetingRequest,
   submitResidentPayment as submitResidentPaymentRequest,
   ringSecurityGuestRequest as ringSecurityGuestRequestRequest,
+  completeSocietyMeeting as completeSocietyMeetingRequest,
+  closeMeetingVoting as closeMeetingVotingRequest,
   updateLeadershipRole as updateLeadershipRoleRequest,
   updateLeadershipProfile as updateLeadershipProfileRequest,
   updateResidenceProfile as updateResidenceProfileRequest,
@@ -50,10 +59,14 @@ import {
   updateComplaintTicket as updateComplaintTicketRequest,
   updateSecurityGuestRequestStatus as updateSecurityGuestRequestStatusRequest,
   updateVisitorPassStatus as updateVisitorPassStatusRequest,
+  uploadMeetingMinutes as uploadMeetingMinutesRequest,
   verifyOtp as verifyOtpRequest,
   type AnnouncementCreateInput,
   type LeadershipProfileInput,
+  type MeetingAgendaItemCreateInput,
+  type PushSubscriptionInput,
   type ResidenceProfileInput,
+  type SocietyMeetingCreateInput,
   type SocietyDocumentCreateInput,
   type SocietyDocumentDownloadRequestInput,
   type SocietyDocumentDownloadReviewInput,
@@ -82,6 +95,12 @@ import {
   VerificationState,
 } from '../types/domain';
 import { isCreatorAppVariant } from '../config/appVariant';
+import {
+  clearRegisteredPushTokenCache,
+  getExpoPushTokenForDevice,
+  markPushTokenRegistered,
+  shouldRegisterPushToken,
+} from '../notifications/push';
 
 type Screen =
   | 'auth'
@@ -664,10 +683,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
   function mergeServerData(serverData: typeof initialState.data, currentData: typeof initialState.data) {
     return {
       ...serverData,
-      societyMeetings: currentData.societyMeetings?.length ? currentData.societyMeetings : (serverData.societyMeetings ?? []),
-      meetingAgendaItems: currentData.meetingAgendaItems?.length ? currentData.meetingAgendaItems : (serverData.meetingAgendaItems ?? []),
-      meetingVotes: currentData.meetingVotes?.length ? currentData.meetingVotes : (serverData.meetingVotes ?? []),
-      meetingAttendeeSigns: currentData.meetingAttendeeSigns?.length ? currentData.meetingAttendeeSigns : (serverData.meetingAttendeeSigns ?? []),
+      societyMeetings: Array.isArray(serverData.societyMeetings)
+        ? serverData.societyMeetings
+        : (currentData.societyMeetings ?? []),
+      meetingAgendaItems: Array.isArray(serverData.meetingAgendaItems)
+        ? serverData.meetingAgendaItems
+        : (currentData.meetingAgendaItems ?? []),
+      meetingVotes: Array.isArray(serverData.meetingVotes)
+        ? serverData.meetingVotes
+        : (currentData.meetingVotes ?? []),
+      meetingAttendeeSigns: Array.isArray(serverData.meetingAttendeeSigns)
+        ? serverData.meetingAttendeeSigns
+        : (currentData.meetingAttendeeSigns ?? []),
     };
   }
 
@@ -814,6 +841,56 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const sessionToken = state.session.sessionToken;
+    const userId = state.session.userId;
+
+    if (!sessionToken || !userId) {
+      void clearRegisteredPushTokenCache();
+      return;
+    }
+
+    const activeSessionToken = sessionToken;
+    const activeUserId = userId;
+    let cancelled = false;
+
+    async function syncPushToken() {
+      try {
+        const pushToken = await getExpoPushTokenForDevice();
+
+        if (!pushToken || cancelled) {
+          return;
+        }
+
+        const needsRegistration = await shouldRegisterPushToken(activeUserId, pushToken);
+
+        if (!needsRegistration || cancelled) {
+          return;
+        }
+
+        await registerPushSubscriptionRequest(activeSessionToken, {
+          token: pushToken,
+          platform: (Platform.OS === 'ios' ? 'ios' : 'android') as PushSubscriptionInput['platform'],
+          appVariant: isCreatorAppVariant() ? 'creator' : 'main',
+        });
+
+        if (cancelled) {
+          return;
+        }
+
+        await markPushTokenRegistered(activeUserId, pushToken);
+      } catch (error) {
+        console.warn('Push registration skipped.', error);
+      }
+    }
+
+    void syncPushToken();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [state.session.sessionToken, state.session.userId]);
+
+  useEffect(() => {
+    const sessionToken = state.session.sessionToken;
 
     if (!sessionToken) {
       return undefined;
@@ -904,6 +981,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     societyId: string,
     execute: (sessionToken: string) => Promise<SocietyMutationResponse>,
     successMessage: string,
+    options?: {
+      showNotice?: boolean;
+    },
   ) {
     const sessionToken = state.session.sessionToken;
 
@@ -945,7 +1025,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         onboarding: response.onboarding,
         isSyncing: false,
         apiError: undefined,
-        noticeMessage: successMessage,
+        noticeMessage: options?.showNotice === false ? undefined : successMessage,
         dataSource: 'remote',
         session: {
           ...currentState.session,
@@ -2039,12 +2119,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         societyId,
         (sessionToken) => sendSocietyChatMessageRequest(sessionToken, societyId, input),
         'Message sent to the society chat.',
+        { showNotice: false },
       ),
     sendDirectChatMessage: async (societyId, recipientUserId, input) =>
       runSocietyMutation(
         societyId,
         (sessionToken) => sendDirectChatMessageRequest(sessionToken, societyId, recipientUserId, input),
         'Direct message sent.',
+        { showNotice: false },
       ),
     createVisitorPass: async (societyId, input) =>
       runSocietyMutation(
@@ -2064,224 +2146,54 @@ export function AppProvider({ children }: { children: ReactNode }) {
               ? 'Visitor pass cancelled.'
               : 'Visitor pass updated.',
       ),
-    createSocietyMeeting: async (societyId, input) => {
-      const userId = state.session.userId;
-
-      if (!userId) {
-        return false;
-      }
-
-      const newMeeting = {
-        id: `meeting-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    createSocietyMeeting: async (societyId, input) =>
+      runSocietyMutation(
         societyId,
-        title: input.title.trim(),
-        meetingType: input.meetingType,
-        scheduledAt: input.scheduledAt,
-        venue: input.venue.trim(),
-        status: 'scheduled' as const,
-        summary: input.summary?.trim() || undefined,
-        minutesDocumentDataUrl: null,
-        createdByUserId: userId,
-        createdAt: new Date().toISOString(),
-      };
-
-      setState((currentState) => ({
-        ...currentState,
-        data: {
-          ...currentState.data,
-          societyMeetings: [...(currentState.data.societyMeetings ?? []), newMeeting],
-        },
-        noticeMessage: 'Society meeting scheduled.',
-        apiError: undefined,
-      }));
-
-      return true;
-    },
-    uploadMeetingMinutes: async (societyId, meetingId, dataUrl) => {
-      setState((currentState) => ({
-        ...currentState,
-        data: {
-          ...currentState.data,
-          societyMeetings: (currentState.data.societyMeetings ?? []).map((meeting) =>
-            meeting.id === meetingId && meeting.societyId === societyId
-              ? { ...meeting, minutesDocumentDataUrl: dataUrl }
-              : meeting,
-          ),
-        },
-        noticeMessage: 'Meeting minutes document uploaded.',
-        apiError: undefined,
-      }));
-
-      return true;
-    },
-    addMeetingAgendaItem: async (societyId, meetingId, input) => {
-      const existingItems = (state.data.meetingAgendaItems ?? []).filter((item) => item.meetingId === meetingId);
-      const nextSortOrder = existingItems.length + 1;
-
-      const newItem = {
-        id: `agenda-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-        meetingId,
+        (sessionToken) => createSocietyMeetingRequest(sessionToken, societyId, input as SocietyMeetingCreateInput),
+        'Society meeting scheduled.',
+      ),
+    uploadMeetingMinutes: async (societyId, meetingId, dataUrl) =>
+      runSocietyMutation(
         societyId,
-        title: input.title.trim(),
-        description: input.description?.trim() || undefined,
-        requiresVoting: input.requiresVoting,
-        votingStatus: (input.requiresVoting ? 'pending' : 'notRequired') as 'pending' | 'notRequired',
-        sortOrder: nextSortOrder,
-      };
-
-      setState((currentState) => ({
-        ...currentState,
-        data: {
-          ...currentState.data,
-          meetingAgendaItems: [...(currentState.data.meetingAgendaItems ?? []), newItem],
-        },
-        noticeMessage: 'Agenda item added.',
-        apiError: undefined,
-      }));
-
-      return true;
-    },
-    openMeetingVoting: async (societyId, agendaItemId) => {
-      setState((currentState) => ({
-        ...currentState,
-        data: {
-          ...currentState.data,
-          meetingAgendaItems: (currentState.data.meetingAgendaItems ?? []).map((item) =>
-            item.id === agendaItemId && item.societyId === societyId
-              ? { ...item, votingStatus: 'open' as const }
-              : item,
-          ),
-        },
-        noticeMessage: 'Voting opened for this agenda item.',
-        apiError: undefined,
-      }));
-
-      return true;
-    },
-    closeMeetingVoting: async (societyId, agendaItemId, resolution) => {
-      setState((currentState) => ({
-        ...currentState,
-        data: {
-          ...currentState.data,
-          meetingAgendaItems: (currentState.data.meetingAgendaItems ?? []).map((item) =>
-            item.id === agendaItemId && item.societyId === societyId
-              ? { ...item, votingStatus: 'closed' as const, resolution }
-              : item,
-          ),
-        },
-        noticeMessage: `Voting closed. Resolution: ${resolution}.`,
-        apiError: undefined,
-      }));
-
-      return true;
-    },
-    castMeetingVote: async (societyId, agendaItemId, meetingId, vote) => {
-      const userId = state.session.userId;
-
-      if (!userId) {
-        return false;
-      }
-
-      const alreadyVoted = (state.data.meetingVotes ?? []).some(
-        (v) => v.agendaItemId === agendaItemId && v.userId === userId,
-      );
-
-      if (alreadyVoted) {
-        setState((currentState) => ({
-          ...currentState,
-          data: {
-            ...currentState.data,
-            meetingVotes: (currentState.data.meetingVotes ?? []).map((v) =>
-              v.agendaItemId === agendaItemId && v.userId === userId
-                ? { ...v, vote, castAt: new Date().toISOString() }
-                : v,
-            ),
-          },
-          noticeMessage: 'Your vote has been updated.',
-          apiError: undefined,
-        }));
-      } else {
-        const newVote = {
-          id: `vote-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-          agendaItemId,
-          meetingId,
-          societyId,
-          userId,
-          vote,
-          castAt: new Date().toISOString(),
-        };
-
-        setState((currentState) => ({
-          ...currentState,
-          data: {
-            ...currentState.data,
-            meetingVotes: [...(currentState.data.meetingVotes ?? []), newVote],
-          },
-          noticeMessage: 'Your vote has been recorded.',
-          apiError: undefined,
-        }));
-      }
-
-      return true;
-    },
-    signMeeting: async (societyId, meetingId, signatureText) => {
-      const userId = state.session.userId;
-
-      if (!userId) {
-        return false;
-      }
-
-      const alreadySigned = (state.data.meetingAttendeeSigns ?? []).some(
-        (s) => s.meetingId === meetingId && s.userId === userId,
-      );
-
-      if (alreadySigned) {
-        setState((currentState) => ({
-          ...currentState,
-          apiError: 'You have already signed this meeting.',
-          noticeMessage: undefined,
-        }));
-        return false;
-      }
-
-      const newSign = {
-        id: `sign-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-        meetingId,
+        (sessionToken) => uploadMeetingMinutesRequest(sessionToken, meetingId, dataUrl),
+        'Meeting minutes document uploaded.',
+      ),
+    addMeetingAgendaItem: async (societyId, meetingId, input) =>
+      runSocietyMutation(
         societyId,
-        userId,
-        signatureText: signatureText.trim(),
-        signedAt: new Date().toISOString(),
-      };
-
-      setState((currentState) => ({
-        ...currentState,
-        data: {
-          ...currentState.data,
-          meetingAttendeeSigns: [...(currentState.data.meetingAttendeeSigns ?? []), newSign],
-        },
-        noticeMessage: 'Meeting signed digitally.',
-        apiError: undefined,
-      }));
-
-      return true;
-    },
-    completeSocietyMeeting: async (societyId, meetingId) => {
-      setState((currentState) => ({
-        ...currentState,
-        data: {
-          ...currentState.data,
-          societyMeetings: (currentState.data.societyMeetings ?? []).map((meeting) =>
-            meeting.id === meetingId && meeting.societyId === societyId
-              ? { ...meeting, status: 'completed' as const }
-              : meeting,
-          ),
-        },
-        noticeMessage: 'Meeting marked as completed.',
-        apiError: undefined,
-      }));
-
-      return true;
-    },
+        (sessionToken) => addMeetingAgendaItemRequest(sessionToken, meetingId, input as MeetingAgendaItemCreateInput),
+        'Agenda item added.',
+      ),
+    openMeetingVoting: async (societyId, agendaItemId) =>
+      runSocietyMutation(
+        societyId,
+        (sessionToken) => openMeetingVotingRequest(sessionToken, agendaItemId),
+        'Voting opened for this agenda item.',
+      ),
+    closeMeetingVoting: async (societyId, agendaItemId, resolution) =>
+      runSocietyMutation(
+        societyId,
+        (sessionToken) => closeMeetingVotingRequest(sessionToken, agendaItemId, resolution),
+        `Voting closed. Resolution: ${resolution}.`,
+      ),
+    castMeetingVote: async (societyId, agendaItemId, _meetingId, vote) =>
+      runSocietyMutation(
+        societyId,
+        (sessionToken) => castMeetingVoteRequest(sessionToken, agendaItemId, vote),
+        'Your vote has been recorded.',
+      ),
+    signMeeting: async (societyId, meetingId, signatureText) =>
+      runSocietyMutation(
+        societyId,
+        (sessionToken) => signMeetingRequest(sessionToken, meetingId, signatureText),
+        'Meeting signed digitally.',
+      ),
+    completeSocietyMeeting: async (societyId, meetingId) =>
+      runSocietyMutation(
+        societyId,
+        (sessionToken) => completeSocietyMeetingRequest(sessionToken, meetingId),
+        'Meeting marked as completed.',
+      ),
   };
 
   return <AppContext.Provider value={{ state, actions }}>{children}</AppContext.Provider>;

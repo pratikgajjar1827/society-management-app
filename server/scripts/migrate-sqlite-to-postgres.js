@@ -46,6 +46,11 @@ const tableConfigs = [
   ['securityGuestLogs'],
   ['chatThreads'],
   ['chatMessages'],
+  ['societyMeetings'],
+  ['meetingAgendaItems'],
+  ['meetingVotes'],
+  ['meetingAttendeeSigns'],
+  ['pushSubscriptions'],
 ];
 
 const authTableNames = ['userProfiles', 'authIdentities', 'authChallenges', 'authSessions'];

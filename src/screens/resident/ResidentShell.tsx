@@ -2252,28 +2252,34 @@ function ResidentCommunity({
               </View>
               <Pill label="Group" tone="primary" />
             </View>
-            <View style={styles.chatHistoryPanel}>
+            <View style={[styles.chatHistoryPanel, isPhone ? styles.chatHistoryPanelPhone : null]}>
               {groupMessages.length > 0 ? (
-                groupMessages.slice(-20).map(({ message, sender }) => (
-                  <View
-                    key={message.id}
-                    style={[
-                      styles.threadBubble,
-                      message.senderUserId === userId ? styles.threadBubbleResident : styles.threadBubbleSecurity,
-                    ]}
-                  >
-                    {message.senderUserId !== userId ? (
-                      <Text style={styles.threadBubbleTitle}>{sender?.name ?? 'Resident'}</Text>
-                    ) : null}
-                    <Text style={styles.threadBubbleMessage}>{message.body}</Text>
-                    <Caption>{formatLongDate(message.createdAt)}</Caption>
-                  </View>
-                ))
+                <ScrollView
+                  nestedScrollEnabled
+                  showsVerticalScrollIndicator={false}
+                  contentContainerStyle={styles.chatMessageList}
+                >
+                  {groupMessages.slice(-20).map(({ message, sender }) => (
+                    <View
+                      key={message.id}
+                      style={[
+                        styles.threadBubble,
+                        message.senderUserId === userId ? styles.threadBubbleResident : styles.threadBubbleSecurity,
+                      ]}
+                    >
+                      {message.senderUserId !== userId ? (
+                        <Text style={styles.threadBubbleTitle}>{sender?.name ?? 'Resident'}</Text>
+                      ) : null}
+                      <Text style={styles.threadBubbleMessage}>{message.body}</Text>
+                      <Caption>{formatShortDate(message.createdAt)}</Caption>
+                    </View>
+                  ))}
+                </ScrollView>
               ) : (
                 <Caption>The society room is quiet right now. Send the first welcome or coordination message.</Caption>
               )}
             </View>
-            <View style={styles.chatComposer}>
+            <View style={[styles.chatComposer, isPhone ? styles.chatComposerPhone : null]}>
               <InputField
                 label="Message the society room"
                 value={groupMessageDraft}
@@ -2294,8 +2300,15 @@ function ResidentCommunity({
               title="Direct chats"
               description="Chat one to one with another resident or the chairman without leaving your workspace."
             />
-            <View style={styles.chatWorkspace}>
-              <View style={styles.chatSidebar}>
+            <View style={[styles.chatWorkspace, isPhone ? styles.chatWorkspacePhone : null]}>
+              <ScrollView
+                horizontal={isPhone}
+                nestedScrollEnabled
+                showsHorizontalScrollIndicator={false}
+                showsVerticalScrollIndicator={false}
+                style={isPhone ? styles.chatSidebarPhoneScroll : undefined}
+                contentContainerStyle={[styles.chatSidebar, isPhone ? styles.chatSidebarPhone : null]}
+              >
                 {directPeers.length > 0 ? directPeers.map((peer) => {
                   const threadEntry = directThreads.find((directThread) => directThread.peer?.id === peer.user.id);
 
@@ -2305,6 +2318,7 @@ function ResidentCommunity({
                       onPress={() => setSelectedDirectChatUserId(peer.user.id)}
                       style={({ pressed }) => [
                         styles.chatListItem,
+                        isPhone ? styles.chatListItemPhone : null,
                         selectedDirectPeer?.user.id === peer.user.id ? styles.chatListItemActive : null,
                         pressed ? styles.interactiveCardPressed : null,
                       ]}
@@ -2333,8 +2347,8 @@ function ResidentCommunity({
                 }) : (
                   <Caption>No other society member is available for direct chat yet.</Caption>
                 )}
-              </View>
-              <View style={styles.chatConversationPane}>
+              </ScrollView>
+              <View style={[styles.chatConversationPane, isPhone ? styles.chatConversationPanePhone : null]}>
             {selectedDirectPeer ? (
               <>
                 <View style={styles.chatMetaRow}>
@@ -2351,33 +2365,41 @@ function ResidentCommunity({
                     tone={selectedDirectPeer.membership.roles.includes('chairman') ? 'warning' : 'accent'}
                   />
                 </View>
-                <View style={styles.chatPanel}>
+                <View style={[styles.chatPanel, isPhone ? styles.chatPanelPhone : null]}>
                   {directMessages.length > 0 ? (
-                    directMessages.slice(-12).map(({ message, sender }) => (
-                      <View
-                        key={message.id}
-                        style={[
-                          styles.threadBubble,
-                          message.senderUserId === userId ? styles.threadBubbleResident : styles.threadBubbleSecurity,
-                        ]}
-                      >
-                        <Text style={styles.threadBubbleTitle}>{sender?.name ?? 'Resident'}</Text>
-                        <Text style={styles.threadBubbleMessage}>{message.body}</Text>
-                        <Caption>{formatLongDate(message.createdAt)}</Caption>
-                      </View>
-                    ))
+                    <ScrollView
+                      nestedScrollEnabled
+                      showsVerticalScrollIndicator={false}
+                      contentContainerStyle={styles.chatMessageList}
+                    >
+                      {directMessages.slice(-24).map(({ message, sender }) => (
+                        <View
+                          key={message.id}
+                          style={[
+                            styles.threadBubble,
+                            message.senderUserId === userId ? styles.threadBubbleResident : styles.threadBubbleSecurity,
+                          ]}
+                        >
+                          {message.senderUserId !== userId ? (
+                            <Text style={styles.threadBubbleTitle}>{sender?.name ?? 'Resident'}</Text>
+                          ) : null}
+                          <Text style={styles.threadBubbleMessage}>{message.body}</Text>
+                          <Caption>{formatShortDate(message.createdAt)}</Caption>
+                        </View>
+                      ))}
+                    </ScrollView>
                   ) : (
                     <Caption>Start a direct conversation with {selectedDirectPeer.user.name}. The first message will open the private chat.</Caption>
                   )}
                 </View>
-                <InputField
-                  label={`Message ${selectedDirectPeer.user.name}`}
-                  value={directMessageDraft}
-                  onChangeText={setDirectMessageDraft}
-                  placeholder="Hello, can we coordinate on a society issue or quick update?"
-                  multiline
-                />
-                <View style={styles.heroActions}>
+                <View style={[styles.chatComposer, isPhone ? styles.chatComposerPhone : null]}>
+                  <InputField
+                    label={`Message ${selectedDirectPeer.user.name}`}
+                    value={directMessageDraft}
+                    onChangeText={setDirectMessageDraft}
+                    placeholder="Hello, can we coordinate on a society issue or quick update?"
+                    multiline
+                  />
                   <ActionButton
                     label={state.isSyncing ? 'Sending...' : 'Send direct message'}
                     onPress={handleSendDirectMessage}
@@ -6276,6 +6298,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#FBF7EF',
     gap: spacing.sm,
   },
+  chatPanelPhone: {
+    minHeight: 260,
+    maxHeight: 360,
+  },
   chatHistoryPanel: {
     marginTop: spacing.sm,
     padding: spacing.md,
@@ -6286,25 +6312,46 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     minHeight: 180,
   },
+  chatHistoryPanelPhone: {
+    minHeight: 220,
+    maxHeight: 320,
+  },
   chatComposer: {
     marginTop: spacing.sm,
     gap: spacing.sm,
+  },
+  chatComposerPhone: {
+    gap: spacing.xs,
   },
   chatWorkspace: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: spacing.md,
   },
+  chatWorkspacePhone: {
+    flexDirection: 'column',
+    flexWrap: 'nowrap',
+  },
   chatSidebar: {
     flexBasis: 280,
     flexGrow: 1,
     gap: spacing.sm,
+  },
+  chatSidebarPhoneScroll: {
+    flexGrow: 0,
+  },
+  chatSidebarPhone: {
+    paddingRight: spacing.xs,
   },
   chatConversationPane: {
     flexBasis: 420,
     flexGrow: 2,
     gap: spacing.sm,
     minWidth: 280,
+  },
+  chatConversationPanePhone: {
+    minWidth: 0,
+    flexBasis: 'auto',
   },
   chatListItem: {
     flexDirection: 'row',
@@ -6315,6 +6362,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E8DDCF',
     backgroundColor: palette.surface,
+  },
+  chatListItemPhone: {
+    width: 286,
+    paddingVertical: spacing.sm,
   },
   chatListItemActive: {
     borderColor: '#C8D9EE',
@@ -6383,7 +6434,7 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     borderRadius: 18,
     gap: spacing.xs,
-    maxWidth: '92%',
+    maxWidth: '84%',
   },
   threadBubbleSecurity: {
     alignSelf: 'flex-start',
@@ -6404,6 +6455,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     color: palette.ink,
+  },
+  chatMessageList: {
+    gap: spacing.sm,
+    paddingRight: spacing.xs,
   },
   choiceRow: {
     flexDirection: 'row',

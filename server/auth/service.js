@@ -20,6 +20,11 @@ const SOCIETY_DOCUMENT_DOWNLOAD_REVIEW_DECISIONS = new Set(['approve', 'reject']
 const BOOKING_REVIEW_STATUSES = new Set(['confirmed', 'waitlisted']);
 const COMPLAINT_CATEGORIES = new Set(['plumbing', 'security', 'billing', 'cleaning', 'general']);
 const COMPLAINT_STATUSES = new Set(['open', 'inProgress', 'resolved']);
+const SOCIETY_MEETING_TYPES = new Set(['society', 'committee', 'emergency']);
+const SOCIETY_MEETING_STATUSES = new Set(['scheduled', 'completed', 'cancelled']);
+const AGENDA_VOTING_STATUSES = new Set(['pending', 'open', 'closed', 'notRequired']);
+const AGENDA_RESOLUTIONS = new Set(['passed', 'rejected', 'deferred']);
+const MEETING_VOTES = new Set(['yes', 'no', 'abstain']);
 const STAFF_CATEGORIES = new Set(['domesticHelp', 'driver', 'cook', 'vendor']);
 const VERIFICATION_STATES = new Set(['pending', 'verified', 'expired']);
 const ENTRY_SUBJECT_TYPES = new Set(['staff', 'visitor', 'delivery']);
@@ -48,6 +53,8 @@ const CHAT_THREAD_TYPES = new Set(['society', 'direct']);
 const STAFF_REVIEW_STATES = new Set(['verified', 'expired']);
 const MAINTENANCE_FREQUENCIES = new Set(['monthly', 'quarterly']);
 const VEHICLE_TYPES = new Set(['car', 'bike', 'scooter']);
+const PUSH_PLATFORMS = new Set(['android', 'ios']);
+const APP_VARIANTS = new Set(['main', 'creator']);
 const SOCIETY_DOCUMENT_CATEGORIES = new Set([
   'liftLicense',
   'commonLightBill',
@@ -81,6 +88,16 @@ function addMinutes(date, minutes) {
 
 function addDays(date, days) {
   return new Date(date.getTime() + days * 24 * 60 * 60 * 1000).toISOString();
+}
+
+function splitIntoChunks(items, chunkSize) {
+  const chunks = [];
+
+  for (let index = 0; index < items.length; index += chunkSize) {
+    chunks.push(items.slice(index, index + chunkSize));
+  }
+
+  return chunks;
 }
 
 function cleanupExpiredRecords() {
@@ -182,6 +199,36 @@ function normalizeOptionalText(value, maxLength = 80) {
 
   if (normalized.length > maxLength) {
     throw new HttpError(400, `Keep this field within ${maxLength} characters.`);
+  }
+
+  return normalized;
+}
+
+function normalizePushPlatform(value) {
+  const normalized = String(value ?? '').trim().toLowerCase();
+
+  if (!PUSH_PLATFORMS.has(normalized)) {
+    throw new HttpError(400, 'Unsupported push platform. Use android or ios.');
+  }
+
+  return normalized;
+}
+
+function normalizeAppVariant(value) {
+  const normalized = String(value ?? 'main').trim().toLowerCase() || 'main';
+
+  if (!APP_VARIANTS.has(normalized)) {
+    throw new HttpError(400, 'Unsupported app variant.');
+  }
+
+  return normalized;
+}
+
+function normalizePushToken(value) {
+  const normalized = String(value ?? '').trim();
+
+  if (!/^(Expo|Exponent)PushToken\[[^\]]+\]$/.test(normalized)) {
+    throw new HttpError(400, 'Enter a valid Expo push token.');
   }
 
   return normalized;
@@ -1105,6 +1152,178 @@ function getAnnouncement(announcementId) {
     .get(announcementId);
 }
 
+function getSocietyMeeting(meetingId) {
+  return db
+    .prepare(
+      `SELECT id, societyId, title, meetingType, scheduledAt, venue, status, minutesDocumentDataUrl, summary, createdByUserId, createdAt
+       FROM societyMeetings
+       WHERE id = ?`,
+    )
+    .get(meetingId);
+}
+
+function getMeetingAgendaItem(agendaItemId) {
+  return db
+    .prepare(
+      `SELECT id, meetingId, societyId, title, description, requiresVoting, votingStatus, votingDeadline, resolution, sortOrder
+       FROM meetingAgendaItems
+       WHERE id = ?`,
+    )
+    .get(agendaItemId);
+}
+
+function getActivePushSubscriptionsForUsers(userIds) {
+  const normalizedUserIds = [...new Set(userIds.filter(Boolean))];
+
+  if (normalizedUserIds.length === 0) {
+    return [];
+  }
+
+  const placeholders = normalizedUserIds.map(() => '?').join(', ');
+  return db
+    .prepare(
+      `SELECT token, userId, platform, appVariant
+       FROM pushSubscriptions
+       WHERE disabledAt IS NULL
+         AND userId IN (${placeholders})`,
+    )
+    .all(...normalizedUserIds);
+}
+
+function markPushSubscriptionsDelivered(tokens) {
+  if (!tokens.length) {
+    return;
+  }
+
+  const deliveredAt = nowIso();
+  const statement = db.prepare(
+    'UPDATE pushSubscriptions SET lastDeliveredAt = ?, updatedAt = ? WHERE token = ?',
+  );
+
+  tokens.forEach((token) => {
+    statement.run(deliveredAt, deliveredAt, token);
+  });
+}
+
+function markPushSubscriptionError(token, reason, disable = false) {
+  const errorAt = nowIso();
+  db.prepare(
+    `UPDATE pushSubscriptions
+     SET lastErrorAt = ?,
+         updatedAt = ?,
+         disabledAt = ?,
+         disabledReason = ?
+     WHERE token = ?`,
+  ).run(
+    errorAt,
+    errorAt,
+    disable ? errorAt : null,
+    reason || null,
+    token,
+  );
+}
+
+function doesAnnouncementReachRoleSet(audience, roleSet) {
+  switch (audience) {
+    case 'all':
+      return true;
+    case 'committee':
+      return roleSet.has('chairman') || roleSet.has('committee');
+    case 'owners':
+      return roleSet.has('owner') || roleSet.has('chairman') || roleSet.has('committee');
+    case 'tenants':
+      return roleSet.has('tenant');
+    case 'residents':
+      return (
+        roleSet.has('owner') ||
+        roleSet.has('tenant') ||
+        roleSet.has('chairman') ||
+        roleSet.has('committee')
+      );
+    default:
+      return false;
+  }
+}
+
+function getAudienceTargetUserIds(societyId, audience, actorUserId) {
+  const memberships = db
+    .prepare('SELECT userId, roles FROM memberships WHERE societyId = ? ORDER BY userId ASC')
+    .all(societyId);
+
+  return memberships
+    .filter((membership) => membership.userId !== actorUserId)
+    .filter((membership) => doesAnnouncementReachRoleSet(audience, new Set(parseStoredJson(membership.roles))))
+    .map((membership) => membership.userId);
+}
+
+async function sendPushNotificationsToUsers(userIds, notification) {
+  const subscriptions = getActivePushSubscriptionsForUsers(userIds);
+
+  if (!subscriptions.length) {
+    return;
+  }
+
+  const messageBatches = splitIntoChunks(subscriptions, 100).map((subscriptionBatch) =>
+    subscriptionBatch.map((subscription) => ({
+      to: subscription.token,
+      sound: 'default',
+      title: notification.title,
+      body: notification.body,
+      data: notification.data,
+    })),
+  );
+
+  for (const batch of messageBatches) {
+    try {
+      const response = await fetch('https://exp.host/--/api/v2/push/send', {
+        method: 'POST',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(batch),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Expo push gateway returned ${response.status}.`);
+      }
+
+      const payload = await response.json();
+      const receipts = Array.isArray(payload?.data) ? payload.data : [];
+      const deliveredTokens = [];
+
+      receipts.forEach((receipt, index) => {
+        const token = batch[index]?.to;
+
+        if (!token) {
+          return;
+        }
+
+        if (receipt?.status === 'ok') {
+          deliveredTokens.push(token);
+          return;
+        }
+
+        const detailsError = receipt?.details?.error;
+        const errorMessage = typeof receipt?.message === 'string' ? receipt.message : 'Push delivery failed.';
+        markPushSubscriptionError(token, errorMessage, detailsError === 'DeviceNotRegistered');
+      });
+
+      markPushSubscriptionsDelivered(deliveredTokens);
+    } catch (error) {
+      console.error('Push delivery failed.', error);
+    }
+  }
+}
+
+function queuePushNotifications(userIds, notification) {
+  if (!userIds.length) {
+    return;
+  }
+
+  void sendPushNotificationsToUsers(userIds, notification);
+}
+
 function getPayment(paymentId) {
   return db
     .prepare(
@@ -1768,6 +1987,23 @@ function requireSocietyAnnouncementPublisher(userId, societyId) {
   }
 }
 
+function requireSocietyMeetingManager(userId, societyId) {
+  const society = getSociety(societyId);
+
+  if (!society) {
+    throw new HttpError(404, 'Selected society was not found.');
+  }
+
+  const membership = getMembership(userId, societyId);
+  const roleSet = membership ? new Set(parseStoredJson(membership.roles)) : new Set();
+
+  if (!roleSet.has('chairman') && !roleSet.has('committee')) {
+    throw new HttpError(403, 'Only a chairman or committee member can manage meetings.');
+  }
+
+  return society;
+}
+
 function requireSocietyDocumentDownloadReviewer(userId, societyId) {
   const society = getSociety(societyId);
 
@@ -1781,6 +2017,41 @@ function requireSocietyDocumentDownloadReviewer(userId, societyId) {
   if (!roleSet.has('chairman') && !roleSet.has('committee')) {
     throw new HttpError(403, 'Only the chairman or committee can review document download requests.');
   }
+}
+
+function buildAnnouncementNotification(society, announcement) {
+  return {
+    title: `${society.name}: ${announcement.title}`,
+    body: announcement.body,
+    data: {
+      type: 'announcement',
+      societyId: society.id,
+      announcementId: announcement.id,
+      audience: announcement.audience,
+    },
+  };
+}
+
+function buildMeetingNotification(society, meeting) {
+  const meetingDate = new Date(meeting.scheduledAt).toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true,
+    timeZone: 'Asia/Kolkata',
+  });
+
+  return {
+    title: `${society.name}: ${meeting.title}`,
+    body: `${meetingDate} at ${meeting.venue}`,
+    data: {
+      type: 'meeting',
+      societyId: society.id,
+      meetingId: meeting.id,
+      meetingType: meeting.meetingType,
+    },
+  };
 }
 
 function requireSocietyLeadershipManager(userId, societyId) {
@@ -3402,12 +3673,15 @@ function updateComplaintTicket(userId, complaintId, input) {
 
 function createAnnouncement(userId, societyId, input) {
   requireSocietyAnnouncementPublisher(userId, societyId);
+  const society = getSociety(societyId);
 
   const title = requireText(input?.title, 'Enter an announcement title.');
   const body = requireText(input?.body, 'Enter the announcement message.');
   const photoDataUrl = normalizeAnnouncementPhotoDataUrl(input?.photoDataUrl);
   const audience = String(input?.audience ?? '').trim();
   const priority = String(input?.priority ?? '').trim();
+  const announcementId = nextId('announcement');
+  const createdAt = nowIso();
 
   if (!ANNOUNCEMENT_AUDIENCES.has(audience)) {
     throw new HttpError(400, 'Choose all, residents, committee, owners, or tenants as the announcement audience.');
@@ -3420,18 +3694,313 @@ function createAnnouncement(userId, societyId, input) {
   db.prepare(
     'INSERT INTO announcements (id, societyId, title, body, photoDataUrl, audience, createdAt, priority, readByUserIds) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
   ).run(
-    nextId('announcement'),
+    announcementId,
     societyId,
     title,
     body,
     photoDataUrl,
     audience,
-    nowIso(),
+    createdAt,
     priority,
     JSON.stringify([]),
   );
 
+  queuePushNotifications(
+    getAudienceTargetUserIds(societyId, audience, userId),
+    buildAnnouncementNotification(society, {
+      id: announcementId,
+      title,
+      body,
+      audience,
+    }),
+  );
+
   return buildSocietyMutationPayload(userId, societyId);
+}
+
+function registerPushSubscription(userId, input) {
+  const token = normalizePushToken(input?.token);
+  const platform = normalizePushPlatform(input?.platform);
+  const appVariant = normalizeAppVariant(input?.appVariant);
+  const existingUser = getUser(userId);
+
+  if (!existingUser) {
+    throw new HttpError(404, 'User account was not found.');
+  }
+
+  const existingSubscription = db
+    .prepare('SELECT token FROM pushSubscriptions WHERE token = ?')
+    .get(token);
+  const updatedAt = nowIso();
+
+  if (existingSubscription) {
+    db.prepare(
+      `UPDATE pushSubscriptions
+       SET userId = ?, platform = ?, appVariant = ?, updatedAt = ?, disabledAt = NULL, disabledReason = NULL
+       WHERE token = ?`,
+    ).run(userId, platform, appVariant, updatedAt, token);
+  } else {
+    db.prepare(
+      `INSERT INTO pushSubscriptions (
+        token,
+        userId,
+        platform,
+        appVariant,
+        createdAt,
+        updatedAt,
+        lastDeliveredAt,
+        lastErrorAt,
+        disabledAt,
+        disabledReason
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(token, userId, platform, appVariant, updatedAt, updatedAt, null, null, null, null);
+  }
+
+  return { ok: true };
+}
+
+function createSocietyMeeting(userId, societyId, input) {
+  const society = requireSocietyMeetingManager(userId, societyId);
+  const title = requireText(input?.title, 'Enter a meeting title.');
+  const venue = requireText(input?.venue, 'Enter a meeting venue.');
+  const meetingType = String(input?.meetingType ?? '').trim();
+  const scheduledAt = normalizeDateTime(input?.scheduledAt, 'Choose the meeting date and time.');
+  const summary = normalizeOptionalText(input?.summary, 300);
+
+  if (!SOCIETY_MEETING_TYPES.has(meetingType)) {
+    throw new HttpError(400, 'Choose society, committee, or emergency as the meeting type.');
+  }
+
+  const meetingId = nextId('meeting');
+  const createdAt = nowIso();
+
+  db.prepare(
+    `INSERT INTO societyMeetings (
+      id,
+      societyId,
+      title,
+      meetingType,
+      scheduledAt,
+      venue,
+      status,
+      minutesDocumentDataUrl,
+      summary,
+      createdByUserId,
+      createdAt
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    meetingId,
+    societyId,
+    title,
+    meetingType,
+    scheduledAt,
+    venue,
+    'scheduled',
+    null,
+    summary,
+    userId,
+    createdAt,
+  );
+
+  queuePushNotifications(
+    getAudienceTargetUserIds(societyId, 'all', userId),
+    buildMeetingNotification(society, {
+      id: meetingId,
+      title,
+      scheduledAt,
+      venue,
+      meetingType,
+    }),
+  );
+
+  return buildSocietyMutationPayload(userId, societyId);
+}
+
+function uploadMeetingMinutes(userId, meetingId, dataUrl) {
+  const meeting = getSocietyMeeting(meetingId);
+
+  if (!meeting) {
+    throw new HttpError(404, 'Meeting was not found.');
+  }
+
+  requireSocietyMeetingManager(userId, meeting.societyId);
+  const minutesDocumentDataUrl = normalizeOptionalImageDataUrl(dataUrl, 'the meeting minutes');
+
+  if (!minutesDocumentDataUrl) {
+    throw new HttpError(400, 'Upload the meeting minutes before saving.');
+  }
+
+  db.prepare('UPDATE societyMeetings SET minutesDocumentDataUrl = ? WHERE id = ?').run(
+    minutesDocumentDataUrl,
+    meetingId,
+  );
+
+  return buildSocietyMutationPayload(userId, meeting.societyId);
+}
+
+function addMeetingAgendaItem(userId, meetingId, input) {
+  const meeting = getSocietyMeeting(meetingId);
+
+  if (!meeting) {
+    throw new HttpError(404, 'Meeting was not found.');
+  }
+
+  requireSocietyMeetingManager(userId, meeting.societyId);
+  const title = requireText(input?.title, 'Enter an agenda title.');
+  const description = normalizeOptionalText(input?.description, 240);
+  const requiresVoting = Boolean(input?.requiresVoting);
+  const nextSortOrder = Number(
+    db.prepare('SELECT COALESCE(MAX(sortOrder), 0) AS maxSortOrder FROM meetingAgendaItems WHERE meetingId = ?')
+      .get(meetingId)?.maxSortOrder ?? 0,
+  ) + 1;
+
+  db.prepare(
+    `INSERT INTO meetingAgendaItems (
+      id,
+      meetingId,
+      societyId,
+      title,
+      description,
+      requiresVoting,
+      votingStatus,
+      votingDeadline,
+      resolution,
+      sortOrder
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    nextId('agenda'),
+    meetingId,
+    meeting.societyId,
+    title,
+    description,
+    requiresVoting ? 1 : 0,
+    requiresVoting ? 'pending' : 'notRequired',
+    null,
+    null,
+    nextSortOrder,
+  );
+
+  return buildSocietyMutationPayload(userId, meeting.societyId);
+}
+
+function openMeetingVoting(userId, agendaItemId) {
+  const agendaItem = getMeetingAgendaItem(agendaItemId);
+
+  if (!agendaItem) {
+    throw new HttpError(404, 'Agenda item was not found.');
+  }
+
+  requireSocietyMeetingManager(userId, agendaItem.societyId);
+
+  if (!agendaItem.requiresVoting) {
+    throw new HttpError(400, 'This agenda item does not require voting.');
+  }
+
+  db.prepare(
+    'UPDATE meetingAgendaItems SET votingStatus = ?, votingDeadline = ?, resolution = NULL WHERE id = ?',
+  ).run('open', null, agendaItemId);
+
+  return buildSocietyMutationPayload(userId, agendaItem.societyId);
+}
+
+function closeMeetingVoting(userId, agendaItemId, resolutionInput) {
+  const agendaItem = getMeetingAgendaItem(agendaItemId);
+
+  if (!agendaItem) {
+    throw new HttpError(404, 'Agenda item was not found.');
+  }
+
+  requireSocietyMeetingManager(userId, agendaItem.societyId);
+  const resolution = String(resolutionInput ?? '').trim();
+
+  if (!AGENDA_RESOLUTIONS.has(resolution)) {
+    throw new HttpError(400, 'Choose passed, rejected, or deferred as the voting resolution.');
+  }
+
+  db.prepare(
+    'UPDATE meetingAgendaItems SET votingStatus = ?, resolution = ? WHERE id = ?',
+  ).run('closed', resolution, agendaItemId);
+
+  return buildSocietyMutationPayload(userId, agendaItem.societyId);
+}
+
+function castMeetingVote(userId, agendaItemId, voteInput) {
+  const agendaItem = getMeetingAgendaItem(agendaItemId);
+
+  if (!agendaItem) {
+    throw new HttpError(404, 'Agenda item was not found.');
+  }
+
+  const meeting = getSocietyMeeting(agendaItem.meetingId);
+
+  if (!meeting) {
+    throw new HttpError(404, 'Meeting was not found.');
+  }
+
+  requireSocietyMember(userId, agendaItem.societyId);
+  const vote = String(voteInput ?? '').trim();
+
+  if (!MEETING_VOTES.has(vote)) {
+    throw new HttpError(400, 'Choose yes, no, or abstain before voting.');
+  }
+
+  if (!agendaItem.requiresVoting || agendaItem.votingStatus !== 'open') {
+    throw new HttpError(400, 'Voting is not open for this agenda item.');
+  }
+
+  const existingVote = db
+    .prepare('SELECT id FROM meetingVotes WHERE agendaItemId = ? AND userId = ?')
+    .get(agendaItemId, userId);
+  const castAt = nowIso();
+
+  if (existingVote) {
+    db.prepare('UPDATE meetingVotes SET vote = ?, castAt = ? WHERE id = ?').run(vote, castAt, existingVote.id);
+  } else {
+    db.prepare(
+      `INSERT INTO meetingVotes (id, agendaItemId, meetingId, societyId, userId, vote, castAt)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run(nextId('vote'), agendaItemId, agendaItem.meetingId, agendaItem.societyId, userId, vote, castAt);
+  }
+
+  return buildSocietyMutationPayload(userId, meeting.societyId);
+}
+
+function signMeeting(userId, meetingId, signatureTextInput) {
+  const meeting = getSocietyMeeting(meetingId);
+
+  if (!meeting) {
+    throw new HttpError(404, 'Meeting was not found.');
+  }
+
+  requireSocietyMember(userId, meeting.societyId);
+  const signatureText = requireText(signatureTextInput, 'Enter your digital signature.');
+  const existingSignature = db
+    .prepare('SELECT id FROM meetingAttendeeSigns WHERE meetingId = ? AND userId = ?')
+    .get(meetingId, userId);
+
+  if (existingSignature) {
+    throw new HttpError(400, 'You have already signed this meeting.');
+  }
+
+  db.prepare(
+    `INSERT INTO meetingAttendeeSigns (id, meetingId, societyId, userId, signatureText, signedAt)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+  ).run(nextId('sign'), meetingId, meeting.societyId, userId, signatureText, nowIso());
+
+  return buildSocietyMutationPayload(userId, meeting.societyId);
+}
+
+function completeSocietyMeeting(userId, meetingId) {
+  const meeting = getSocietyMeeting(meetingId);
+
+  if (!meeting) {
+    throw new HttpError(404, 'Meeting was not found.');
+  }
+
+  requireSocietyMeetingManager(userId, meeting.societyId);
+  db.prepare('UPDATE societyMeetings SET status = ? WHERE id = ?').run('completed', meetingId);
+
+  return buildSocietyMutationPayload(userId, meeting.societyId);
 }
 
 function updateLeadershipProfile(userId, societyId, input) {
@@ -4582,27 +5151,32 @@ module.exports = {
   buildAuthPayload,
   captureResidentUpiPayment,
   createAnnouncement,
+  createSocietyMeeting,
   createPublicAccountDeletionRequest,
   createAmenityBooking,
   createComplaintTicket,
   createSocietyDocument,
+  addMeetingAgendaItem,
   requestSocietyDocumentDownload,
   getOnboardingState,
   hasAssignedChairman,
   isPlayReviewAccessConfigured,
   isOtpDeliveryConfigured,
   markAnnouncementRead,
+  openMeetingVoting,
   normalizeAuthChannel,
   normalizeAuthIntent,
   requestCreatorSession,
   requestPlayReviewSession,
   recordManualPayment,
+  registerPushSubscription,
   requestOtp,
   requestAuthenticatedAccountDeletion,
   ringSecurityGuestRequest,
   sendDirectChatMessage,
   sendSocietyChatMessage,
   sendSecurityGuestMessage,
+  signMeeting,
   createEntryLogRecord,
   createExpenseRecord,
   createSecurityGuard,
@@ -4610,11 +5184,15 @@ module.exports = {
   createStaffVerification,
   createVisitorPass,
   getSynchronizedSnapshot,
+  completeSocietyMeeting,
   reviewAmenityBooking,
   reviewSocietyDocumentDownloadRequest,
   reviewSecurityGuestRequest,
   reviewResidentPayment,
   reviewStaffVerification,
+  closeMeetingVoting,
+  castMeetingVote,
+  uploadMeetingMinutes,
   updateSecurityGuestRequestStatus,
   updateVisitorPassStatus,
   requireSuperUserRole,

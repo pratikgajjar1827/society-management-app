@@ -552,6 +552,77 @@ CREATE TABLE IF NOT EXISTS chatMessages (
   FOREIGN KEY (senderUserId) REFERENCES users(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS societyMeetings (
+  id TEXT PRIMARY KEY,
+  societyId TEXT NOT NULL,
+  title TEXT NOT NULL,
+  meetingType TEXT NOT NULL,
+  scheduledAt TEXT NOT NULL,
+  venue TEXT NOT NULL,
+  status TEXT NOT NULL,
+  minutesDocumentDataUrl TEXT,
+  summary TEXT,
+  createdByUserId TEXT NOT NULL,
+  createdAt TEXT NOT NULL,
+  FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE,
+  FOREIGN KEY (createdByUserId) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS meetingAgendaItems (
+  id TEXT PRIMARY KEY,
+  meetingId TEXT NOT NULL,
+  societyId TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT,
+  requiresVoting INTEGER NOT NULL,
+  votingStatus TEXT NOT NULL,
+  votingDeadline TEXT,
+  resolution TEXT,
+  sortOrder INTEGER NOT NULL,
+  FOREIGN KEY (meetingId) REFERENCES societyMeetings(id) ON DELETE CASCADE,
+  FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS meetingVotes (
+  id TEXT PRIMARY KEY,
+  agendaItemId TEXT NOT NULL,
+  meetingId TEXT NOT NULL,
+  societyId TEXT NOT NULL,
+  userId TEXT NOT NULL,
+  vote TEXT NOT NULL,
+  castAt TEXT NOT NULL,
+  FOREIGN KEY (agendaItemId) REFERENCES meetingAgendaItems(id) ON DELETE CASCADE,
+  FOREIGN KEY (meetingId) REFERENCES societyMeetings(id) ON DELETE CASCADE,
+  FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE,
+  FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS meetingAttendeeSigns (
+  id TEXT PRIMARY KEY,
+  meetingId TEXT NOT NULL,
+  societyId TEXT NOT NULL,
+  userId TEXT NOT NULL,
+  signatureText TEXT NOT NULL,
+  signedAt TEXT NOT NULL,
+  FOREIGN KEY (meetingId) REFERENCES societyMeetings(id) ON DELETE CASCADE,
+  FOREIGN KEY (societyId) REFERENCES societies(id) ON DELETE CASCADE,
+  FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS pushSubscriptions (
+  token TEXT PRIMARY KEY,
+  userId TEXT NOT NULL,
+  platform TEXT NOT NULL,
+  appVariant TEXT,
+  createdAt TEXT NOT NULL,
+  updatedAt TEXT NOT NULL,
+  lastDeliveredAt TEXT,
+  lastErrorAt TEXT,
+  disabledAt TEXT,
+  disabledReason TEXT,
+  FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS userProfiles (
   userId TEXT PRIMARY KEY,
   preferredRole TEXT,

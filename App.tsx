@@ -1,5 +1,6 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
+import * as Notifications from 'expo-notifications';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { BackHandler, Platform, StyleSheet, Text, View } from 'react-native';
 
@@ -20,11 +21,21 @@ import { ThemeProvider, useAppTheme } from './src/theme/appTheme';
 import { palette, radius, spacing } from './src/theme/tokens';
 import { getPendingSecurityGuestRequestsForResident } from './src/utils/selectors';
 
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
+
 function AppRoot() {
   const { state, actions } = useApp();
   const { theme } = useAppTheme();
   const isCreatorApp = isCreatorAppVariant();
   const isAuthScreen = state.screen === 'auth';
+  const [transientNotice, setTransientNotice] = useState<string | null>(null);
   const pendingSecurityApprovals =
     state.session.userId &&
     state.session.selectedSocietyId &&
@@ -35,6 +46,23 @@ function AppRoot() {
           state.session.selectedSocietyId,
         ).length
       : 0;
+
+  useEffect(() => {
+    if (state.apiError || isAuthScreen || !state.noticeMessage) {
+      setTransientNotice(null);
+      return undefined;
+    }
+
+    setTransientNotice(state.noticeMessage);
+
+    const timeout = setTimeout(() => {
+      setTransientNotice((currentNotice) =>
+        currentNotice === state.noticeMessage ? null : currentNotice,
+      );
+    }, 2200);
+
+    return () => clearTimeout(timeout);
+  }, [isAuthScreen, state.apiError, state.noticeMessage]);
 
   useEffect(() => {
     if (Platform.OS !== 'android') {
@@ -134,12 +162,14 @@ function AppRoot() {
             <Text style={styles.bannerText}>{state.apiError}</Text>
           </View>
         ) : null}
-        {!state.apiError && state.noticeMessage ? (
-          <View style={styles.noticeBanner}>
-            <Text style={styles.noticeBannerText}>{state.noticeMessage}</Text>
+        {creatorScreen}
+        {!state.apiError && transientNotice ? (
+          <View pointerEvents="none" style={styles.noticeToastLayer}>
+            <View style={styles.noticeToast}>
+              <Text style={styles.noticeToastText}>{transientNotice}</Text>
+            </View>
           </View>
         ) : null}
-        {creatorScreen}
       </View>
     );
   }
@@ -183,11 +213,6 @@ function AppRoot() {
           <Text style={styles.bannerText}>{state.apiError}</Text>
         </View>
       ) : null}
-      {!isAuthScreen && !state.apiError && state.noticeMessage ? (
-        <View style={styles.noticeBanner}>
-          <Text style={styles.noticeBannerText}>{state.noticeMessage}</Text>
-        </View>
-      ) : null}
       {!isAuthScreen && pendingSecurityApprovals > 0 ? (
         <View style={styles.urgentBanner}>
           <Text style={styles.urgentBannerText}>
@@ -198,6 +223,13 @@ function AppRoot() {
         </View>
       ) : null}
       {screen}
+      {!isAuthScreen && !state.apiError && transientNotice ? (
+        <View pointerEvents="none" style={styles.noticeToastLayer}>
+          <View style={styles.noticeToast}>
+            <Text style={styles.noticeToastText}>{transientNotice}</Text>
+          </View>
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -330,18 +362,33 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     fontWeight: '700',
   },
-  noticeBanner: {
-    backgroundColor: '#E8F6EF',
-    borderBottomColor: '#A6D7BD',
-    borderBottomWidth: 1,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
+  noticeToastLayer: {
+    position: 'absolute',
+    left: spacing.md,
+    right: spacing.md,
+    bottom: spacing.lg,
+    alignItems: 'center',
   },
-  noticeBannerText: {
-    color: '#205C40',
+  noticeToast: {
+    maxWidth: 420,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.xl,
+    backgroundColor: 'rgba(16, 31, 44, 0.94)',
+    borderWidth: 1,
+    borderColor: 'rgba(246, 210, 124, 0.28)',
+    shadowColor: '#08131C',
+    shadowOpacity: 0.25,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 8,
+  },
+  noticeToastText: {
+    color: '#FFF7E6',
     fontSize: 13,
     lineHeight: 18,
     fontWeight: '700',
+    textAlign: 'center',
   },
   urgentBanner: {
     backgroundColor: '#FFF0CF',

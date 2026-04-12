@@ -21,6 +21,7 @@ import {
   SocietyDocumentCategory,
   SeedData,
   SecurityGuestRequestStatus,
+  SocietyMeetingType,
   SocietySetupDraft,
   StaffCategory,
   UserProfile,
@@ -131,6 +132,26 @@ export interface AnnouncementCreateInput {
   photoDataUrl?: string;
   audience: AnnouncementAudience;
   priority: AnnouncementPriority;
+}
+
+export interface PushSubscriptionInput {
+  token: string;
+  platform: 'android' | 'ios';
+  appVariant?: 'main' | 'creator';
+}
+
+export interface SocietyMeetingCreateInput {
+  title: string;
+  meetingType: SocietyMeetingType;
+  scheduledAt: string;
+  venue: string;
+  summary?: string;
+}
+
+export interface MeetingAgendaItemCreateInput {
+  title: string;
+  description?: string;
+  requiresVoting: boolean;
 }
 
 export interface LeadershipProfileInput {
@@ -445,6 +466,14 @@ export async function fetchSessionSnapshot(sessionToken: string) {
   });
 }
 
+export async function registerPushSubscription(sessionToken: string, subscription: PushSubscriptionInput) {
+  return requestJson<{ ok: boolean }>('/api/push/subscriptions', {
+    method: 'POST',
+    headers: createAuthHeaders(sessionToken),
+    body: JSON.stringify(subscription),
+  });
+}
+
 export async function requestCreatorAccess(accessKey: string) {
   return requestJson<CreatorAccessResponse>('/api/creator/access', {
     method: 'POST',
@@ -645,6 +674,118 @@ export async function createAnnouncement(
       method: 'POST',
       headers: createAuthHeaders(sessionToken),
       body: JSON.stringify(announcement),
+    },
+  );
+}
+
+export async function createSocietyMeeting(
+  sessionToken: string,
+  societyId: string,
+  meeting: SocietyMeetingCreateInput,
+) {
+  return requestJson<SocietyAdminMutationResponse>(
+    `/api/societies/${encodeURIComponent(societyId)}/meetings`,
+    {
+      method: 'POST',
+      headers: createAuthHeaders(sessionToken),
+      body: JSON.stringify(meeting),
+    },
+  );
+}
+
+export async function uploadMeetingMinutes(
+  sessionToken: string,
+  meetingId: string,
+  dataUrl: string,
+) {
+  return requestJson<SocietyAdminMutationResponse>(
+    `/api/meetings/${encodeURIComponent(meetingId)}/minutes`,
+    {
+      method: 'POST',
+      headers: createAuthHeaders(sessionToken),
+      body: JSON.stringify({ dataUrl }),
+    },
+  );
+}
+
+export async function addMeetingAgendaItem(
+  sessionToken: string,
+  meetingId: string,
+  input: MeetingAgendaItemCreateInput,
+) {
+  return requestJson<SocietyAdminMutationResponse>(
+    `/api/meetings/${encodeURIComponent(meetingId)}/agenda-items`,
+    {
+      method: 'POST',
+      headers: createAuthHeaders(sessionToken),
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function openMeetingVoting(sessionToken: string, agendaItemId: string) {
+  return requestJson<SocietyAdminMutationResponse>(
+    `/api/agenda-items/${encodeURIComponent(agendaItemId)}/open-voting`,
+    {
+      method: 'POST',
+      headers: createAuthHeaders(sessionToken),
+      body: JSON.stringify({}),
+    },
+  );
+}
+
+export async function closeMeetingVoting(
+  sessionToken: string,
+  agendaItemId: string,
+  resolution: 'passed' | 'rejected' | 'deferred',
+) {
+  return requestJson<SocietyAdminMutationResponse>(
+    `/api/agenda-items/${encodeURIComponent(agendaItemId)}/close-voting`,
+    {
+      method: 'POST',
+      headers: createAuthHeaders(sessionToken),
+      body: JSON.stringify({ resolution }),
+    },
+  );
+}
+
+export async function castMeetingVote(
+  sessionToken: string,
+  agendaItemId: string,
+  vote: 'yes' | 'no' | 'abstain',
+) {
+  return requestJson<SocietyAdminMutationResponse>(
+    `/api/agenda-items/${encodeURIComponent(agendaItemId)}/votes`,
+    {
+      method: 'POST',
+      headers: createAuthHeaders(sessionToken),
+      body: JSON.stringify({ vote }),
+    },
+  );
+}
+
+export async function signMeeting(
+  sessionToken: string,
+  meetingId: string,
+  signatureText: string,
+) {
+  return requestJson<SocietyAdminMutationResponse>(
+    `/api/meetings/${encodeURIComponent(meetingId)}/sign`,
+    {
+      method: 'POST',
+      headers: createAuthHeaders(sessionToken),
+      body: JSON.stringify({ signatureText }),
+    },
+  );
+}
+
+export async function completeSocietyMeeting(sessionToken: string, meetingId: string) {
+  return requestJson<SocietyAdminMutationResponse>(
+    `/api/meetings/${encodeURIComponent(meetingId)}/complete`,
+    {
+      method: 'POST',
+      headers: createAuthHeaders(sessionToken),
+      body: JSON.stringify({}),
     },
   );
 }

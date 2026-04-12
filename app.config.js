@@ -33,6 +33,7 @@ module.exports = {
     },
     android: {
       usesCleartextTraffic: allowCleartextTraffic,
+      permissions: ['POST_NOTIFICATIONS'],
       adaptiveIcon: {
         backgroundColor: '#163D34',
         foregroundImage: './assets/android-icon-foreground.png',
@@ -47,9 +48,10 @@ module.exports = {
     web: {
       favicon: './assets/favicon.png',
     },
-    plugins: ['@react-native-community/datetimepicker'],
+    plugins: ['expo-notifications', '@react-native-community/datetimepicker'],
     extra: {
       appVariant: isCreatorApp ? 'creator' : 'main',
+      expoProjectId: process.env.EXPO_PUBLIC_EXPO_PROJECT_ID ?? null,
     },
   },
 };
