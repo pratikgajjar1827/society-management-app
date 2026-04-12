@@ -1,0 +1,28 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="160" y1="112" x2="876" y2="944" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1E5A4F"/>
+      <stop offset="0.45" stop-color="#123F39"/>
+      <stop offset="1" stop-color="#081B19"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(512 468) rotate(90) scale(404)">
+      <stop offset="0" stop-color="#F8D58C" stop-opacity="0.24"/>
+      <stop offset="0.55" stop-color="#F8D58C" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#F8D58C" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="goldLine" x1="250" y1="250" x2="790" y2="824" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F9E6B2" stop-opacity="0.44"/>
+      <stop offset="1" stop-color="#D4A74F" stop-opacity="0.16"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" rx="240" fill="url(#bg)"/>
+  <circle cx="512" cy="494" r="340" fill="url(#glow)"/>
+
+  <path d="M224 822C312 728 420 676 512 676C604 676 712 728 800 822" stroke="url(#goldLine)" stroke-width="18" stroke-linecap="round"/>
+  <path d="M282 248C356 202 434 180 512 180C590 180 668 202 742 248" stroke="url(#goldLine)" stroke-width="14" stroke-linecap="round"/>
+  <path d="M250 736C332 650 422 602 512 602C602 602 692 650 774 736" stroke="url(#goldLine)" stroke-width="10" stroke-linecap="round" opacity="0.72"/>
+  <circle cx="512" cy="248" r="7" fill="#F8D58C" fill-opacity="0.45"/>
+  <circle cx="794" cy="792" r="5" fill="#F8D58C" fill-opacity="0.25"/>
+  <circle cx="236" cy="770" r="6" fill="#F8D58C" fill-opacity="0.16"/>
+</svg>

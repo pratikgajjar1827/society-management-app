@@ -1,0 +1,55 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="160" y1="112" x2="876" y2="944" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1E5A4F"/>
+      <stop offset="0.45" stop-color="#123F39"/>
+      <stop offset="1" stop-color="#081B19"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(512 468) rotate(90) scale(404)">
+      <stop offset="0" stop-color="#F8D58C" stop-opacity="0.24"/>
+      <stop offset="0.55" stop-color="#F8D58C" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#F8D58C" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="goldLine" x1="250" y1="250" x2="790" y2="824" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F9E6B2" stop-opacity="0.44"/>
+      <stop offset="1" stop-color="#D4A74F" stop-opacity="0.16"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="314" y1="306" x2="710" y2="804" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFF0C5"/>
+      <stop offset="0.3" stop-color="#F5D37B"/>
+      <stop offset="0.72" stop-color="#D8A84A"/>
+      <stop offset="1" stop-color="#B77B26"/>
+    </linearGradient>
+    <linearGradient id="goldSoft" x1="364" y1="382" x2="650" y2="742" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFF6DA" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#F2C76F" stop-opacity="0.05"/>
+    </linearGradient>
+    <filter id="shadow" x="178" y="222" width="668" height="676" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feOffset dy="24"/>
+      <feGaussianBlur stdDeviation="28"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.0235294 0 0 0 0 0.0705882 0 0 0 0 0.0666667 0 0 0 0.35 0"/>
+    </filter>
+  </defs>
+
+  <rect width="1024" height="1024" rx="240" fill="url(#bg)"/>
+  <circle cx="512" cy="494" r="340" fill="url(#glow)"/>
+  <path d="M224 822C312 728 420 676 512 676C604 676 712 728 800 822" stroke="url(#goldLine)" stroke-width="18" stroke-linecap="round"/>
+  <path d="M282 248C356 202 434 180 512 180C590 180 668 202 742 248" stroke="url(#goldLine)" stroke-width="14" stroke-linecap="round"/>
+  <path d="M250 736C332 650 422 602 512 602C602 602 692 650 774 736" stroke="url(#goldLine)" stroke-width="10" stroke-linecap="round" opacity="0.72"/>
+
+  <g filter="url(#shadow)">
+    <path d="M286 658L512 374L738 658" stroke="#062422" stroke-opacity="0.28" stroke-width="110" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M390 576V744" stroke="#062422" stroke-opacity="0.28" stroke-width="98" stroke-linecap="round"/>
+    <path d="M634 576V744" stroke="#062422" stroke-opacity="0.28" stroke-width="98" stroke-linecap="round"/>
+    <path d="M390 662C390 575 458 530 512 530C566 530 634 575 634 662" stroke="#062422" stroke-opacity="0.28" stroke-width="98" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <path d="M286 658L512 374L738 658" stroke="url(#gold)" stroke-width="92" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M390 576V744" stroke="url(#gold)" stroke-width="82" stroke-linecap="round"/>
+  <path d="M634 576V744" stroke="url(#gold)" stroke-width="82" stroke-linecap="round"/>
+  <path d="M390 662C390 575 458 530 512 530C566 530 634 575 634 662" stroke="url(#gold)" stroke-width="82" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M310 640L512 390L714 640" stroke="url(#goldSoft)" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M512 426L512 468" stroke="#FFF7E1" stroke-opacity="0.78" stroke-width="16" stroke-linecap="round"/>
+  <circle cx="512" cy="336" r="20" fill="#F7D789"/>
+  <circle cx="512" cy="336" r="10" fill="#FFF6DB"/>
+</svg>

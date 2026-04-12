@@ -1,0 +1,36 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="gold" x1="314" y1="306" x2="710" y2="804" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFF0C5"/>
+      <stop offset="0.3" stop-color="#F5D37B"/>
+      <stop offset="0.72" stop-color="#D8A84A"/>
+      <stop offset="1" stop-color="#B77B26"/>
+    </linearGradient>
+    <linearGradient id="goldSoft" x1="364" y1="382" x2="650" y2="742" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFF6DA" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#F2C76F" stop-opacity="0.05"/>
+    </linearGradient>
+    <filter id="shadow" x="178" y="222" width="668" height="676" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feOffset dy="24"/>
+      <feGaussianBlur stdDeviation="28"/>
+      <feColorMatrix type="matrix" values="0 0 0 0 0.0235294 0 0 0 0 0.0705882 0 0 0 0 0.0666667 0 0 0 0.35 0"/>
+    </filter>
+  </defs>
+
+  <g filter="url(#shadow)">
+    <path d="M286 658L512 374L738 658" stroke="#062422" stroke-opacity="0.28" stroke-width="110" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M390 576V744" stroke="#062422" stroke-opacity="0.28" stroke-width="98" stroke-linecap="round"/>
+    <path d="M634 576V744" stroke="#062422" stroke-opacity="0.28" stroke-width="98" stroke-linecap="round"/>
+    <path d="M390 662C390 575 458 530 512 530C566 530 634 575 634 662" stroke="#062422" stroke-opacity="0.28" stroke-width="98" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <path d="M286 658L512 374L738 658" stroke="url(#gold)" stroke-width="92" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M390 576V744" stroke="url(#gold)" stroke-width="82" stroke-linecap="round"/>
+  <path d="M634 576V744" stroke="url(#gold)" stroke-width="82" stroke-linecap="round"/>
+  <path d="M390 662C390 575 458 530 512 530C566 530 634 575 634 662" stroke="url(#gold)" stroke-width="82" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <path d="M310 640L512 390L714 640" stroke="url(#goldSoft)" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M512 426L512 468" stroke="#FFF7E1" stroke-opacity="0.78" stroke-width="16" stroke-linecap="round"/>
+  <circle cx="512" cy="336" r="20" fill="#F7D789"/>
+  <circle cx="512" cy="336" r="10" fill="#FFF6DB"/>
+</svg>
